@@ -176,7 +176,7 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
             title={t('transactions.date_to')}
           />
           <button
-            className={`btn text-xs px-3 py-2 ${uncategorized ? 'btn-primary' : 'btn-ghost'}`}
+            className={`btn text-xs ${uncategorized ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setUncategorized(!uncategorized)}
           >
             {t('transactions.filter_uncategorized')}
