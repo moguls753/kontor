@@ -9,14 +9,14 @@ interface Props {
 type Step = 'loading' | 'review' | 'creating' | 'done' | 'error'
 
 export default function CategorySuggestionModal({ onClose }: Props) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [step, setStep] = useState<Step>('loading')
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [createdCount, setCreatedCount] = useState(0)
 
   useEffect(() => {
-    api('/api/v1/categories/suggest', { method: 'POST' })
+    api('/api/v1/categories/suggest', { method: 'POST', body: { locale: i18n.language } })
       .then(async r => {
         if (r.ok) {
           const data = await r.json()
@@ -100,7 +100,7 @@ export default function CategorySuggestionModal({ onClose }: Props) {
                   style={{ accentColor: 'var(--color-accent)' }}
                 />
                 <span className="text-xs font-bold uppercase tracking-wider text-text-muted">
-                  {selected.size}/{suggestions.length}
+                  {t('categories.suggest_select_all')} ({selected.size}/{suggestions.length})
                 </span>
               </label>
               {suggestions.map(name => (
