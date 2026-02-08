@@ -84,7 +84,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
           </p>
           <div className={`grid gap-3 ${accountGridCols(visibleAccounts.length)}`}>
             {visibleAccounts.map((account) => (
-              <div key={account.id} className="card p-4 flex flex-col">
+              <div key={account.id} className="card p-6 flex flex-col">
                 <p className="text-xs font-semibold uppercase tracking-wider text-text-muted truncate">
                   {account.name}
                 </p>
