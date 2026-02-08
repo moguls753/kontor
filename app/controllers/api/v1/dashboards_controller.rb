@@ -12,9 +12,9 @@ module Api
         previous_balance = total_balance - net
         balance_change_percent = if previous_balance.zero?
                                    nil
-                                 else
+        else
                                    (net / previous_balance.abs * 100).round(1).to_f
-                                 end
+        end
 
         render json: {
           total_balance: total_balance,
