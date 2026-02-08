@@ -1,3 +1,26 @@
+# == Schema Information
+#
+# Table name: go_cardless_credentials
+#
+#  id                 :integer          not null, primary key
+#  access_expires_at  :datetime
+#  access_token       :text
+#  refresh_expires_at :datetime
+#  refresh_token      :text
+#  secret_key         :string           not null
+#  created_at         :datetime         not null
+#  updated_at         :datetime         not null
+#  secret_id          :string           not null
+#  user_id            :integer          not null
+#
+# Indexes
+#
+#  index_go_cardless_credentials_on_user_id  (user_id) UNIQUE
+#
+# Foreign Keys
+#
+#  user_id  (user_id => users.id)
+#
 require "rails_helper"
 
 RSpec.describe GoCardlessCredential, type: :model do
