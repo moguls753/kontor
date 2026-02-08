@@ -14,7 +14,7 @@ RSpec.describe CategorySuggester do
   subject { described_class.new(user) }
 
   def stub_llm(suggestions)
-    body = { choices: [{ message: { content: suggestions.to_json } }] }
+    body = { choices: [ { message: { content: suggestions.to_json } } ] }
     response = instance_double(Net::HTTPResponse, code: "200", body: body.to_json)
     http = instance_double(Net::HTTP)
     allow(Net::HTTP).to receive(:new).and_return(http)
@@ -26,7 +26,7 @@ RSpec.describe CategorySuggester do
   end
 
   it "suggests new categories from uncategorized transactions" do
-    stub_llm(["Streaming", "Transport", "Groceries"])
+    stub_llm([ "Streaming", "Transport", "Groceries" ])
 
     result = subject.suggest
 
@@ -34,7 +34,7 @@ RSpec.describe CategorySuggester do
   end
 
   it "does not suggest names that already exist as categories" do
-    stub_llm(["Streaming", "Groceries", "Transport"])
+    stub_llm([ "Streaming", "Groceries", "Transport" ])
 
     result = subject.suggest
 
@@ -42,7 +42,7 @@ RSpec.describe CategorySuggester do
   end
 
   it "deduplicates case-insensitively against existing categories" do
-    stub_llm(["groceries", "Streaming"])
+    stub_llm([ "groceries", "Streaming" ])
 
     result = subject.suggest
 
@@ -57,7 +57,7 @@ RSpec.describe CategorySuggester do
       content = JSON.parse(body)["messages"].last["content"]
       expect(content).not_to include("12.99", "45.00", "28.50", "DE89")
       expect(content).to include("Netflix Monthly", "DB Vertrieb")
-      instance_double(Net::HTTPResponse, code: "200", body: { choices: [{ message: { content: "[]" } }] }.to_json)
+      instance_double(Net::HTTPResponse, code: "200", body: { choices: [ { message: { content: "[]" } } ] }.to_json)
     end
 
     subject.suggest
@@ -69,7 +69,7 @@ RSpec.describe CategorySuggester do
     expect(http).to receive(:post) do |_uri, body, _headers|
       content = JSON.parse(body)["messages"].last["content"]
       expect(content).to include("DIRECT_DEBIT", "CARD_PAYMENT")
-      instance_double(Net::HTTPResponse, code: "200", body: { choices: [{ message: { content: "[]" } }] }.to_json)
+      instance_double(Net::HTTPResponse, code: "200", body: { choices: [ { message: { content: "[]" } } ] }.to_json)
     end
 
     subject.suggest

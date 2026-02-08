@@ -86,7 +86,7 @@ class LlmCategorizer
 
   def user_prompt(batch, category_names)
     lines = batch.map do |t|
-      parts = ["id:#{t.id}"]
+      parts = [ "id:#{t.id}" ]
       parts << t.remittance if t.remittance.present?
       parts << "creditor: #{t.creditor_name}" if t.creditor_name.present?
       parts << "debtor: #{t.debtor_name}" if t.debtor_name.present?

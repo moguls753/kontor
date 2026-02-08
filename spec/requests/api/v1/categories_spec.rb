@@ -57,8 +57,8 @@ RSpec.describe "Api::V1::Categories", type: :request do
       account = create(:account, bank_connection: bank_connection)
       create(:transaction_record, account: account, remittance: "Netflix")
 
-      suggestions = ["Streaming", "Transport"]
-      body = { choices: [{ message: { content: suggestions.to_json } }] }
+      suggestions = [ "Streaming", "Transport" ]
+      body = { choices: [ { message: { content: suggestions.to_json } } ] }
       response_double = instance_double(Net::HTTPResponse, code: "200", body: body.to_json)
       http = instance_double(Net::HTTP)
       allow(Net::HTTP).to receive(:new).and_return(http)
