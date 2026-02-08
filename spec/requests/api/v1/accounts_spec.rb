@@ -20,4 +20,14 @@ RSpec.describe "Api::V1::Accounts", type: :request do
     get api_v1_accounts_path, as: :json
     expect(response.parsed_body).to be_empty
   end
+
+  it "renames an account" do
+    bc = create(:bank_connection, user: user)
+    account = create(:account, bank_connection: bc, name: "Old Name")
+
+    patch api_v1_account_path(account), params: { name: "My Checking" }, as: :json
+    expect(response).to have_http_status(:ok)
+    expect(response.parsed_body["name"]).to eq("My Checking")
+    expect(account.reload.name).to eq("My Checking")
+  end
 end

@@ -126,6 +126,7 @@ export default {
     status_error: 'Error',
     delete_connection: 'Remove',
     delete_confirm: 'Remove this bank connection? All synced accounts and transactions will be deleted.',
+    rename_placeholder: 'Account name',
   },
   categories: {
     title: 'Categories',

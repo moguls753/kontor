@@ -128,6 +128,7 @@ module Api
           bc.accounts.find_or_create_by!(account_uid: acct[:uid]) do |a|
             a.identification_hash = acct[:identification_hash]
             a.iban = acct[:iban]
+            a.name = bc.institution_name
           end
         end
 
@@ -143,7 +144,9 @@ module Api
         bc.update!(status: "authorized")
 
         (requisition[:accounts] || []).each do |account_id|
-          bc.accounts.find_or_create_by!(account_uid: account_id)
+          bc.accounts.find_or_create_by!(account_uid: account_id) do |a|
+            a.name = bc.institution_name
+          end
         end
 
         SyncAccountsJob.perform_later(bc.id)

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { formatAmount, formatRelativeTime, maskIban } from '../lib/format'
+import { formatAmount, formatRelativeTime } from '../lib/format'
 import type { BankConnection } from '../lib/types'
 import type { View } from '../components/SidebarNav'
 
@@ -15,6 +15,10 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
   const [syncingIds, setSyncingIds] = useState<Set<number>>(new Set())
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const editRef = useRef<HTMLInputElement>(null)
+  const blurCancelledRef = useRef(false)
   const pollTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map())
 
   const fetchConnections = async () => {
@@ -38,6 +42,14 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     const timers = pollTimers.current
     return () => { timers.forEach(t => clearInterval(t)) }
   }, [])
+
+  // Focus the rename input when editing starts
+  useEffect(() => {
+    if (editingId !== null) {
+      editRef.current?.focus()
+      editRef.current?.select()
+    }
+  }, [editingId])
 
   const stopPolling = useCallback((id: number) => {
     const timer = pollTimers.current.get(id)
@@ -81,6 +93,47 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
       }
     } catch {
       // silent
+    }
+  }
+
+  const startRename = (acctId: number, currentName: string) => {
+    blurCancelledRef.current = false
+    setEditingId(acctId)
+    setEditValue(currentName)
+  }
+
+  const cancelRename = () => {
+    blurCancelledRef.current = true
+    setEditingId(null)
+    setEditValue('')
+  }
+
+  const saveRename = async () => {
+    if (blurCancelledRef.current || editingId === null) return
+    blurCancelledRef.current = true
+    const trimmed = editValue.trim()
+    if (!trimmed) { cancelRename(); return }
+
+    const savedId = editingId
+    setEditingId(null)
+    setEditValue('')
+
+    // Optimistically update local state
+    setConnections(prev => prev.map(bc => ({
+      ...bc,
+      accounts: bc.accounts.map(a =>
+        a.id === savedId ? { ...a, name: trimmed } : a
+      )
+    })))
+
+    try {
+      await api(`/api/v1/accounts/${savedId}`, {
+        method: 'PATCH',
+        body: { name: trimmed }
+      })
+    } catch {
+      // Revert on failure by refetching
+      fetchConnections()
     }
   }
 
@@ -133,7 +186,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-          {connections.map((bc, i) => (
+          {connections.map((bc) => (
             <div key={bc.id} className="card">
               {/* Connection header */}
               <div className="flex items-center justify-between px-4 py-3 border-b-2 border-border">
@@ -161,11 +214,33 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
               {/* Account rows */}
               {bc.accounts.map(acct => (
                 <div key={acct.id} className="flex items-center justify-between px-4 py-3 border-b-2 border-border last:border-b-0">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{acct.name || 'Account'}</p>
-                    <p className="mono text-xs text-text-muted mt-0.5">{maskIban(acct.iban)}</p>
+                  <div className="min-w-0 flex-1 mr-4">
+                    {editingId === acct.id ? (
+                      <input
+                        ref={editRef}
+                        className="input text-sm font-medium !py-1 !px-2 !border-accent"
+                        value={editValue}
+                        onChange={e => setEditValue(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') saveRename()
+                          if (e.key === 'Escape') cancelRename()
+                        }}
+                        onBlur={saveRename}
+                        placeholder={t('accounts.rename_placeholder')}
+                      />
+                    ) : (
+                      <button
+                        className="text-sm font-medium truncate text-left cursor-pointer border-b-2 border-transparent hover:border-accent transition-colors"
+                        onClick={() => startRename(acct.id, acct.name)}
+                      >
+                        {acct.name || 'Account'}
+                      </button>
+                    )}
+                    {acct.iban && (
+                      <p className="mono text-xs text-text-muted mt-0.5">{acct.iban}</p>
+                    )}
                   </div>
-                  <p className="mono text-lg font-semibold whitespace-nowrap ml-4">
+                  <p className="mono text-lg font-semibold whitespace-nowrap">
                     {acct.balance_amount ? formatAmount(acct.balance_amount, acct.currency) : '—'}
                   </p>
                 </div>

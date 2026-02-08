@@ -126,6 +126,7 @@ export default {
     status_error: 'Fehler',
     delete_connection: 'Entfernen',
     delete_confirm: 'Diese Bankverbindung entfernen? Alle synchronisierten Konten und Transaktionen werden gelöscht.',
+    rename_placeholder: 'Kontoname',
   },
   categories: {
     title: 'Kategorien',

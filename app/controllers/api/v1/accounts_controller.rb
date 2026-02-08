@@ -11,6 +11,12 @@ module Api
         render json: account_json(account)
       end
 
+      def update
+        account = Current.user.accounts.find(params[:id])
+        account.update!(name: params[:name])
+        render json: account_json(account)
+      end
+
       private
 
       def account_json(account)
