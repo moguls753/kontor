@@ -85,10 +85,15 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
           <div className={`grid gap-3 ${accountGridCols(visibleAccounts.length)}`}>
             {visibleAccounts.map((account) => (
               <div key={account.id} className="card p-4">
-                <p className="text-xs font-semibold uppercase tracking-wider text-text-muted truncate mb-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-text-muted truncate">
                   {account.name}
                 </p>
-                <p className="text-xl font-bold mono">
+                {account.iban && (
+                  <p className="text-xs mono text-text-muted mt-0.5">
+                    {account.iban}
+                  </p>
+                )}
+                <p className="text-xl font-bold mono mt-2">
                   {account.balance_amount ? formatAmount(account.balance_amount, account.currency) : '—'}
                 </p>
               </div>
