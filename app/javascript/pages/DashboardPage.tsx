@@ -84,7 +84,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
           </p>
           <div className={`grid gap-3 ${accountGridCols(visibleAccounts.length)}`}>
             {visibleAccounts.map((account) => (
-              <div key={account.id} className="card p-4">
+              <div key={account.id} className="card p-4 flex flex-col">
                 <p className="text-xs font-semibold uppercase tracking-wider text-text-muted truncate">
                   {account.name}
                 </p>
@@ -93,7 +93,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
                     {account.iban}
                   </p>
                 )}
-                <p className="text-xl font-bold mono mt-2">
+                <p className="text-xl font-bold mono mt-auto pt-2">
                   {account.balance_amount ? formatAmount(account.balance_amount, account.currency) : '—'}
                 </p>
               </div>
