@@ -11,14 +11,27 @@ export interface DashboardTransaction {
   remittance: string | null
   creditor_name: string | null
   debtor_name: string | null
+  account_name: string
   category: Category | null
+}
+
+export interface DashboardAccount {
+  id: number
+  name: string
+  iban: string | null
+  balance_amount: string | null
+  currency: string
 }
 
 export interface DashboardData {
   total_balance: string
+  balance_change: string
+  balance_change_percent: number | null
   income: string
   expenses: string
   transaction_count: number
+  uncategorized_count: number
+  accounts: DashboardAccount[]
   recent_transactions: DashboardTransaction[]
 }
 

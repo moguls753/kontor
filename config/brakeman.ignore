@@ -1,0 +1,10 @@
+{
+  "ignored_warnings": [
+    {
+      "fingerprint": "682386f6dfa6b16c2671d61837b33aadd5c14952ff3521c378af5b8fb8ce3ab2",
+      "note": "User-configured LLM endpoint URL is validated at model level and intentionally used in Net::HTTP"
+    }
+  ],
+  "updated": "2026-02-08",
+  "brakeman_version": "8.0.2"
+}
