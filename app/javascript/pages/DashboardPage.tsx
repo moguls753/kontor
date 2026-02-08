@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { formatAmount, formatDate, transactionDisplayName, maskIban } from '../lib/format'
+import { formatAmount, formatDate, transactionDisplayName } from '../lib/format'
 import type { DashboardData } from '../lib/types'
 import type { View } from '../components/SidebarNav'
 
@@ -85,13 +85,10 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
           <div className={`grid gap-3 ${accountGridCols(visibleAccounts.length)}`}>
             {visibleAccounts.map((account) => (
               <div key={account.id} className="card p-4">
-                <p className="text-xs font-semibold uppercase tracking-wider text-text-muted truncate">
+                <p className="text-xs font-semibold uppercase tracking-wider text-text-muted truncate mb-2">
                   {account.name}
                 </p>
-                <p className="text-xs mono text-text-muted mt-0.5">
-                  {maskIban(account.iban)}
-                </p>
-                <p className="text-xl font-bold mono mt-2">
+                <p className="text-xl font-bold mono">
                   {account.balance_amount ? formatAmount(account.balance_amount, account.currency) : '—'}
                 </p>
               </div>
