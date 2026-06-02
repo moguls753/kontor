@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ThemeToggle from './ThemeToggle'
+import { Btn } from './ui'
+import Icon from './Icon'
 import { api } from '../lib/api'
 
 interface LoginPageProps {
@@ -42,86 +44,49 @@ export default function LoginPage({ onLoginSuccess, onSwitchToSignup }: LoginPag
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Header with theme toggle */}
-      <header className="flex justify-end p-6">
+      <header className="flex justify-end p-[22px]">
         <ThemeToggle />
       </header>
 
-      {/* Main content - centered */}
       <main className="flex-1 flex items-center justify-center px-6 pb-20">
-        <div className="w-full max-w-sm">
-          {/* Logo / App name */}
-          <div className="mb-12 text-center">
-            <h1 className="text-4xl font-bold tracking-tight mb-2">
-              {t('auth.title')}
-            </h1>
-            <p className="text-sm text-text-muted">
-              {t('auth.subtitle')}
-            </p>
+        <div className="w-full max-w-[380px]">
+          <div className="mb-8 text-center">
+            <div className="icon-tile icon-tile-ink brass-inset w-11 h-11 mx-auto mb-4 rounded-md text-[22px]">
+              K
+            </div>
+            <h1 className="page-title text-[28px]">{t('auth.title')}</h1>
+            <p className="text-ink-muted text-[13.5px] mt-1">{t('auth.subtitle')}</p>
           </div>
 
-          {/* Login form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <div className="error-message" role="alert">
-                {error}
-              </div>
-            )}
+          <div className="panel panel-pad">
+            <form onSubmit={handleSubmit} className="grid gap-4">
+              {error && (
+                <div role="alert" className="flex items-center gap-2 text-[12.5px] text-danger font-medium bg-danger-soft px-3 py-2.5 rounded-md">
+                  <Icon name="alert" size={15} />{error}
+                </div>
+              )}
 
-            <div>
-              <label
-                htmlFor="email"
-                className="block text-sm font-medium mb-2"
-              >
-                {t('auth.email_label')}
+              <label className="block">
+                <span className="field-label">{t('auth.email_label')}</span>
+                <input className="field" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                  placeholder={t('auth.email_placeholder')} required autoComplete="email" autoFocus disabled={isLoading} />
               </label>
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="input"
-                placeholder={t('auth.email_placeholder')}
-                required
-                autoComplete="email"
-                autoFocus
-                disabled={isLoading}
-              />
-            </div>
 
-            <div>
-              <label
-                htmlFor="password"
-                className="block text-sm font-medium mb-2"
-              >
-                {t('auth.password_label')}
+              <label className="block">
+                <span className="field-label">{t('auth.password_label')}</span>
+                <input className="field" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                  placeholder={t('auth.login.password_placeholder')} required autoComplete="current-password" disabled={isLoading} />
               </label>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="input"
-                placeholder={t('auth.login.password_placeholder')}
-                required
-                autoComplete="current-password"
-                disabled={isLoading}
-              />
-            </div>
 
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="btn btn-primary w-full mt-6"
-            >
-              {isLoading ? t('auth.login.submitting') : t('auth.login.submit')}
-            </button>
-          </form>
+              <Btn variant="primary" type="submit" disabled={isLoading} className="w-full mt-1">
+                {isLoading ? t('auth.login.submitting') : t('auth.login.submit')}
+              </Btn>
+            </form>
+          </div>
 
-          {/* Switch to signup */}
-          <p className="text-center text-sm mt-8 text-text-muted">
+          <p className="text-ink-muted text-center text-[13px] mt-[22px]">
             {t('auth.login.no_account')}{' '}
-            <button onClick={onSwitchToSignup} className="link">
+            <button onClick={onSwitchToSignup} className="focus-inset text-brass-ink font-[550]">
               {t('auth.login.sign_up_link')}
             </button>
           </p>

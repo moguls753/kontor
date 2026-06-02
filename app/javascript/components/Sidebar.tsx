@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import SidebarNav from './SidebarNav'
 import type { View } from './SidebarNav'
 
@@ -6,27 +7,29 @@ interface SidebarProps {
   onNavigate: (view: View) => void
   collapsed?: boolean
   onToggleCollapsed?: () => void
+  uncategorizedCount?: number
+  drawerOpen?: boolean
 }
 
-export default function Sidebar({ currentView, onNavigate, collapsed = false, onToggleCollapsed }: SidebarProps) {
+export default function Sidebar({ currentView, onNavigate, collapsed = false, onToggleCollapsed, uncategorizedCount = 0, drawerOpen = false }: SidebarProps) {
+  const { t } = useTranslation()
   return (
-    <div className={`sidebar h-full${collapsed ? ' sidebar-collapsed' : ''}`}>
-      {/* Logo — height matches topbar so borders align */}
-      <div className={`h-14 flex items-center border-b-2 border-border flex-shrink-0 overflow-hidden${
-        collapsed ? ' justify-center' : ' px-5'
-      }`}>
-        <h1 className="text-lg font-bold tracking-tight">
-          {collapsed ? 'K' : 'Kontor'}
-        </h1>
+    <aside className={`sidebar${drawerOpen ? ' drawer-open' : ''}`}>
+      <div className="brand">
+        <div className="brand-mark">K</div>
+        <div className="brand-text min-w-0">
+          <div className="brand-name">{t('app.name')}</div>
+          <div className="brand-sub">{t('app.tagline')}</div>
+        </div>
       </div>
 
-      {/* Navigation */}
       <SidebarNav
         currentView={currentView}
         onNavigate={onNavigate}
         collapsed={collapsed}
         onToggleCollapsed={onToggleCollapsed}
+        uncategorizedCount={uncategorizedCount}
       />
-    </div>
+    </aside>
   )
 }

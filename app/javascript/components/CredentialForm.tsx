@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { Btn } from './ui'
+import Icon from './Icon'
 
 interface CredentialFormProps {
   provider: 'enable_banking' | 'gocardless' | 'llm'
@@ -80,132 +82,85 @@ export default function CredentialForm({ provider, isConfigured, onSaved, initia
   }
 
   return (
-    <form onSubmit={handleSubmit} className="pt-3 flex flex-col gap-3">
+    <form onSubmit={handleSubmit} className="grid gap-[15px]">
       {provider === 'enable_banking' ? (
         <>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-text-muted block mb-1">
-              {t('settings.app_id')}
-            </label>
-            <input
-              className="input"
-              style={{ padding: '0.625rem 0.75rem', fontSize: '0.875rem' }}
-              value={appId}
-              onChange={e => setAppId(e.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-text-muted block mb-1">
-              {t('settings.private_key')}
-            </label>
-            <textarea
-              className="input mono"
-              style={{ padding: '0.625rem 0.75rem', fontSize: '0.75rem', minHeight: '8rem', resize: 'vertical' }}
-              value={privateKey}
-              onChange={e => setPrivateKey(e.target.value)}
-              placeholder="-----BEGIN RSA PRIVATE KEY-----"
-              required
-            />
-          </div>
+          <label className="block">
+            <span className="field-label">{t('settings.app_id')}</span>
+            <input className="field field-mono" value={appId} onChange={e => setAppId(e.target.value)} placeholder="app_••••" required />
+          </label>
+          <label className="block">
+            <span className="field-label">{t('settings.private_key')}</span>
+            <textarea className="field field-mono min-h-32 text-xs" value={privateKey} onChange={e => setPrivateKey(e.target.value)} placeholder="-----BEGIN PRIVATE KEY-----" required />
+          </label>
         </>
       ) : provider === 'gocardless' ? (
-        <>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-text-muted block mb-1">
-              {t('settings.secret_id')}
-            </label>
-            <input
-              className="input"
-              style={{ padding: '0.625rem 0.75rem', fontSize: '0.875rem' }}
-              value={secretId}
-              onChange={e => setSecretId(e.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-text-muted block mb-1">
-              {t('settings.secret_key')}
-            </label>
-            <input
-              className="input"
-              type="password"
-              style={{ padding: '0.625rem 0.75rem', fontSize: '0.875rem' }}
-              value={secretKey}
-              onChange={e => setSecretKey(e.target.value)}
-              required
-            />
-          </div>
-        </>
+        <div className="settings-2col grid grid-cols-2 gap-[15px]">
+          <label className="block">
+            <span className="field-label">{t('settings.secret_id')}</span>
+            <input className="field field-mono" value={secretId} onChange={e => setSecretId(e.target.value)} placeholder="••••••••" required />
+          </label>
+          <label className="block">
+            <span className="field-label">{t('settings.secret_key')}</span>
+            <input className="field field-mono" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} placeholder="••••••••" required />
+          </label>
+        </div>
       ) : (
         <>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-text-muted block mb-1">
-              {t('settings.llm_endpoint')}
+          <label className="block">
+            <span className="field-label">{t('settings.llm_endpoint')}</span>
+            <input className="field field-mono" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://api.openai.com/v1" required />
+          </label>
+          <div className="settings-2col grid grid-cols-[1fr_200px] gap-[15px]">
+            <label className="block">
+              <span className="field-label">{t('settings.llm_api_key')}</span>
+              <input className="field field-mono" type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={t('settings.llm_api_key_placeholder')} />
             </label>
-            <input
-              className="input"
-              style={{ padding: '0.625rem 0.75rem', fontSize: '0.875rem' }}
-              value={baseUrl}
-              onChange={e => setBaseUrl(e.target.value)}
-              placeholder="https://api.openai.com/v1"
-              required
-            />
-          </div>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-text-muted block mb-1">
-              {t('settings.llm_api_key')}
+            <label className="block">
+              <span className="field-label">{t('settings.llm_model')}</span>
+              <input className="field field-mono" value={llmModel} onChange={e => setLlmModel(e.target.value)} placeholder="gpt-4o-mini" required />
             </label>
-            <input
-              className="input"
-              type="password"
-              style={{ padding: '0.625rem 0.75rem', fontSize: '0.875rem' }}
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
-              placeholder={t('settings.llm_api_key_placeholder')}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-text-muted block mb-1">
-              {t('settings.llm_model')}
-            </label>
-            <input
-              className="input"
-              style={{ padding: '0.625rem 0.75rem', fontSize: '0.875rem' }}
-              value={llmModel}
-              onChange={e => setLlmModel(e.target.value)}
-              placeholder="gpt-4o-mini"
-              required
-            />
           </div>
         </>
       )}
 
-      {error && <div className="error-message">{error}</div>}
-
-      <div className="flex items-center gap-3">
-        <button className="btn btn-primary text-sm" style={{ padding: '0.5rem 1rem' }} disabled={isSaving}>
-          {isSaving ? t('settings.saving') : t('settings.save_credentials')}
-        </button>
-
-        {provider === 'llm' && isConfigured && (
-          <button
-            type="button"
-            className="btn btn-ghost text-sm"
-            style={{ padding: '0.5rem 1rem' }}
-            onClick={handleTest}
-            disabled={isTesting}
-          >
-            {isTesting ? t('settings.llm_testing') : t('settings.llm_test')}
-          </button>
-        )}
-      </div>
-
-      {testResult && (
-        <div className={testResult.status === 'ok' ? 'success-message' : 'error-message'}>
-          {testResult.status === 'ok' ? t('settings.llm_test_ok') : testResult.message}
+      {error && (
+        <div className="flex items-center gap-2 text-[12.5px] text-danger font-medium">
+          <Icon name="alert" size={15} />{error}
         </div>
       )}
+
+      <div className="flex items-center gap-2.5">
+        {/* Live test-connection status (LLM only) */}
+        {provider === 'llm' && (
+          <div className="mr-auto min-h-5 flex items-center">
+            {isTesting && (
+              <span className="flex items-center gap-[7px] text-[12.5px] text-ink-muted font-[550]">
+                <Icon name="sync" size={15} className="spin" />{t('settings.llm_testing')}
+              </span>
+            )}
+            {!isTesting && testResult?.status === 'ok' && (
+              <span className="flex items-center gap-[7px] text-[12.5px] text-income font-[550]">
+                <Icon name="check" size={15} />{t('settings.llm_test_ok')}
+              </span>
+            )}
+            {!isTesting && testResult?.status === 'error' && (
+              <span className="flex items-center gap-[7px] text-[12.5px] text-danger font-[550]">
+                <Icon name="alert" size={15} />{testResult.message}
+              </span>
+            )}
+          </div>
+        )}
+
+        {provider === 'llm' && isConfigured && (
+          <Btn variant="secondary" onClick={handleTest} disabled={isTesting}>
+            {isTesting ? t('settings.llm_testing') : t('settings.llm_test')}
+          </Btn>
+        )}
+        <Btn variant="primary" type="submit" disabled={isSaving}>
+          {isSaving ? t('settings.saving') : t('settings.save_credentials')}
+        </Btn>
+      </div>
     </form>
   )
 }

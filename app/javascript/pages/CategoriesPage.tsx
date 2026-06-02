@@ -4,8 +4,10 @@ import { api } from '../lib/api'
 import type { Category } from '../lib/types'
 import type { View } from '../components/SidebarNav'
 import CategorySuggestionModal from '../components/CategorySuggestionModal'
+import { Btn, Empty, catColor, hueFor } from '../components/ui'
+import Icon from '../components/Icon'
 
-export default function CategoriesPage({ onNavigate }: { onNavigate?: (view: View) => void }) {
+export default function CategoriesPage({ }: { onNavigate?: (view: View) => void }) {
   const { t, i18n } = useTranslation()
   const [categories, setCategories] = useState<Category[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -112,70 +114,58 @@ export default function CategoriesPage({ onNavigate }: { onNavigate?: (view: Vie
 
   if (isLoading) {
     return (
-      <div className="p-6 max-w-3xl mx-auto">
-        <h2 className="text-2xl font-bold mb-6">{t('categories.title')}</h2>
-        <div className="text-sm text-text-muted">{t('common.loading')}</div>
+      <div className="page max-w-[760px]">
+        <div className="page-head"><h1 className="page-title">{t('categories.title')}</h1></div>
+        <div className="text-ink-muted text-[13.5px]">{t('common.loading')}</div>
       </div>
     )
   }
 
   if (loadError) {
     return (
-      <div className="p-6 max-w-3xl mx-auto">
-        <h2 className="text-2xl font-bold mb-6">{t('categories.title')}</h2>
-        <div className="error-message flex items-center justify-between">
-          <span>{t('common.load_error')}</span>
-          <button className="btn-icon text-xs" onClick={fetchCategories}>{t('common.retry')}</button>
+      <div className="page max-w-[760px]">
+        <div className="page-head"><h1 className="page-title">{t('categories.title')}</h1></div>
+        <div className="panel panel-pad flex items-center justify-between gap-3">
+          <span className="text-danger text-[13.5px]">{t('common.load_error')}</span>
+          <Btn variant="secondary" size="sm" icon="sync" onClick={fetchCategories}>{t('common.retry')}</Btn>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">{t('categories.title')}</h2>
-        <div className="flex items-center gap-2">
+    <div className="page max-w-[760px]">
+      <div className="page-head">
+        <h1 className="page-title">{t('categories.title')}</h1>
+        <div className="flex gap-[9px]">
           {llmConfigured && (
-            <button className="btn btn-ghost text-sm" onClick={() => setShowSuggestModal(true)}>
-              {t('categories.suggest')}
-            </button>
+            <Btn variant="secondary" icon="scan" onClick={() => setShowSuggestModal(true)}>{t('categories.suggest')}</Btn>
           )}
           {!isAdding && (
-            <button className="btn btn-primary text-sm" onClick={() => { setIsAdding(true); setEditingId(null) }}>
-              {t('categories.add')}
-            </button>
+            <Btn variant="primary" icon="plus" onClick={() => { setIsAdding(true); setEditingId(null) }}>{t('categories.add')}</Btn>
           )}
         </div>
       </div>
 
-      {error && <div className="error-message mb-4">{error}</div>}
+      {error && (
+        <div className="panel panel-pad mb-[14px] text-danger text-[13px] border-[color-mix(in_oklab,var(--danger)_40%,var(--line))]">{error}</div>
+      )}
 
       {categories.length === 0 && !isAdding ? (
-        <div className="card p-12 text-center">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mx-auto mb-4 text-text-muted">
-            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-            <line x1="7" y1="7" x2="7.01" y2="7" />
-          </svg>
-          <p className="text-lg font-medium mb-2">{t('categories.empty_title')}</p>
-          <p className="text-sm text-text-muted mb-4">{t('categories.empty_description')}</p>
-          <button
-            className="btn btn-primary text-sm"
-            onClick={handleCreateDefaults}
-            disabled={isCreatingDefaults}
-          >
-            {isCreatingDefaults ? t('common.loading') : t('categories.create_defaults')}
-          </button>
+        <div className="panel">
+          <Empty icon="categories" title={t('categories.empty_title')} body={t('categories.empty_description')}>
+            <Btn variant="primary" onClick={handleCreateDefaults} disabled={isCreatingDefaults}>
+              {isCreatingDefaults ? t('common.loading') : t('categories.create_defaults')}
+            </Btn>
+          </Empty>
         </div>
       ) : (
-        <div className="card">
-          {/* Add row */}
+        <div className="panel overflow-hidden">
           {isAdding && (
-            <div className="flex items-center gap-2 px-4 py-3 border-b-2 border-border">
+            <div className="flex items-center gap-[9px] px-[18px] py-3 border-b border-line">
               <input
                 ref={addRef}
-                className="input flex-1"
-                style={{ padding: '0.5rem 0.75rem' }}
+                className="field flex-1"
                 placeholder={t('categories.name_placeholder')}
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
@@ -184,27 +174,18 @@ export default function CategoriesPage({ onNavigate }: { onNavigate?: (view: Vie
                   if (e.key === 'Escape') { setIsAdding(false); setNewName('') }
                 }}
               />
-              <button className="btn-icon" onClick={handleCreate}>
-                {t('common.save')}
-              </button>
-              <button className="btn-icon" onClick={() => { setIsAdding(false); setNewName('') }}>
-                {t('common.cancel')}
-              </button>
+              <Btn variant="primary" size="sm" onClick={handleCreate}>{t('common.save')}</Btn>
+              <Btn variant="ghost" size="sm" onClick={() => { setIsAdding(false); setNewName('') }}>{t('common.cancel')}</Btn>
             </div>
           )}
 
-          {/* Category rows */}
           {categories.map((cat, i) => (
-            <div
-              key={cat.id}
-              className="flex items-center justify-between px-4 py-3 border-b-2 border-border last:border-b-0"
-            >
+            <div key={cat.id} className={'grid grid-cols-[1fr_auto] gap-4 items-center px-[18px] py-3' + (i || isAdding ? ' border-t border-line' : '')}>
               {editingId === cat.id ? (
-                <div className="flex items-center gap-2 flex-1">
+                <div className="flex items-center gap-[9px] col-[1/-1]">
                   <input
                     ref={editRef}
-                    className="input flex-1"
-                    style={{ padding: '0.5rem 0.75rem' }}
+                    className="field flex-1"
                     value={editName}
                     onChange={e => setEditName(e.target.value)}
                     onKeyDown={e => {
@@ -212,36 +193,28 @@ export default function CategoriesPage({ onNavigate }: { onNavigate?: (view: Vie
                       if (e.key === 'Escape') setEditingId(null)
                     }}
                   />
-                  <button className="btn-icon" onClick={() => handleUpdate(cat.id)}>
-                    {t('common.save')}
-                  </button>
-                  <button className="btn-icon" onClick={() => setEditingId(null)}>
-                    {t('common.cancel')}
-                  </button>
+                  <Btn variant="primary" size="sm" onClick={() => handleUpdate(cat.id)}>{t('common.save')}</Btn>
+                  <Btn variant="ghost" size="sm" onClick={() => setEditingId(null)}>{t('common.cancel')}</Btn>
                 </div>
               ) : (
                 <>
-                  <span className="text-sm font-medium">{cat.name}</span>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="w-2.5 h-2.5 rounded-[3px] shrink-0" style={{ background: catColor(hueFor(cat.name)) }} />
+                    <span className="font-semibold text-sm overflow-hidden text-ellipsis whitespace-nowrap">{cat.name}</span>
+                  </div>
                   {deletingId === cat.id ? (
-                    <div className="flex items-center gap-2 shrink-0 ml-3">
-                      <span className="text-xs text-error">{t('categories.confirm_short')}</span>
-                      <button
-                        className="btn-icon text-xs border-error text-error"
-                        onClick={() => handleDelete(cat.id)}
-                      >
-                        {t('common.delete')}
-                      </button>
-                      <button className="btn-icon text-xs" onClick={() => setDeletingId(null)}>
-                        {t('common.cancel')}
-                      </button>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-danger">{t('categories.confirm_short')}</span>
+                      <Btn variant="danger" size="sm" onClick={() => handleDelete(cat.id)}>{t('common.delete')}</Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => setDeletingId(null)}>{t('common.cancel')}</Btn>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-1 shrink-0 ml-3">
-                      <button className="btn-icon text-xs" onClick={() => startEdit(cat)}>
-                        {t('common.edit')}
+                    <div className="flex items-center gap-1">
+                      <button className="ibtn btn-sm w-[30px] h-[30px]" title={t('common.edit')} onClick={() => startEdit(cat)}>
+                        <Icon name="edit" size={15} />
                       </button>
-                      <button className="btn-icon text-xs" onClick={() => { setDeletingId(cat.id); setEditingId(null) }}>
-                        {t('common.delete')}
+                      <button className="ibtn btn-sm w-[30px] h-[30px]" title={t('common.delete')} onClick={() => { setDeletingId(cat.id); setEditingId(null) }}>
+                        <Icon name="trash" size={15} />
                       </button>
                     </div>
                   )}
@@ -251,6 +224,7 @@ export default function CategoriesPage({ onNavigate }: { onNavigate?: (view: Vie
           ))}
         </div>
       )}
+
       {showSuggestModal && (
         <CategorySuggestionModal onClose={(didCreate) => {
           setShowSuggestModal(false)

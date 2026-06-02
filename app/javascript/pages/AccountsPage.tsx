@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { formatAmount, formatRelativeTime } from '../lib/format'
-import type { BankConnection } from '../lib/types'
+import { formatRelativeTime, maskIban } from '../lib/format'
+import type { BankConnection, BankConnectionAccount } from '../lib/types'
 import type { View } from '../components/SidebarNav'
+import { Amount, Btn, StatusBadge, Empty } from '../components/ui'
+import Icon from '../components/Icon'
 
 interface AccountsPageProps {
   onNavigate?: (view: View) => void
@@ -64,7 +66,6 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
       const r = await api(`/api/v1/bank_connections/${id}/sync`, { method: 'POST' })
       if (!r.ok) { stopPolling(id); return }
 
-      // Poll every 3s — stop when last_synced_at changes or after 30s
       const startedAt = Date.now()
       const timer = setInterval(async () => {
         try {
@@ -81,6 +82,19 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
       pollTimers.current.set(id, timer)
     } catch {
       stopPolling(id)
+    }
+  }
+
+  const handleReconnect = async (id: number) => {
+    try {
+      const r = await api(`/api/v1/bank_connections/${id}/reconnect`, { method: 'POST' })
+      if (r.ok) {
+        const data = await r.json()
+        if (data.redirect_url) { window.location.href = data.redirect_url; return }
+      }
+      setError(true)
+    } catch {
+      setError(true)
     }
   }
 
@@ -118,7 +132,6 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     setEditingId(null)
     setEditValue('')
 
-    // Optimistically update local state
     setConnections(prev => prev.map(bc => ({
       ...bc,
       accounts: bc.accounts.map(a =>
@@ -132,140 +145,189 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
         body: { name: trimmed }
       })
     } catch {
-      // Revert on failure by refetching
       fetchConnections()
     }
   }
 
-  const statusBadge = (status: string) => {
-    const key = `accounts.status_${status}` as const
-    const label = t(key)
-    if (status === 'authorized') return <span className="badge badge-accent">{label}</span>
-    if (status === 'expired' || status === 'error') return <span className="badge badge-error">{label}</span>
-    return <span className="badge badge-muted">{label}</span>
-  }
-
   if (isLoading) {
     return (
-      <div className="p-6 max-w-6xl mx-auto">
-        <h2 className="text-2xl font-bold mb-6">{t('accounts.title')}</h2>
-        <div className="text-sm text-text-muted">{t('common.loading')}</div>
+      <div className="page">
+        <div className="page-head"><h1 className="page-title">{t('accounts.title')}</h1></div>
+        <div className="text-ink-muted text-[13.5px]">{t('common.loading')}</div>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="p-6 max-w-6xl mx-auto">
-        <h2 className="text-2xl font-bold mb-6">{t('accounts.title')}</h2>
-        <div className="error-message flex items-center justify-between">
-          <span>{t('common.load_error')}</span>
-          <button className="btn-icon text-xs" onClick={fetchConnections}>{t('common.retry')}</button>
+      <div className="page">
+        <div className="page-head"><h1 className="page-title">{t('accounts.title')}</h1></div>
+        <div className="panel panel-pad flex items-center justify-between gap-3">
+          <span className="text-danger text-[13.5px]">{t('common.load_error')}</span>
+          <Btn variant="secondary" size="sm" icon="sync" onClick={fetchConnections}>{t('common.retry')}</Btn>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">{t('accounts.title')}</h2>
-        <button className="btn btn-primary text-sm" onClick={() => onNavigate?.('settings')}>
-          {t('accounts.connect_bank')}
-        </button>
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">{t('accounts.title')}</h1>
+          <div className="text-ink-muted text-[13px] mt-0.5">{t('accounts.subtitle')}</div>
+        </div>
+        <Btn variant="primary" icon="plus" onClick={() => onNavigate?.('settings')}>{t('accounts.connect_bank')}</Btn>
       </div>
 
       {connections.length === 0 ? (
-        <div className="card p-12 text-center">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mx-auto mb-4 text-text-muted">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <line x1="3" y1="9" x2="21" y2="9" />
-          </svg>
-          <p className="text-lg font-medium mb-2">{t('accounts.empty_title')}</p>
-          <p className="text-sm text-text-muted">{t('accounts.empty_description')}</p>
+        <div className="panel">
+          <Empty icon="bank" title={t('accounts.empty_title')} body={t('accounts.empty_description')}>
+            <Btn variant="primary" icon="plus" onClick={() => onNavigate?.('settings')}>{t('accounts.connect_bank')}</Btn>
+          </Empty>
         </div>
       ) : (
-        <div className="flex flex-col gap-4">
-          {connections.map((bc) => (
-            <div key={bc.id} className="card">
-              {/* Connection header */}
-              <div className="flex items-center justify-between px-4 py-3 border-b-2 border-border">
-                <div className="flex items-center gap-3 min-w-0">
-                  <p className="font-semibold truncate">{bc.institution_name || bc.institution_id}</p>
-                  {statusBadge(bc.status)}
-                </div>
-                <div className="flex items-center gap-2 shrink-0 ml-3">
-                  <button
-                    className="btn-icon text-xs"
-                    onClick={() => handleSync(bc.id)}
-                    disabled={syncingIds.has(bc.id) || bc.status !== 'authorized'}
-                  >
-                    {syncingIds.has(bc.id) ? t('accounts.syncing') : t('accounts.sync')}
-                  </button>
-                  <button
-                    className="btn-icon text-xs"
-                    onClick={() => handleDelete(bc.id)}
-                  >
-                    {t('accounts.delete_connection')}
-                  </button>
-                </div>
-              </div>
-
-              {/* Account rows */}
-              {bc.accounts.map(acct => (
-                <div key={acct.id} className="flex items-center justify-between px-4 py-3 border-b-2 border-border last:border-b-0">
-                  <div className="min-w-0 flex-1 mr-4">
-                    {editingId === acct.id ? (
-                      <input
-                        ref={editRef}
-                        className="input text-sm font-medium !py-1 !px-2 !border-accent"
-                        value={editValue}
-                        onChange={e => setEditValue(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') saveRename()
-                          if (e.key === 'Escape') cancelRename()
-                        }}
-                        onBlur={saveRename}
-                        placeholder={t('accounts.rename_placeholder')}
-                      />
-                    ) : (
-                      <button
-                        className="text-sm font-medium truncate text-left cursor-pointer border-b-2 border-transparent hover:border-accent transition-colors"
-                        onClick={() => startRename(acct.id, acct.name)}
-                      >
-                        {acct.name || 'Account'}
-                      </button>
-                    )}
-                    {acct.iban && (
-                      <p className="mono text-xs text-text-muted mt-0.5">{acct.iban}</p>
-                    )}
-                  </div>
-                  <p className="mono text-lg font-semibold whitespace-nowrap">
-                    {acct.balance_amount ? formatAmount(acct.balance_amount, acct.currency) : '—'}
-                  </p>
-                </div>
-              ))}
-
-              {/* Footer — last synced */}
-              {bc.accounts.length === 0 && (
-                <div className="px-4 py-3 text-xs text-text-muted italic">
-                  {t('accounts.never_synced')}
-                </div>
-              )}
-              {bc.last_synced_at && (
-                <div className="px-4 py-2 text-xs text-text-muted border-t-2 border-border">
-                  {t('accounts.last_synced', { time: formatRelativeTime(bc.last_synced_at) })}
-                </div>
-              )}
-              {bc.error_message && (
-                <div className="px-4 py-2 text-xs text-error border-t-2 border-border">
-                  {bc.error_message}
-                </div>
-              )}
-            </div>
+        <div className="grid gap-4">
+          {connections.map(bc => (
+            <ConnectionCard
+              key={bc.id}
+              bc={bc}
+              t={t}
+              syncing={syncingIds.has(bc.id)}
+              onSync={() => handleSync(bc.id)}
+              onReconnect={() => handleReconnect(bc.id)}
+              onDelete={() => handleDelete(bc.id)}
+              editingId={editingId}
+              editValue={editValue}
+              editRef={editRef}
+              setEditValue={setEditValue}
+              startRename={startRename}
+              saveRename={saveRename}
+              cancelRename={cancelRename}
+            />
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+interface ConnectionCardProps {
+  bc: BankConnection
+  t: (key: string, opts?: Record<string, unknown>) => string
+  syncing: boolean
+  onSync: () => void
+  onReconnect: () => void
+  onDelete: () => void
+  editingId: number | null
+  editValue: string
+  editRef: React.RefObject<HTMLInputElement | null>
+  setEditValue: (v: string) => void
+  startRename: (id: number, name: string) => void
+  saveRename: () => void
+  cancelRename: () => void
+}
+
+function ConnectionCard({ bc, t, syncing, onSync, onReconnect, onDelete, editingId, editValue, editRef, setEditValue, startRename, saveRename, cancelRename }: ConnectionCardProps) {
+  const instName = bc.institution_name || bc.institution_id
+  const short = (instName || '??').slice(0, 2).toUpperCase()
+  const count = bc.accounts.length
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="icon-tile icon-tile-lg">{short}</span>
+          <div className="min-w-0">
+            <div className="font-semibold text-[14.5px] overflow-hidden text-ellipsis whitespace-nowrap">{instName}</div>
+            <div className="text-ink-faint text-[11.5px]">
+              {count === 1 ? t('accounts.account_one', { count }) : t('accounts.account_other', { count })}
+              {bc.status === 'authorized' && bc.last_synced_at && <> · {t('accounts.synced')} {formatRelativeTime(bc.last_synced_at)}</>}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <StatusBadge status={bc.status} label={t(`accounts.status_${bc.status}`)} />
+          {(bc.status === 'authorized' || bc.status === 'pending') ? (
+            <button className="ibtn btn-sm w-8 h-8" onClick={onSync}
+              title={syncing ? t('accounts.syncing') : t('accounts.sync')} disabled={syncing || bc.status !== 'authorized'}>
+              <Icon name="sync" size={16} className={syncing ? 'spin' : ''} />
+            </button>
+          ) : (
+            <Btn variant="secondary" size="sm" icon="link" onClick={onReconnect}>{t('accounts.reconnect')}</Btn>
+          )}
+          <button className="ibtn btn-sm w-8 h-8" title={t('accounts.delete_connection')} onClick={onDelete}>
+            <Icon name="trash" size={15} />
+          </button>
+        </div>
+      </div>
+
+      {bc.error_message && (
+        <div className="flex gap-2.5 items-start px-[18px] py-[11px] bg-danger-soft border-b border-line">
+          <Icon name="alert" size={16} className="text-danger shrink-0 mt-px" />
+          <span className="text-[12.5px] text-danger font-medium">{bc.error_message}</span>
+        </div>
+      )}
+
+      {bc.accounts.length === 0 ? (
+        <div className="text-ink-muted px-[18px] py-4 text-[12.5px]">{t('accounts.no_accounts_on_connection')}</div>
+      ) : bc.accounts.map(acct => (
+        <AccountRow
+          key={acct.id}
+          acct={acct}
+          t={t}
+          editing={editingId === acct.id}
+          editValue={editValue}
+          editRef={editRef}
+          setEditValue={setEditValue}
+          startRename={startRename}
+          saveRename={saveRename}
+          cancelRename={cancelRename}
+        />
+      ))}
+    </div>
+  )
+}
+
+interface AccountRowProps {
+  acct: BankConnectionAccount
+  t: (key: string, opts?: Record<string, unknown>) => string
+  editing: boolean
+  editValue: string
+  editRef: React.RefObject<HTMLInputElement | null>
+  setEditValue: (v: string) => void
+  startRename: (id: number, name: string) => void
+  saveRename: () => void
+  cancelRename: () => void
+}
+
+function AccountRow({ acct, t, editing, editValue, editRef, setEditValue, startRename, saveRename, cancelRename }: AccountRowProps) {
+  const negative = acct.balance_amount != null && parseFloat(acct.balance_amount) < 0
+  return (
+    <div className="grid grid-cols-[1fr_auto] gap-[14px] items-center px-[18px] py-[13px] border-t border-line">
+      <div className="min-w-0">
+        {editing ? (
+          <input
+            ref={editRef}
+            className="field h-8 max-w-[260px]"
+            value={editValue}
+            onChange={e => setEditValue(e.target.value)}
+            onBlur={saveRename}
+            onKeyDown={e => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') cancelRename() }}
+            placeholder={t('accounts.rename_placeholder')}
+          />
+        ) : (
+          <button onClick={() => startRename(acct.id, acct.name || '')}
+            className="focus-inset inline-flex items-center gap-[7px] font-semibold text-sm rounded-[4px] px-1 py-px -mx-1 -my-px text-left"
+            title={t('accounts.rename')}>
+            {acct.name || 'Account'}<Icon name="edit" size={13} className="text-ink-faint" />
+          </button>
+        )}
+        <div className="text-ink-faint mono text-[11.5px] mt-0.5">{maskIban(acct.iban)}</div>
+      </div>
+      <div className="text-right">
+        <Amount value={acct.balance_amount} currency={acct.currency} signed={false} className="text-base" forceNegative={negative} />
+      </div>
     </div>
   )
 }

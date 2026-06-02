@@ -1,15 +1,23 @@
 import { useTranslation } from 'react-i18next'
-import ThemeToggle from './ThemeToggle'
 import { api } from '../lib/api'
+import Icon from './Icon'
 
 interface TopBarProps {
   email: string
   onLogout: () => void
   onMenuToggle: () => void
+  pageTitle: string
+  theme: 'light' | 'dark'
+  onToggleTheme: () => void
 }
 
-export default function TopBar({ email, onLogout, onMenuToggle }: TopBarProps) {
-  const { t } = useTranslation()
+const languages = [
+  { code: 'en', label: 'EN' },
+  { code: 'de', label: 'DE' },
+]
+
+export default function TopBar({ email, onLogout, onMenuToggle, pageTitle, theme, onToggleTheme }: TopBarProps) {
+  const { t, i18n } = useTranslation()
 
   const handleLogout = async () => {
     try {
@@ -24,29 +32,45 @@ export default function TopBar({ email, onLogout, onMenuToggle }: TopBarProps) {
 
   return (
     <header className="topbar">
-      {/* Hamburger — visible only on mobile */}
-      <button
-        onClick={onMenuToggle}
-        className="btn-icon lg:hidden mr-auto"
-        aria-label={t('common.open_nav')}
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="3" y1="6" x2="21" y2="6" />
-          <line x1="3" y1="12" x2="21" y2="12" />
-          <line x1="3" y1="18" x2="21" y2="18" />
-        </svg>
+      <button className="ibtn mobile-only" onClick={onMenuToggle} aria-label={t('shell.menu')}>
+        <Icon name="menu" size={20} />
+      </button>
+      <div className="page-title desktop-only text-base">{pageTitle}</div>
+      <div className="flex-1" />
+
+      {/* language */}
+      <div className="segmented" role="group" aria-label="Language">
+        {languages.map(({ code, label }) => (
+          <button
+            key={code}
+            className={i18n.language === code ? 'on' : ''}
+            onClick={() => i18n.changeLanguage(code)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* theme */}
+      <button className="ibtn" onClick={onToggleTheme} aria-label={t('shell.toggle_theme')} title={t('shell.toggle_theme')}>
+        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={19} />
       </button>
 
-      {/* Right side controls */}
-      <div className="flex items-center gap-3">
-        <span className="text-sm hidden sm:inline text-text-muted">
-          {email}
+      <div className="hairline-v desktop-only h-[26px] mx-1" />
+
+      {/* account */}
+      <div className="desktop-only flex items-center gap-2.5">
+        <div className="text-right leading-[1.25]">
+          <div className="text-[12.5px] font-[550] max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap">{email}</div>
+          <div className="text-ink-faint mono text-[10.5px] tracking-[0.04em]">{t('app.self_hosted')}</div>
+        </div>
+        <span className="icon-tile icon-tile-ink w-[34px] h-[34px] text-[13px]">
+          {(email[0] || '?').toUpperCase()}
         </span>
-        <ThemeToggle />
-        <button onClick={handleLogout} className="btn-icon">
-          {t('common.sign_out')}
-        </button>
       </div>
+      <button className="ibtn" onClick={handleLogout} aria-label={t('common.sign_out')} title={t('common.sign_out')}>
+        <Icon name="logout" size={18} />
+      </button>
     </header>
   )
 }

@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { View } from './SidebarNav'
+import { Modal, Btn, Eyebrow } from './ui'
+import Icon from './Icon'
 
 interface Props {
   onClose: (didCategorize: boolean) => void
@@ -48,114 +50,114 @@ export default function CategorizationModal({ onClose, onNavigate }: Props) {
 
   const didCategorize = results !== null && results.categorized > 0
   const dismissable = step !== 'running' && step !== 'loading'
+  const handleClose = () => { if (dismissable) onClose(didCategorize) }
+
+  const unmatched = results ? results.total - results.categorized - results.failed : 0
+
+  let footer: React.ReactNode = null
+  if (step === 'confirm') {
+    footer = (
+      <>
+        <Btn variant="ghost" onClick={() => onClose(false)}>{t('common.cancel')}</Btn>
+        <Btn variant="primary" icon="scan" onClick={handleCategorize}>{t('transactions.categorize')}</Btn>
+      </>
+    )
+  } else if (step === 'running') {
+    footer = (
+      <Btn variant="primary" disabled>
+        <Icon name="sync" size={15} className="spin" />{t('transactions.categorizing')}
+      </Btn>
+    )
+  } else if (step === 'done' || step === 'error') {
+    footer = <Btn variant="ghost" onClick={() => onClose(didCategorize)}>{t('transactions.categorize_close')}</Btn>
+  }
 
   return (
-    <div className="modal-backdrop" onClick={() => dismissable && onClose(didCategorize)}>
-      <div
-        className={`modal-dialog ${step === 'running' ? 'modal-dialog-processing' : ''}`}
-        onClick={e => e.stopPropagation()}
-      >
-        {step === 'loading' && (
-          <div className="flex items-center gap-3">
-            <span className="spinner text-text-muted" />
-            <p className="text-sm text-text-muted">{t('common.loading')}</p>
+    <Modal title={t('transactions.categorize_title')} icon="scan" onClose={dismissable ? handleClose : undefined} footer={footer} closeLabel={t('common.close')}>
+      {step === 'loading' && (
+        <div className="flex items-center gap-[11px] py-1">
+          <Icon name="sync" size={18} className="spin text-ink-muted" />
+          <span className="text-ink-muted text-[13.5px]">{t('common.loading')}</span>
+        </div>
+      )}
+
+      {step === 'confirm' && (
+        <>
+          <p className="text-ink-muted text-[13.5px] leading-[1.6]">{t('transactions.categorize_confirm', { count })}</p>
+          <div className="mt-4 flex items-center gap-[9px] px-[13px] py-2.5 bg-surface-2 border border-line rounded-md">
+            <Icon name="shield" size={17} className="text-income shrink-0" />
+            <span className="text-[12.5px] font-medium">{t('transactions.categorize_privacy')}</span>
           </div>
-        )}
+        </>
+      )}
 
-        {step === 'confirm' && (
-          <>
-            <h3 className="text-base font-bold mb-1">{t('transactions.categorize_title')}</h3>
-            <p className="text-sm text-text-muted mb-5">
-              {t('transactions.categorize_confirm', { count })}
-            </p>
-            <div className="flex items-center gap-3">
-              <button className="btn btn-primary text-sm px-4 py-2" onClick={handleCategorize}>
-                {t('transactions.categorize')}
-              </button>
-              <button className="btn btn-ghost text-sm px-4 py-2" onClick={() => onClose(false)}>
-                {t('common.cancel')}
-              </button>
-            </div>
-          </>
-        )}
-
-        {step === 'running' && (
-          <div className="flex items-center gap-3">
-            <span className="spinner text-accent" />
-            <div>
-              <p className="text-sm font-semibold">{t('transactions.categorizing')}</p>
-              <p className="text-xs text-text-muted mt-0.5">{t('transactions.categorize_wait')}</p>
-            </div>
+      {step === 'running' && (
+        <div className="flex items-center gap-[11px] py-1">
+          <Icon name="sync" size={18} className="spin text-brass-ink" />
+          <div>
+            <div className="font-semibold text-sm">{t('transactions.categorizing')}</div>
+            <div className="text-ink-muted text-[12.5px] mt-px">{t('transactions.categorize_wait')}</div>
           </div>
-        )}
+        </div>
+      )}
 
-        {step === 'done' && results && (
-          <>
-            {results.total === 0 ? (
-              <p className="text-sm text-text-muted">{t('transactions.categorize_none')}</p>
-            ) : (
-              <>
-                <h3 className="text-base font-bold mb-2">{t('transactions.categorize_done')}</h3>
-                <div className="flex gap-6 mb-4">
-                  <div>
-                    <p className="mono text-2xl font-bold text-accent">{results.categorized}</p>
-                    <p className="text-xs text-text-muted">{t('transactions.categorize_matched')}</p>
-                  </div>
-                  {results.failed > 0 && (
-                    <div>
-                      <p className="mono text-2xl font-bold text-error">{results.failed}</p>
-                      <p className="text-xs text-text-muted">{t('transactions.categorize_errors')}</p>
-                    </div>
-                  )}
-                  {(results.total - results.categorized - results.failed) > 0 && (
-                    <div>
-                      <p className="mono text-2xl font-bold text-text-muted">{results.total - results.categorized - results.failed}</p>
-                      <p className="text-xs text-text-muted">{t('transactions.categorize_unmatched')}</p>
-                    </div>
-                  )}
+      {step === 'done' && results && (
+        results.total === 0 ? (
+          <p className="text-ink-muted text-[13.5px]">{t('transactions.categorize_none')}</p>
+        ) : (
+          <div className="pb-1.5">
+            <div className="flex items-center gap-[11px] mb-[14px]">
+              <span className="icon-tile icon-tile-ok"><Icon name="check" size={19} /></span>
+              <div className="font-semibold text-[14.5px]">{t('transactions.categorize_done')}</div>
+            </div>
+            <div className={'flex gap-6' + (results.breakdown && Object.keys(results.breakdown).length > 0 ? ' mb-1' : '')}>
+              <div>
+                <div className="mono amt-pos text-2xl font-medium">{results.categorized}</div>
+                <Eyebrow className="mt-[3px]">{t('transactions.categorize_matched')}</Eyebrow>
+              </div>
+              {results.failed > 0 && (
+                <div>
+                  <div className="mono text-2xl font-medium text-danger">{results.failed}</div>
+                  <Eyebrow className="mt-[3px]">{t('transactions.categorize_errors')}</Eyebrow>
                 </div>
+              )}
+              {unmatched > 0 && (
+                <div>
+                  <div className="mono text-ink-faint text-2xl font-medium">{unmatched}</div>
+                  <Eyebrow className="mt-[3px]">{t('transactions.categorize_unmatched')}</Eyebrow>
+                </div>
+              )}
+            </div>
 
-                {results.breakdown && Object.keys(results.breakdown).length > 0 && (
-                  <div className="border-t-2 border-border pt-3 mb-4 max-h-48 overflow-y-auto">
-                    {Object.entries(results.breakdown)
-                      .sort(([, a], [, b]) => b - a)
-                      .map(([name, count]) => (
-                        <div key={name} className="flex items-center justify-between py-1">
-                          <span className="text-sm truncate mr-4">{name}</span>
-                          <span className="mono text-sm font-semibold text-text-muted shrink-0">{count}</span>
-                        </div>
-                      ))}
+            {results.breakdown && Object.keys(results.breakdown).length > 0 && (
+              <div className="border-t border-line pt-3 mt-[14px] max-h-[180px] overflow-y-auto">
+                {Object.entries(results.breakdown).sort(([, a], [, b]) => b - a).map(([name, c]) => (
+                  <div key={name} className="flex items-center justify-between py-1">
+                    <span className="text-[13px] overflow-hidden text-ellipsis whitespace-nowrap mr-4">{name}</span>
+                    <span className="mono text-ink-muted text-[13px] font-[550] shrink-0">{c}</span>
                   </div>
-                )}
-
-                {(results.total - results.categorized - results.failed) > 0 && onNavigate && (
-                  <div className="border-t-2 border-border pt-3 mb-4">
-                    <p className="text-xs text-text-muted mb-2">{t('transactions.categorize_unmatched_hint')}</p>
-                    <button
-                      className="link text-sm cursor-pointer"
-                      onClick={() => { onClose(didCategorize); onNavigate('categories') }}
-                    >
-                      {t('transactions.categorize_add_categories')} →
-                    </button>
-                  </div>
-                )}
-              </>
+                ))}
+              </div>
             )}
-            <button className="btn btn-ghost text-sm px-4 py-2" onClick={() => onClose(didCategorize)}>
-              {t('transactions.categorize_close')}
-            </button>
-          </>
-        )}
 
-        {step === 'error' && (
-          <>
-            <div className="error-message mb-4">{t('common.error')}</div>
-            <button className="btn btn-ghost text-sm px-4 py-2" onClick={() => onClose(didCategorize)}>
-              {t('transactions.categorize_close')}
-            </button>
-          </>
-        )}
-      </div>
-    </div>
+            {unmatched > 0 && onNavigate && (
+              <div className="border-t border-line pt-3 mt-[14px]">
+                <p className="text-ink-muted text-[12.5px] mb-2">{t('transactions.categorize_unmatched_hint')}</p>
+                <button className="focus-inset text-brass-ink text-[13.5px] font-[550] inline-flex items-center gap-1.5"
+                  onClick={() => { onClose(didCategorize); onNavigate('categories') }}>
+                  {t('transactions.categorize_add_categories')}<Icon name="arrowRight" size={15} />
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      )}
+
+      {step === 'error' && (
+        <div className="flex items-center gap-2.5 text-danger text-[13.5px]">
+          <Icon name="alert" size={18} />{t('common.error')}
+        </div>
+      )}
+    </Modal>
   )
 }

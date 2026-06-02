@@ -36,7 +36,7 @@ export default function App() {
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-sm text-text-muted">
+        <div className="text-ink-muted text-[13.5px]">
           {t('common.loading')}
         </div>
       </div>

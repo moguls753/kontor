@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { Modal, Btn, catColor, hueFor } from './ui'
+import Icon from './Icon'
 
 interface Props {
   onClose: (didCreate: boolean) => void
@@ -40,14 +42,6 @@ export default function CategorySuggestionModal({ onClose }: Props) {
     })
   }
 
-  const toggleAll = () => {
-    if (selected.size === suggestions.length) {
-      setSelected(new Set())
-    } else {
-      setSelected(new Set(suggestions))
-    }
-  }
-
   const handleCreate = async () => {
     setStep('creating')
     let created = 0
@@ -68,106 +62,79 @@ export default function CategorySuggestionModal({ onClose }: Props) {
 
   const didCreate = createdCount > 0
   const dismissable = step !== 'loading' && step !== 'creating'
+  const handleClose = () => { if (dismissable) onClose(didCreate) }
+
+  let footer: React.ReactNode = null
+  if (step === 'review') {
+    footer = (
+      <>
+        <Btn variant="ghost" onClick={() => onClose(false)}>{t('common.cancel')}</Btn>
+        <Btn variant="primary" icon="plus" disabled={selected.size === 0} onClick={handleCreate}>
+          {t('common.save')} ({selected.size})
+        </Btn>
+      </>
+    )
+  } else if (step === 'creating') {
+    footer = <Btn variant="primary" disabled><Icon name="sync" size={15} className="spin" />{t('categories.suggest_creating')}</Btn>
+  } else if (step === 'done' || step === 'error') {
+    footer = <Btn variant="ghost" onClick={() => onClose(didCreate)}>{t('transactions.categorize_close')}</Btn>
+  }
 
   return (
-    <div className="modal-backdrop" onClick={() => dismissable && onClose(didCreate)}>
-      <div
-        className={`modal-dialog ${step === 'loading' || step === 'creating' ? 'modal-dialog-processing' : ''}`}
-        style={{ maxWidth: '30rem' }}
-        onClick={e => e.stopPropagation()}
-      >
-        {step === 'loading' && (
-          <div className="flex items-center gap-3">
-            <span className="spinner" style={{ color: 'var(--color-accent)' }} />
-            <div>
-              <p className="text-sm font-semibold">{t('categories.suggesting')}</p>
-              <p className="text-xs text-text-muted mt-0.5">{t('categories.suggest_wait')}</p>
-            </div>
+    <Modal title={t('categories.suggest_title')} icon="scan" onClose={dismissable ? handleClose : undefined} footer={footer} closeLabel={t('common.close')}>
+      {step === 'loading' && (
+        <div className="flex items-center gap-[11px]">
+          <Icon name="sync" size={18} className="spin text-brass-ink" />
+          <div>
+            <div className="font-semibold text-sm">{t('categories.suggesting')}</div>
+            <div className="text-ink-muted text-[12.5px] mt-px">{t('categories.suggest_wait')}</div>
           </div>
-        )}
+        </div>
+      )}
 
-        {step === 'review' && (
-          <>
-            <h3 className="text-base font-bold mb-1">{t('categories.suggest_title')}</h3>
-            <p className="text-sm text-text-muted mb-4">{t('categories.suggest_description')}</p>
-
-            <div className="border-2 border-border mb-4 max-h-64 overflow-y-auto">
-              <label className="flex items-center gap-3 px-3 py-2 border-b-2 border-border cursor-pointer hover:bg-surface-sunken">
-                <input
-                  type="checkbox"
-                  checked={selected.size === suggestions.length}
-                  onChange={toggleAll}
-                  style={{ accentColor: 'var(--color-accent)' }}
-                />
-                <span className="text-xs font-bold uppercase tracking-wider text-text-muted">
-                  {t('categories.suggest_select_all')} ({selected.size}/{suggestions.length})
-                </span>
-              </label>
-              {suggestions.map(name => (
-                <label
-                  key={name}
-                  className="flex items-center gap-3 px-3 py-2 border-b-2 border-border last:border-b-0 cursor-pointer hover:bg-surface-sunken"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.has(name)}
-                    onChange={() => toggleSelection(name)}
-                    style={{ accentColor: 'var(--color-accent)' }}
-                  />
-                  <span className="text-sm">{name}</span>
-                </label>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                className="btn btn-primary text-sm px-4 py-2"
-                onClick={handleCreate}
-                disabled={selected.size === 0}
-              >
-                {t('common.save')} ({selected.size})
-              </button>
-              <button className="btn btn-ghost text-sm px-4 py-2" onClick={() => onClose(false)}>
-                {t('common.cancel')}
-              </button>
-            </div>
-          </>
-        )}
-
-        {step === 'creating' && (
-          <div className="flex items-center gap-3">
-            <span className="spinner" style={{ color: 'var(--color-accent)' }} />
-            <p className="text-sm font-semibold">{t('categories.suggest_creating')}</p>
+      {step === 'review' && (
+        <>
+          <p className="text-ink-muted text-[13.5px] leading-[1.6]">{t('categories.suggest_description')}</p>
+          <div className="flex flex-wrap gap-[9px] mt-4 pb-1">
+            {suggestions.map(name => {
+              const on = selected.has(name)
+              return (
+                <button key={name} onClick={() => toggleSelection(name)}
+                  className={'inline-flex items-center gap-2 px-[13px] py-2 rounded-md border font-[550] text-[13px] '
+                    + (on ? 'border-brass bg-brass-soft text-ink' : 'border-line-strong bg-surface text-ink-muted')}>
+                  <span className="w-[3px] h-3.5 rounded-[2px]" style={{ background: catColor(hueFor(name)) }} />
+                  {name}
+                  {on && <Icon name="check" size={14} className="text-brass-ink" />}
+                </button>
+              )
+            })}
           </div>
-        )}
+        </>
+      )}
 
-        {step === 'done' && (
-          <>
-            {suggestions.length === 0 ? (
-              <p className="text-sm text-text-muted">{t('categories.suggest_none')}</p>
-            ) : (
-              <>
-                <h3 className="text-base font-bold mb-2">{t('categories.suggest_title')}</h3>
-                <p className="text-sm text-text-muted mb-4">
-                  {t('categories.suggest_done', { count: createdCount })}
-                </p>
-              </>
-            )}
-            <button className="btn btn-ghost text-sm px-4 py-2" onClick={() => onClose(didCreate)}>
-              {t('transactions.categorize_close')}
-            </button>
-          </>
-        )}
+      {step === 'creating' && (
+        <div className="flex items-center gap-[11px]">
+          <Icon name="sync" size={18} className="spin text-brass-ink" />
+          <span className="font-semibold text-sm">{t('categories.suggest_creating')}</span>
+        </div>
+      )}
 
-        {step === 'error' && (
-          <>
-            <div className="error-message mb-4">{t('common.error')}</div>
-            <button className="btn btn-ghost text-sm px-4 py-2" onClick={() => onClose(false)}>
-              {t('transactions.categorize_close')}
-            </button>
-          </>
-        )}
-      </div>
-    </div>
+      {step === 'done' && (
+        suggestions.length === 0 ? (
+          <p className="text-ink-muted text-[13.5px]">{t('categories.suggest_none')}</p>
+        ) : (
+          <div className="flex items-center gap-[11px]">
+            <span className="icon-tile icon-tile-ok"><Icon name="check" size={19} /></span>
+            <span className="text-[13.5px]">{t('categories.suggest_done', { count: createdCount })}</span>
+          </div>
+        )
+      )}
+
+      {step === 'error' && (
+        <div className="flex items-center gap-2.5 text-danger text-[13.5px]">
+          <Icon name="alert" size={18} />{t('common.error')}
+        </div>
+      )}
+    </Modal>
   )
 }

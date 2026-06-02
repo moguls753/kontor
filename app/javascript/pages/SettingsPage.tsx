@@ -4,6 +4,9 @@ import { api } from '../lib/api'
 import LanguageSwitcher from '../components/LanguageSwitcher'
 import CredentialForm from '../components/CredentialForm'
 import ConnectBankFlow from '../components/ConnectBankFlow'
+import { Btn } from '../components/ui'
+import Icon from '../components/Icon'
+import type { IconName } from '../components/Icon'
 import type { CredentialsStatus } from '../lib/types'
 
 export default function SettingsPage() {
@@ -29,130 +32,41 @@ export default function SettingsPage() {
 
   useEffect(() => { fetchCredentials() }, [])
 
-  const toggleProvider = (p: string) => {
-    setExpandedProvider(prev => prev === p ? null : p)
-  }
+  const toggleProvider = (p: string) => setExpandedProvider(prev => prev === p ? null : p)
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
-      <h2 className="text-2xl font-bold mb-8">{t('settings.title')}</h2>
+    <div className="page max-w-[760px]">
+      <div className="page-head"><h1 className="page-title">{t('settings.title')}</h1></div>
 
-      {/* Language */}
-      <div className="mb-8">
-        <h3 className="text-base font-bold">{t('settings.language')}</h3>
-        <p className="text-xs text-text-muted mt-0.5 mb-2">{t('settings.language_description')}</p>
-        <div className="card">
-          <div className="px-5 py-4">
-            <LanguageSwitcher />
-          </div>
-        </div>
-      </div>
+      <div className="grid gap-4">
+        {/* Language */}
+        <SettingsPanel icon="settings" title={t('settings.language')} desc={t('settings.language_description')}>
+          <LanguageSwitcher />
+        </SettingsPanel>
 
-      {/* Credentials */}
-      <div className="mb-8">
-        <h3 className="text-base font-bold">{t('settings.credentials')}</h3>
-        <p className="text-xs text-text-muted mt-0.5 mb-2">{t('settings.credentials_description')}</p>
         {isLoading ? (
-          <div className="card">
-            <div className="px-5 py-4 text-sm text-text-muted">{t('common.loading')}</div>
-          </div>
+          <div className="panel panel-pad text-ink-muted text-[13.5px]">{t('common.loading')}</div>
         ) : error ? (
-          <div className="card">
-            <div className="px-5 py-4">
-              <div className="error-message flex items-center justify-between">
-                <span>{t('common.load_error')}</span>
-                <button className="btn-icon text-xs" onClick={fetchCredentials}>{t('common.retry')}</button>
-              </div>
-            </div>
+          <div className="panel panel-pad flex items-center justify-between gap-3">
+            <span className="text-danger text-[13.5px]">{t('common.load_error')}</span>
+            <Btn variant="secondary" size="sm" icon="sync" onClick={fetchCredentials}>{t('common.retry')}</Btn>
           </div>
         ) : credentials ? (
-          <div className="card">
-            {/* Enable Banking */}
-            <div className="px-5 py-4 border-b-2 border-border">
-              <div className="flex items-center justify-between">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-3">
-                    <p className="text-sm font-semibold">{t('settings.enable_banking')}</p>
-                    <span className={`status-dot ${credentials.enable_banking.configured ? 'status-dot-active' : 'status-dot-inactive'}`}>
-                      {credentials.enable_banking.configured ? t('settings.configured') : t('settings.not_configured')}
-                    </span>
-                  </div>
-                  <p className="text-xs text-text-muted mt-0.5">{t('settings.enable_banking_description')}</p>
-                </div>
-                <button
-                  className="btn btn-ghost text-sm shrink-0 ml-4 px-4 py-2"
-                  onClick={() => toggleProvider('enable_banking')}
-                >
-                  {credentials.enable_banking.configured ? t('settings.update_credentials') : t('settings.configure')}
-                </button>
-              </div>
-              {expandedProvider === 'enable_banking' && (
-                <CredentialForm
-                  provider="enable_banking"
-                  isConfigured={credentials.enable_banking.configured}
-                  onSaved={() => { fetchCredentials(); setExpandedProvider(null) }}
-                  initialValues={credentials.enable_banking.configured ? { app_id: credentials.enable_banking.app_id ?? '' } : undefined}
-                />
-              )}
-            </div>
-
-            {/* GoCardless */}
-            <div className="px-5 py-4">
-              <div className="flex items-center justify-between">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-3">
-                    <p className="text-sm font-semibold">{t('settings.gocardless')}</p>
-                    <span className={`status-dot ${credentials.gocardless.configured ? 'status-dot-active' : 'status-dot-inactive'}`}>
-                      {credentials.gocardless.configured ? t('settings.configured') : t('settings.not_configured')}
-                    </span>
-                  </div>
-                  <p className="text-xs text-text-muted mt-0.5">{t('settings.gocardless_description')}</p>
-                </div>
-                <button
-                  className="btn btn-ghost text-sm shrink-0 ml-4 px-4 py-2"
-                  onClick={() => toggleProvider('gocardless')}
-                >
-                  {credentials.gocardless.configured ? t('settings.update_credentials') : t('settings.configure')}
-                </button>
-              </div>
-              {expandedProvider === 'gocardless' && (
-                <CredentialForm
-                  provider="gocardless"
-                  isConfigured={credentials.gocardless.configured}
-                  onSaved={() => { fetchCredentials(); setExpandedProvider(null) }}
-                />
-              )}
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-      {/* AI Categorization */}
-      <div className="mb-8">
-        <h3 className="text-base font-bold">{t('settings.llm')}</h3>
-        <p className="text-xs text-text-muted mt-0.5 mb-2">{t('settings.llm_description')}</p>
-        {credentials ? (
-          <div className="card">
-            <div className="px-5 py-4">
-              <div className="flex items-center justify-between">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-3">
-                    <p className="text-sm font-semibold">{t('settings.llm_provider')}</p>
-                    <span className={`status-dot ${credentials.llm.configured ? 'status-dot-active' : 'status-dot-inactive'}`}>
-                      {credentials.llm.configured ? t('settings.configured') : t('settings.not_configured')}
-                    </span>
-                  </div>
-                  {credentials.llm.configured && (
-                    <p className="text-xs text-text-muted mt-0.5 mono">{credentials.llm.base_url} — {credentials.llm.llm_model}</p>
-                  )}
-                </div>
-                <button
-                  className="btn btn-ghost text-sm shrink-0 ml-4 px-4 py-2"
-                  onClick={() => toggleProvider('llm')}
-                >
+          <>
+            {/* LLM */}
+            <SettingsPanel icon="scan" title={t('settings.llm')} desc={t('settings.llm_description')}
+              status={credentials.llm.configured}
+              statusLabel={credentials.llm.configured ? t('settings.configured') : t('settings.not_configured')}
+              action={
+                <Btn variant="ghost" size="sm" onClick={() => toggleProvider('llm')}>
                   {credentials.llm.configured ? t('settings.update_credentials') : t('settings.configure')}
-                </button>
-              </div>
+                </Btn>
+              }>
+              {credentials.llm.configured && (
+                <p className={'text-ink-faint mono text-[11.5px] ' + (expandedProvider === 'llm' ? 'mb-[14px]' : 'mb-0')}>
+                  {credentials.llm.base_url} — {credentials.llm.llm_model}
+                </p>
+              )}
               {expandedProvider === 'llm' && (
                 <CredentialForm
                   provider="llm"
@@ -161,21 +75,89 @@ export default function SettingsPage() {
                   initialValues={credentials.llm.configured ? { base_url: credentials.llm.base_url ?? '', llm_model: credentials.llm.llm_model ?? '' } : undefined}
                 />
               )}
-            </div>
-          </div>
+            </SettingsPanel>
+
+            {/* Enable Banking */}
+            <SettingsPanel icon="bank" title={t('settings.enable_banking')} desc={t('settings.enable_banking_description')}
+              status={credentials.enable_banking.configured}
+              statusLabel={credentials.enable_banking.configured ? t('settings.configured') : t('settings.not_configured')}
+              action={
+                <Btn variant="ghost" size="sm" onClick={() => toggleProvider('enable_banking')}>
+                  {credentials.enable_banking.configured ? t('settings.update_credentials') : t('settings.configure')}
+                </Btn>
+              }>
+              {expandedProvider === 'enable_banking' && (
+                <CredentialForm
+                  provider="enable_banking"
+                  isConfigured={credentials.enable_banking.configured}
+                  onSaved={() => { fetchCredentials(); setExpandedProvider(null) }}
+                  initialValues={credentials.enable_banking.configured ? { app_id: credentials.enable_banking.app_id ?? '' } : undefined}
+                />
+              )}
+            </SettingsPanel>
+
+            {/* GoCardless */}
+            <SettingsPanel icon="link" title={t('settings.gocardless')} desc={t('settings.gocardless_description')}
+              status={credentials.gocardless.configured}
+              statusLabel={credentials.gocardless.configured ? t('settings.configured') : t('settings.not_configured')}
+              action={
+                <Btn variant="ghost" size="sm" onClick={() => toggleProvider('gocardless')}>
+                  {credentials.gocardless.configured ? t('settings.update_credentials') : t('settings.configure')}
+                </Btn>
+              }>
+              {expandedProvider === 'gocardless' && (
+                <CredentialForm
+                  provider="gocardless"
+                  isConfigured={credentials.gocardless.configured}
+                  onSaved={() => { fetchCredentials(); setExpandedProvider(null) }}
+                />
+              )}
+            </SettingsPanel>
+
+            {/* Connect a bank */}
+            <SettingsPanel icon="plus" title={t('settings.connect_bank')} desc={t('settings.connect_bank_description')}>
+              <ConnectBankFlow credentials={credentials} />
+            </SettingsPanel>
+          </>
         ) : null}
       </div>
+    </div>
+  )
+}
 
-      {/* Connect Bank */}
-      <div>
-        <h3 className="text-base font-bold">{t('settings.connect_bank')}</h3>
-        <p className="text-xs text-text-muted mt-0.5 mb-2">{t('settings.connect_bank_description')}</p>
-        <div className="card">
-          <div className="px-5 py-4">
-            {credentials && <ConnectBankFlow credentials={credentials} />}
+interface SettingsPanelProps {
+  icon: IconName
+  title: string
+  desc?: string
+  status?: boolean
+  statusLabel?: string
+  action?: React.ReactNode
+  children?: React.ReactNode
+}
+
+function SettingsPanel({ icon, title, desc, status, statusLabel, action, children }: SettingsPanelProps) {
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div className="flex gap-3 items-center min-w-0">
+          <span className="icon-tile">
+            <Icon name={icon} size={17} />
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5">
+              <span className="section-title">{title}</span>
+              {statusLabel != null && (
+                <span className={'badge ' + (status ? 'badge-ok' : 'badge-neutral')}>
+                  {status && <span className="dot" />}{statusLabel}
+                </span>
+              )}
+            </div>
+            {desc && <div className="text-ink-faint text-xs mt-px">{desc}</div>}
           </div>
         </div>
+        {action && <div className="shrink-0">{action}</div>}
       </div>
+      {children && <div className="panel-pad">{children}</div>}
     </div>
   )
 }

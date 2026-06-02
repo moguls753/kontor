@@ -1,15 +1,20 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { formatAmount, formatDate, transactionDisplayName } from '../lib/format'
+import { formatDate, formatDateLong, transactionDisplayName, maskIban } from '../lib/format'
 import type { Transaction, PaginationMeta, Account, Category } from '../lib/types'
 import type { View } from '../components/SidebarNav'
 import CategorizationModal from '../components/CategorizationModal'
+import Icon from '../components/Icon'
+import { Amount, Btn, CategoryChip, CpAvatar, Empty, Eyebrow, Select } from '../components/ui'
+
+const LEDGER_COLS = 'minmax(0,1fr) 172px 152px 116px 148px 36px'
+const PER = 50
 
 export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: View) => void }) {
   const { t } = useTranslation()
   const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [meta, setMeta] = useState<PaginationMeta>({ page: 1, per: 50, total: 0, total_pages: 0 })
+  const [meta, setMeta] = useState<PaginationMeta>({ page: 1, per: PER, total: 0, total_pages: 0 })
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
@@ -64,7 +69,7 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
     if (dateTo) params.set('to', dateTo)
     if (uncategorized) params.set('uncategorized', 'true')
     params.set('page', String(page))
-    params.set('per', '50')
+    params.set('per', String(PER))
 
     setIsLoading(true)
     setError(false)
@@ -102,7 +107,7 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
     return map[code] || code.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
   }
 
-  const hasFilters = search || accountId || categoryId || dateFrom || dateTo || uncategorized
+  const hasFilters = !!(search || accountId || categoryId || dateFrom || dateTo || uncategorized)
 
   const clearFilters = () => {
     setSearch('')
@@ -113,237 +118,191 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
     setUncategorized(false)
   }
 
+  const fromIdx = meta.total === 0 ? 0 : (meta.page - 1) * meta.per + 1
+  const toIdx = Math.min(meta.page * meta.per, meta.total)
+
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      {/* Page header — title + action */}
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-bold">{t('transactions.title')}</h2>
+    <div className="page">
+      <div className="page-head">
+        <h1 className="page-title">{t('transactions.title')}</h1>
         {llmConfigured && (
-          <button
-            className="btn btn-primary text-xs px-3 py-2"
-            onClick={() => setShowCategorizeModal(true)}
-          >
+          <Btn variant="primary" icon="scan" onClick={() => setShowCategorizeModal(true)}>
             {t('transactions.categorize')}
-          </button>
+          </Btn>
         )}
       </div>
 
-      {/* Controls — search + filters as one unit */}
-      <div className="controls-card">
-        <input
-          type="text"
-          className="input controls-search"
-          placeholder={t('transactions.search_placeholder')}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-
-        <div className="filter-bar">
-          <select
-            className="input"
-            value={categoryId}
-            onChange={e => setCategoryId(e.target.value)}
-          >
-            <option value="">{t('transactions.filter_category')}</option>
-            {categories.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-          {hasMultipleAccounts && (
-            <select
-              className="input"
-              value={accountId}
-              onChange={e => setAccountId(e.target.value)}
-            >
-              <option value="">{t('transactions.filter_account')}</option>
-              {accounts.map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          )}
-          <input
-            type="date"
-            className="input"
-            value={dateFrom}
-            onChange={e => setDateFrom(e.target.value)}
-            title={t('transactions.date_from')}
-          />
-          <input
-            type="date"
-            className="input"
-            value={dateTo}
-            onChange={e => setDateTo(e.target.value)}
-            title={t('transactions.date_to')}
-          />
-          <button
-            className={`btn text-xs ${uncategorized ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setUncategorized(!uncategorized)}
-          >
-            {t('transactions.filter_uncategorized')}
-          </button>
-          {hasFilters && (
-            <button
-              className="link text-xs cursor-pointer ml-auto"
-              onClick={clearFilters}
-            >
-              {t('transactions.clear_filters')}
-            </button>
-          )}
+      {/* Filter bar */}
+      <div className="flex gap-2.5 flex-wrap items-center mb-4">
+        <div className="search flex-[1_1_280px] min-w-[220px]">
+          <Icon name="search" size={17} />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder={t('transactions.search_placeholder')} aria-label={t('transactions.search_placeholder')} />
         </div>
+        <Select value={categoryId} onChange={e => setCategoryId(e.target.value)} ariaLabel={t('transactions.filter_category')}>
+          <option value="">{t('transactions.filter_category')}</option>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </Select>
+        {hasMultipleAccounts && (
+          <Select value={accountId} onChange={e => setAccountId(e.target.value)} ariaLabel={t('transactions.filter_account')}>
+            <option value="">{t('transactions.filter_account')}</option>
+            {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </Select>
+        )}
+        <input type="date" className="field w-auto min-w-[150px]" value={dateFrom} onChange={e => setDateFrom(e.target.value)} title={t('transactions.date_from')} />
+        <input type="date" className="field w-auto min-w-[150px]" value={dateTo} onChange={e => setDateTo(e.target.value)} title={t('transactions.date_to')} />
+        <button
+          onClick={() => setUncategorized(v => !v)}
+          className={'btn btn-sm ' + (uncategorized ? 'btn-secondary border-brass text-brass-ink bg-brass-soft' : 'btn-ghost')}
+        >
+          <span className={'w-[7px] h-[7px] rounded-[2px] ' + (uncategorized ? 'bg-brass' : 'bg-ink-faint')} />
+          {t('transactions.filter_uncategorized')}
+        </button>
+        {hasFilters && <Btn variant="ghost" size="sm" icon="close" onClick={clearFilters}>{t('transactions.clear_filters')}</Btn>}
       </div>
 
-      {/* Transaction list */}
-      <div className="card mt-3">
+      {/* Ledger */}
+      <div className="panel overflow-hidden">
+        <div className="ledger-head eyebrow" style={{ ['--ledger-cols' as string]: LEDGER_COLS }}>
+          <div>{t('transactions.col_counterparty')}</div>
+          <div className="lg-mid">{t('transactions.col_category')}</div>
+          <div className="lg-mid">{t('transactions.col_account')}</div>
+          <div className="lg-mid">{t('transactions.detail_booked')}</div>
+          <div className="text-right">{t('transactions.col_amount')}</div>
+          <div />
+        </div>
+
         {error ? (
-          <div className="p-8">
-            <div className="error-message flex items-center justify-between">
-              <span>{t('common.load_error')}</span>
-              <button className="btn-icon text-xs" onClick={() => setRetryKey(k => k + 1)}>{t('common.retry')}</button>
-            </div>
+          <div className="panel-pad flex items-center justify-between gap-3">
+            <span className="text-danger text-[13.5px]">{t('common.load_error')}</span>
+            <Btn variant="secondary" size="sm" icon="sync" onClick={() => setRetryKey(k => k + 1)}>{t('common.retry')}</Btn>
           </div>
         ) : isLoading ? (
-          <div className="p-8 text-center text-sm text-text-muted">
-            {t('common.loading')}
-          </div>
+          <div className="text-ink-muted text-[13.5px] text-center px-5 py-10">{t('common.loading')}</div>
         ) : transactions.length === 0 ? (
-          <div className="p-12 text-center">
-            <p className="text-sm font-medium mb-2">
-              {hasFilters ? t('transactions.no_results') : t('transactions.empty_title')}
-            </p>
-            <p className="text-sm text-text-muted mb-4">
-              {hasFilters ? '' : t('transactions.empty_description')}
-            </p>
-            {hasFilters && (
-              <button className="link text-sm cursor-pointer" onClick={clearFilters}>
-                {t('transactions.clear_filters')}
-              </button>
+          <Empty icon="search" title={hasFilters ? t('transactions.no_results') : t('transactions.empty_title')}
+            body={hasFilters ? undefined : t('transactions.empty_description')}>
+            {hasFilters && <Btn variant="secondary" size="sm" onClick={clearFilters}>{t('transactions.clear_filters')}</Btn>}
+          </Empty>
+        ) : (
+          transactions.map(tx => (
+            <Row
+              key={tx.id}
+              tx={tx}
+              t={t}
+              open={expandedId === tx.id}
+              onToggle={() => setExpandedId(o => o === tx.id ? null : tx.id)}
+              hasMultipleAccounts={hasMultipleAccounts}
+              humanizeTransactionCode={humanizeTransactionCode}
+            />
+          ))
+        )}
+
+        {!error && !isLoading && meta.total > 0 && (
+          <div className="panel-foot flex items-center justify-between">
+            <span className="text-ink-muted text-[12.5px]">
+              {t('transactions.showing', { from: fromIdx, to: toIdx, total: meta.total })}
+            </span>
+            {meta.total_pages > 1 && (
+              <div className="flex gap-2 items-center">
+                <Btn variant="secondary" size="sm" icon="chevronLeft" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>{t('transactions.prev')}</Btn>
+                <span className="mono text-ink-muted text-[12.5px] min-w-[44px] text-center">{meta.page}/{meta.total_pages}</span>
+                <Btn variant="secondary" size="sm" iconRight="chevronRight" onClick={() => setPage(p => Math.min(meta.total_pages, p + 1))} disabled={page >= meta.total_pages}>{t('transactions.next')}</Btn>
+              </div>
             )}
           </div>
-        ) : (
-          <>
-            {transactions.map((tx) => {
-              const amt = parseFloat(tx.amount)
-              const isExpanded = expandedId === tx.id
-              const counterpartyIban = amt < 0 ? tx.creditor_iban : tx.debtor_iban
-              const showValueDate = tx.value_date && tx.value_date !== tx.booking_date
-
-              return (
-                <div key={tx.id}>
-                  <div
-                    className={`tx-row ${isExpanded ? 'tx-row-expanded' : ''}`}
-                    onClick={() => setExpandedId(isExpanded ? null : tx.id)}
-                  >
-                    {/* Date */}
-                    <span className="mono text-xs text-text-muted w-24 shrink-0 hidden sm:block">
-                      {formatDate(tx.booking_date)}
-                    </span>
-
-                    {/* Name + meta */}
-                    <div className="min-w-0 flex-1 mx-3">
-                      <p className="font-medium text-sm truncate">
-                        {transactionDisplayName(tx)}
-                      </p>
-                      <div className="flex items-center gap-2 mt-0.5 sm:hidden">
-                        <span className="mono text-xs text-text-muted">
-                          {formatDate(tx.booking_date)}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Category badge */}
-                    {tx.category ? (
-                      <span className="badge badge-muted text-xs shrink-0 hidden md:inline-flex">
-                        {tx.category.name}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-text-muted italic shrink-0 hidden md:inline-flex">
-                        —
-                      </span>
-                    )}
-
-                    {/* Amount */}
-                    <p className={`mono font-semibold text-sm whitespace-nowrap ml-3 ${amt >= 0 ? 'amount-positive' : 'amount-negative'}`}>
-                      {formatAmount(tx.amount, tx.currency)}
-                    </p>
-                  </div>
-
-                  {/* Detail panel */}
-                  <div className={`tx-detail ${isExpanded ? 'tx-detail-open' : ''}`}>
-                    <div className="tx-detail-grid">
-                      {tx.remittance && (
-                        <>
-                          <span className="tx-detail-label">{t('transactions.detail_remittance')}</span>
-                          <span className="tx-detail-value">{tx.remittance}</span>
-                        </>
-                      )}
-                      {tx.bank_transaction_code && (
-                        <>
-                          <span className="tx-detail-label">{t('transactions.detail_type')}</span>
-                          <span className="tx-detail-value">{humanizeTransactionCode(tx.bank_transaction_code)}</span>
-                        </>
-                      )}
-                      <span className="tx-detail-label">{t('transactions.detail_status')}</span>
-                      <span className="tx-detail-value">
-                        <span className={`status-dot ${tx.status === 'booked' ? 'status-dot-active' : 'status-dot-inactive'}`}>
-                          {tx.status === 'booked' ? t('transactions.status_booked') : t('transactions.status_pending')}
-                        </span>
-                      </span>
-                      {counterpartyIban && (
-                        <>
-                          <span className="tx-detail-label">{t('transactions.detail_iban')}</span>
-                          <span className="tx-detail-value mono text-xs">{counterpartyIban}</span>
-                        </>
-                      )}
-                      {showValueDate && (
-                        <>
-                          <span className="tx-detail-label">{t('transactions.detail_value_date')}</span>
-                          <span className="tx-detail-value mono text-xs">{formatDate(tx.value_date!)}</span>
-                        </>
-                      )}
-                      {hasMultipleAccounts && tx.account_name && (
-                        <>
-                          <span className="tx-detail-label">{t('transactions.detail_account')}</span>
-                          <span className="tx-detail-value">{tx.account_name}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </>
         )}
       </div>
 
-      {/* Pagination — stark prev/next blocks */}
-      {meta.total_pages > 1 && (
-        <div className="flex items-center justify-between mt-0">
-          <button
-            className="btn btn-ghost text-sm"
-            style={{ padding: '0.625rem 1rem' }}
-            disabled={page <= 1}
-            onClick={() => setPage(p => p - 1)}
-          >
-            {t('transactions.prev')}
-          </button>
-          <span className="mono text-xs text-text-muted">
-            {t('transactions.page_of', { page, total: meta.total_pages })}
-          </span>
-          <button
-            className="btn btn-ghost text-sm"
-            style={{ padding: '0.625rem 1rem' }}
-            disabled={page >= meta.total_pages}
-            onClick={() => setPage(p => p + 1)}
-          >
-            {t('transactions.next')}
-          </button>
-        </div>
-      )}
       {showCategorizeModal && (
         <CategorizationModal onNavigate={onNavigate} onClose={(didCategorize) => {
           setShowCategorizeModal(false)
           if (didCategorize) setRetryKey(k => k + 1)
         }} />
+      )}
+    </div>
+  )
+}
+
+interface RowProps {
+  tx: Transaction
+  t: (key: string, opts?: Record<string, unknown>) => string
+  open: boolean
+  onToggle: () => void
+  hasMultipleAccounts: boolean
+  humanizeTransactionCode: (code: string | null) => string | null
+}
+
+function Row({ tx, t, open, onToggle, hasMultipleAccounts, humanizeTransactionCode }: RowProps) {
+  const num = parseFloat(tx.amount)
+  const name = transactionDisplayName(tx)
+  const counterpartyIban = num < 0 ? tx.creditor_iban : tx.debtor_iban
+  const showValueDate = tx.value_date && tx.value_date !== tx.booking_date
+
+  return (
+    <div className="ledger-row-wrap">
+      <button className={'ledger-row focus-inset' + (open ? ' open' : '')}
+        style={{ ['--ledger-cols' as string]: LEDGER_COLS }} onClick={onToggle} aria-expanded={open}>
+        <div className="ledger-cp">
+          <CpAvatar name={name} sign={num > 0 ? 1 : -1} />
+          <div className="min-w-0">
+            <div className="cp-name">{name}</div>
+            {tx.remittance && <div className="cp-remit">{tx.remittance}</div>}
+            <div className="row-meta-mobile">
+              <CategoryChip name={tx.category?.name ?? null} uncategorisedLabel={t('transactions.uncategorized_chip')} />
+              <span className="text-ink-faint mono text-[11px]">{formatDate(tx.booking_date)}</span>
+            </div>
+          </div>
+        </div>
+        <div className="lg-mid"><CategoryChip name={tx.category?.name ?? null} uncategorisedLabel={t('transactions.uncategorized_chip')} /></div>
+        <div className="lg-mid text-ink-faint text-[12.5px] overflow-hidden text-ellipsis whitespace-nowrap">{tx.account_name}</div>
+        <div className="lg-mid mono text-ink-faint text-[12.5px]">{formatDate(tx.booking_date)}</div>
+        <div className="ledger-amt"><Amount value={tx.amount} currency={tx.currency} className="text-[14.5px]" /></div>
+        <span className="ledger-expand"><Icon name="chevronRight" size={16} className="chev" /></span>
+      </button>
+      {open && (
+        <div className="ledger-detail">
+          {tx.remittance && (
+            <div className="detail-field">
+              <Eyebrow>{t('transactions.detail_remittance')}</Eyebrow>
+              <div className="val font-mono text-[12.5px] leading-normal">{tx.remittance}</div>
+            </div>
+          )}
+          <div className="detail-field">
+            <Eyebrow>{t('transactions.detail_booked')}</Eyebrow>
+            <div className="val">{formatDateLong(tx.booking_date)}</div>
+          </div>
+          {tx.bank_transaction_code && (
+            <div className="detail-field">
+              <Eyebrow>{t('transactions.detail_type')}</Eyebrow>
+              <div className="val">{humanizeTransactionCode(tx.bank_transaction_code)}</div>
+            </div>
+          )}
+          <div className="detail-field">
+            <Eyebrow>{t('transactions.detail_status')}</Eyebrow>
+            <div className="val flex items-center gap-[7px]">
+              <span className={'w-[7px] h-[7px] rounded-[2px] ' + (tx.status === 'booked' ? 'bg-income' : 'bg-ink-faint')} />
+              {tx.status === 'booked' ? t('transactions.status_booked') : t('transactions.status_pending')}
+            </div>
+          </div>
+          {counterpartyIban && (
+            <div className="detail-field">
+              <Eyebrow>{t('transactions.detail_iban')}</Eyebrow>
+              <div className="val mono text-[12.5px]">{maskIban(counterpartyIban)}</div>
+            </div>
+          )}
+          {showValueDate && (
+            <div className="detail-field">
+              <Eyebrow>{t('transactions.detail_value_date')}</Eyebrow>
+              <div className="val mono text-[12.5px]">{formatDate(tx.value_date!)}</div>
+            </div>
+          )}
+          {hasMultipleAccounts && tx.account_name && (
+            <div className="detail-field">
+              <Eyebrow>{t('transactions.detail_account')}</Eyebrow>
+              <div className="val">{tx.account_name}</div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
