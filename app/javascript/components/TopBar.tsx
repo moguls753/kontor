@@ -11,13 +11,8 @@ interface TopBarProps {
   onToggleTheme: () => void
 }
 
-const languages = [
-  { code: 'en', label: 'EN' },
-  { code: 'de', label: 'DE' },
-]
-
 export default function TopBar({ email, onLogout, onMenuToggle, pageTitle, theme, onToggleTheme }: TopBarProps) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
 
   const handleLogout = async () => {
     try {
@@ -37,19 +32,6 @@ export default function TopBar({ email, onLogout, onMenuToggle, pageTitle, theme
       </button>
       <div className="page-title desktop-only text-base">{pageTitle}</div>
       <div className="flex-1" />
-
-      {/* language */}
-      <div className="segmented" role="group" aria-label="Language">
-        {languages.map(({ code, label }) => (
-          <button
-            key={code}
-            className={i18n.language === code ? 'on' : ''}
-            onClick={() => i18n.changeLanguage(code)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
 
       {/* theme */}
       <button className="ibtn" onClick={onToggleTheme} aria-label={t('shell.toggle_theme')} title={t('shell.toggle_theme')}>

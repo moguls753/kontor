@@ -38,7 +38,8 @@ module Api
             name: account.display_name,
             iban: account.iban,
             balance_amount: account.balance_amount,
-            currency: account.currency
+            currency: account.currency,
+            last_synced_at: account.last_synced_at
           }
         end
       end

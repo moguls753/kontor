@@ -19,9 +19,24 @@ class SyncAccountsJob < ApplicationJob
     end
 
     @bc.update!(last_synced_at: Time.current)
+  rescue EnableBanking::ApiError, GoCardless::ApiError => e
+    # A 401/403 from a data endpoint means the bank-level consent (EB session /
+    # GC End User Agreement) has lapsed — the token was accepted but access was
+    # not. PSD2 consents expire roughly every 90 days, so this is routine. Mark
+    # the connection expired (it drops out of the `active` scope and the UI shows
+    # a Reconnect prompt) rather than failing the job silently forever.
+    raise unless reauth_required?(e)
+
+    @bc.update!(status: "expired", error_message: REAUTH_MESSAGE)
   end
 
   private
+
+  REAUTH_MESSAGE = "Bank consent has expired. Reconnect this connection to resume syncing."
+
+  def reauth_required?(error)
+    [ 401, 403 ].include?(error.status)
+  end
 
   def sync_enable_banking
     credential = @bc.user.enable_banking_credential

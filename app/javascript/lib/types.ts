@@ -21,6 +21,7 @@ export interface DashboardAccount {
   iban: string | null
   balance_amount: string | null
   currency: string
+  last_synced_at: string | null
 }
 
 export interface DashboardData {
@@ -91,6 +92,7 @@ export interface BankConnectionAccount {
   name: string
   currency: string
   balance_amount: string | null
+  last_synced_at: string | null
 }
 
 export interface BankConnection {

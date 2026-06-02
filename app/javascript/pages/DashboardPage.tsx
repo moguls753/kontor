@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { formatAmount, formatDate, transactionDisplayName, maskIban } from '../lib/format'
+import { formatAmount, formatDate, formatRelativeTime, transactionDisplayName, maskIban } from '../lib/format'
 import type { DashboardData, DashboardAccount } from '../lib/types'
 import type { View } from '../components/SidebarNav'
-import { Amount, Btn, CpAvatar, Empty, Eyebrow, balance } from '../components/ui'
+import { Amount, Btn, CpAvatar, Empty, Eyebrow, balance, initials } from '../components/ui'
 import Icon from '../components/Icon'
 
 interface DashboardPageProps {
@@ -90,7 +90,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
       </div>
 
       {/* Hero + month flows */}
-      <div className="dash-hero-grid grid grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] gap-[18px] mb-[18px]">
+      <div className="dash-hero-grid grid grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] gap-5 mb-8">
         <div className="panel panel-pad flex flex-col justify-between gap-[22px]">
           <div>
             <Eyebrow>{t('dashboard.total_balance')}</Eyebrow>
@@ -145,15 +145,15 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
       {/* Accounts */}
       {visibleAccounts.length > 0 && (
         <>
-          <div className="flex items-center justify-between mt-1.5 mb-[13px] mx-0.5">
+          <div className="flex items-center justify-between mb-4 mx-0.5">
             <h2 className="section-title">{t('dashboard.accounts')}</h2>
             <Btn variant="ghost" size="sm" iconRight="arrowRight" onClick={() => onNavigate?.('accounts')}>{t('dashboard.view_all')}</Btn>
           </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-[14px] mb-[30px]">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-4 mb-8">
             {visibleAccounts.map(a => <AccountCard key={a.id} acct={a} onOpen={() => onNavigate?.('accounts')} />)}
           </div>
           {hiddenAccountCount > 0 && (
-            <div className="-mt-[18px] mb-[30px] text-right">
+            <div className="-mt-6 mb-8 text-right">
               <Btn variant="ghost" size="sm" iconRight="arrowRight" onClick={() => onNavigate?.('accounts')}>
                 {t('dashboard.more_accounts', { count: hiddenAccountCount })}
               </Btn>
@@ -163,7 +163,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
       )}
 
       {/* Recent activity */}
-      <div className="flex items-center justify-between mt-1.5 mb-[13px] mx-0.5">
+      <div className="flex items-center justify-between mb-4 mx-0.5">
         <h2 className="section-title">{t('dashboard.recent_title')}</h2>
         <Btn variant="ghost" size="sm" iconRight="arrowRight" onClick={() => onNavigate?.('transactions')}>{t('dashboard.view_all')}</Btn>
       </div>
@@ -172,15 +172,15 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
           const num = parseFloat(tx.amount)
           const name = transactionDisplayName(tx)
           return (
-            <div key={tx.id} className={'grid grid-cols-[1fr_auto] gap-4 items-center px-[18px] py-3' + (i < recent.length - 1 ? ' border-b border-line' : '')}>
+            <div key={tx.id} className={'grid grid-cols-[1fr_auto] gap-4 items-center px-5 py-3.5' + (i < recent.length - 1 ? ' border-b border-line' : '')}>
               <div className="flex items-center gap-3 min-w-0">
                 <CpAvatar name={name} sign={num > 0 ? 1 : -1} />
                 <div className="min-w-0">
-                  <div className="font-[550] text-[13.5px] overflow-hidden text-ellipsis whitespace-nowrap">{name}</div>
+                  <div className="font-[550] text-[13.5px] truncate">{name}</div>
                   <div className="text-ink-faint text-[11.5px] flex gap-2">
                     <span className="mono">{formatDate(tx.booking_date)}</span>
                     <span>·</span>
-                    <span className="overflow-hidden text-ellipsis whitespace-nowrap">{tx.account_name}</span>
+                    <span className="truncate">{tx.account_name}</span>
                     {tx.category ? (<><span>·</span><span>{tx.category.name}</span></>) : (<><span>·</span><span className="text-ink-faint">{t('dashboard.uncategorized')}</span></>)}
                   </div>
                 </div>
@@ -204,20 +204,25 @@ function StatTile({ label, children }: { label: string; children: React.ReactNod
 }
 
 function AccountCard({ acct, onOpen }: { acct: DashboardAccount; onOpen: () => void }) {
+  const { t } = useTranslation()
+  const synced = acct.last_synced_at
   return (
-    <button className="panel focus-inset text-left p-0 transition-colors hover:border-line-strong" onClick={onOpen}>
-      <div className="px-[17px] py-[15px] flex flex-col gap-[14px] h-full">
+    <button
+      onClick={onOpen}
+      className="panel focus-inset text-left p-0 flex flex-col min-h-[150px] transition-[transform,border-color] duration-150 hover:-translate-y-0.5 hover:border-line-strong"
+    >
+      <div className="flex flex-col gap-3.5 p-5 h-full">
         <div className="flex items-center gap-2.5">
-          <span className="icon-tile icon-tile-sm">
-            <Icon name="coin" size={16} />
-          </span>
+          <span className="icon-tile icon-tile-sm">{initials(acct.name)}</span>
           <div className="min-w-0 flex-1">
-            <div className="font-semibold text-[13.5px] overflow-hidden text-ellipsis whitespace-nowrap">{acct.name}</div>
+            <div className="font-semibold text-[13.5px] truncate">{acct.name}</div>
             <div className="text-ink-faint mono text-[11px]">{maskIban(acct.iban)}</div>
           </div>
         </div>
-        <div>
-          <Amount value={acct.balance_amount} currency={acct.currency} signed={false} className="text-[26px]" />
+        <Amount value={acct.balance_amount} currency={acct.currency} signed={false} className="text-[26px] tracking-[-0.01em]" />
+        <div className="mt-auto flex items-center gap-1.5 text-ink-faint text-[11.5px]">
+          <Icon name={synced ? 'clock' : 'link'} size={13} />
+          {synced ? t('dashboard.synced', { time: formatRelativeTime(synced) }) : t('dashboard.awaiting_sync')}
         </div>
       </div>
     </button>

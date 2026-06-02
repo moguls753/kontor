@@ -39,7 +39,7 @@ const PATHS: Record<string, ReactElement> = {
   external: <><path d="M14 5h5v5m0-5-8 8" /><path d="M18 13v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" /></>,
 
   // money / status
-  coin: <><circle cx="12" cy="12" r="8" /><path d="M12 8v8M9.5 9.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4" /></>,
+  clock: <><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 1.8" /></>,
   bank: <><path d="M4 9.5 12 4l8 5.5" /><path d="M5 10v9m14-9v9M3 20h18" /><path d="M9.5 12v4.5m5-4.5v4.5" /></>,
   shield: <><path d="M12 3 5 6v5c0 4.4 3 7.6 7 9 4-1.4 7-4.6 7-9V6z" /><path d="m9.5 12 1.8 1.8L15 10" /></>,
   scan: <><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" /><path d="M7 12h10" /></>,

@@ -53,8 +53,8 @@ export function catColor(hue: number): string {
   return `oklch(0.58 0.11 ${hue})`
 }
 
-/* ---- Counterparty avatar token (module-private) ------------------------- */
-function cpToken(name: string): string {
+/* ---- Name → 1–2 letter monogram (counterparty avatars, account tiles) --- */
+export function initials(name: string): string {
   const parts = (name || '').replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/).filter(Boolean)
   if (parts.length === 0) return '—'
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
@@ -126,7 +126,7 @@ export function CategoryChip({ name, uncategorisedLabel }: { name: string | null
 export function CpAvatar({ name, sign }: { name: string; sign: number }) {
   return (
     <span className={'cp-avatar' + (sign > 0 ? ' pos' : '')} aria-hidden="true">
-      {cpToken(name)}
+      {initials(name)}
     </span>
   )
 }

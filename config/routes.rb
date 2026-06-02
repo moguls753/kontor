@@ -14,6 +14,7 @@ Rails.application.routes.draw do
         member do
           get :callback
           post :sync
+          post :reconnect
         end
       end
       resources :categories, only: %i[ index create update destroy ] do

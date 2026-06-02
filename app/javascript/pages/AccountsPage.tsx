@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import { formatRelativeTime, maskIban } from '../lib/format'
 import type { BankConnection, BankConnectionAccount } from '../lib/types'
 import type { View } from '../components/SidebarNav'
-import { Amount, Btn, StatusBadge, Empty } from '../components/ui'
+import { Amount, Btn, StatusBadge, Empty, initials } from '../components/ui'
 import Icon from '../components/Icon'
 
 interface AccountsPageProps {
@@ -230,14 +230,13 @@ interface ConnectionCardProps {
 
 function ConnectionCard({ bc, t, syncing, onSync, onReconnect, onDelete, editingId, editValue, editRef, setEditValue, startRename, saveRename, cancelRename }: ConnectionCardProps) {
   const instName = bc.institution_name || bc.institution_id
-  const short = (instName || '??').slice(0, 2).toUpperCase()
   const count = bc.accounts.length
 
   return (
     <div className="panel">
       <div className="panel-head">
         <div className="flex items-center gap-3 min-w-0">
-          <span className="icon-tile icon-tile-lg">{short}</span>
+          <span className="icon-tile icon-tile-lg">{initials(instName)}</span>
           <div className="min-w-0">
             <div className="font-semibold text-[14.5px] overflow-hidden text-ellipsis whitespace-nowrap">{instName}</div>
             <div className="text-ink-faint text-[11.5px]">
@@ -327,6 +326,10 @@ function AccountRow({ acct, t, editing, editValue, editRef, setEditValue, startR
       </div>
       <div className="text-right">
         <Amount value={acct.balance_amount} currency={acct.currency} signed={false} className="text-base" forceNegative={negative} />
+        <div className="flex items-center justify-end gap-1.5 text-ink-faint text-[11px] mt-1">
+          <Icon name={acct.last_synced_at ? 'clock' : 'link'} size={11} />
+          {acct.last_synced_at ? t('accounts.account_synced', { time: formatRelativeTime(acct.last_synced_at) }) : t('accounts.awaiting_sync')}
+        </div>
       </div>
     </div>
   )

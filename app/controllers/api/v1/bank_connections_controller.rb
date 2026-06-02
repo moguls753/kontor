@@ -78,6 +78,28 @@ module Api
         render json: { queued: true }
       end
 
+      # Re-authorize an existing connection in place (e.g. after a 90-day
+      # consent expiry). Reuses the same BankConnection record so its accounts
+      # and transaction history are preserved — the provider callback fires on
+      # the same :id and find_or_create_by(account_uid) matches existing rows.
+      def reconnect
+        bc = Current.user.bank_connections.find(params[:id])
+        credential = provider_credential(bc.provider)
+        return render json: { error: "#{bc.provider} not configured" }, status: :unprocessable_content unless credential
+
+        bc.update!(status: "pending", error_message: nil)
+
+        case bc.provider
+        when "enable_banking"
+          create_enable_banking(bc, credential)
+        when "gocardless"
+          create_gocardless(bc, credential)
+        end
+      rescue EnableBanking::ApiError, GoCardless::ApiError => e
+        bc&.update!(status: "error", error_message: e.message)
+        render json: { error: e.message }, status: :bad_gateway
+      end
+
       private
 
       def provider_credential(provider)
@@ -141,9 +163,19 @@ module Api
         client = GoCardless::Client.new(credential)
 
         requisition = client.get_requisition(requisition_id: bc.requisition_id)
-        bc.update!(status: "authorized")
+        account_ids = requisition[:accounts] || []
 
-        (requisition[:accounts] || []).each do |account_id|
+        # A completed authorization links accounts. If there are none (user
+        # abandoned the flow or failed bank auth), don't mark it authorized —
+        # leave it in a retryable state with a clear message.
+        if account_ids.empty?
+          bc.update!(status: "expired", error_message: "Bank authorization was not completed. Reconnect to try again.")
+          return redirect_to "/?bank_connection_error=#{bc.id}"
+        end
+
+        bc.update!(status: "authorized", error_message: nil)
+
+        account_ids.each do |account_id|
           bc.accounts.find_or_create_by!(account_uid: account_id) do |a|
             a.name = bc.institution_name
           end
@@ -165,7 +197,7 @@ module Api
           last_synced_at: bc.last_synced_at,
           error_message: bc.error_message,
           accounts: bc.accounts.map { |a|
-            { id: a.id, iban: a.iban, name: a.display_name, currency: a.currency, balance_amount: a.balance_amount }
+            { id: a.id, iban: a.iban, name: a.display_name, currency: a.currency, balance_amount: a.balance_amount, last_synced_at: a.last_synced_at }
           }
         }
       end

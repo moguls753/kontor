@@ -57,4 +57,19 @@ RSpec.describe SyncAccountsJob, type: :job do
     described_class.perform_now(bc.id)
     expect(bc.reload.status).to eq("expired")
   end
+
+  it "marks a GoCardless connection expired when its consent has lapsed (401)" do
+    create(:go_cardless_credential, :with_token, user: user)
+    bc = create(:bank_connection, :gocardless, user: user)
+    create(:account, bank_connection: bc, iban: "DE111", name: "Test")
+
+    allow(gc_client).to receive(:account_balances).and_raise(
+      GoCardless::ApiError.new(status: 401, body: '{"summary":"End User Agreement has expired"}')
+    )
+
+    described_class.perform_now(bc.id)
+
+    expect(bc.reload.status).to eq("expired")
+    expect(bc.error_message).to be_present
+  end
 end

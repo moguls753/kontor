@@ -99,6 +99,8 @@ export default {
     review: 'Review',
     flow_in: 'In',
     flow_out: 'Out',
+    synced: 'Synced {{time}}',
+    awaiting_sync: 'Awaiting first sync',
   },
   transactions: {
     title: 'Transactions',
@@ -169,6 +171,8 @@ export default {
     no_accounts_on_connection: 'No accounts on this connection.',
     rename: 'Rename',
     synced: 'synced',
+    account_synced: 'synced {{time}}',
+    awaiting_sync: 'awaiting sync',
   },
   categories: {
     title: 'Categories',
@@ -176,7 +180,6 @@ export default {
     empty_description: 'Create categories to organize your transactions.',
     add: 'Add Category',
     name_placeholder: 'Category name',
-    delete_confirm: 'Delete this category? Transactions will become uncategorized.',
     confirm_short: 'Are you sure?',
     create_defaults: 'Create Default Categories',
     suggest: 'Suggest Categories',

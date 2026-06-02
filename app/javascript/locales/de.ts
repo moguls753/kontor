@@ -99,6 +99,8 @@ export default {
     review: 'Prüfen',
     flow_in: 'Ein',
     flow_out: 'Aus',
+    synced: 'Synchronisiert {{time}}',
+    awaiting_sync: 'Wartet auf ersten Sync',
   },
   transactions: {
     title: 'Transaktionen',
@@ -169,6 +171,8 @@ export default {
     no_accounts_on_connection: 'Keine Konten in dieser Verbindung.',
     rename: 'Umbenennen',
     synced: 'sync',
+    account_synced: 'sync {{time}}',
+    awaiting_sync: 'wartet auf Sync',
   },
   categories: {
     title: 'Kategorien',
@@ -176,7 +180,6 @@ export default {
     empty_description: 'Erstelle Kategorien, um deine Transaktionen zu organisieren.',
     add: 'Kategorie hinzufügen',
     name_placeholder: 'Kategoriename',
-    delete_confirm: 'Kategorie löschen? Transaktionen werden unkategorisiert.',
     confirm_short: 'Sicher?',
     create_defaults: 'Standardkategorien erstellen',
     suggest: 'Kategorien vorschlagen',
