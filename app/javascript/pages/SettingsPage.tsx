@@ -5,6 +5,7 @@ import LanguageSwitcher from '../components/LanguageSwitcher'
 import CredentialForm from '../components/CredentialForm'
 import ConnectBankFlow from '../components/ConnectBankFlow'
 import TradeRepublicPairingModal from '../components/TradeRepublicPairingModal'
+import EasybankPairingModal from '../components/EasybankPairingModal'
 import { Btn, Eyebrow } from '../components/ui'
 import Icon from '../components/Icon'
 import type { IconName } from '../components/Icon'
@@ -18,6 +19,8 @@ export default function SettingsPage() {
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const [showTrModal, setShowTrModal] = useState(false)
   const [trNotice, setTrNotice] = useState('')
+  const [showEasybankModal, setShowEasybankModal] = useState(false)
+  const [easybankNotice, setEasybankNotice] = useState('')
 
   const fetchCredentials = async () => {
     setIsLoading(true)
@@ -162,6 +165,41 @@ export default function SettingsPage() {
                 />
               )}
             </SettingsPanel>
+
+            {/* easybank Kreditkarte */}
+            <SettingsPanel icon="shield" title={t('settings.easybank')} desc={t('settings.easybank_description')}
+              status={credentials.easybank.configured}
+              statusLabel={credentials.easybank.configured ? t('settings.configured') : t('settings.not_configured')}
+              action={
+                <div className="flex items-center gap-2">
+                  {credentials.easybank.configured && (
+                    <Btn variant="primary" size="sm" icon="link" onClick={() => { setEasybankNotice(''); setShowEasybankModal(true) }}>
+                      {t('settings.easybank_connect')}
+                    </Btn>
+                  )}
+                  <Btn variant="ghost" size="sm" onClick={() => toggleProvider('easybank')}>
+                    {credentials.easybank.configured ? t('settings.update_credentials') : t('settings.configure')}
+                  </Btn>
+                </div>
+              }>
+              {credentials.easybank.configured && credentials.easybank.username_masked && (
+                <p className={'text-ink-faint mono text-[11.5px] ' + (expandedProvider === 'easybank' || easybankNotice ? 'mb-[14px]' : 'mb-0')}>
+                  {credentials.easybank.username_masked}
+                </p>
+              )}
+              {easybankNotice && (
+                <div className="flex items-center gap-2 text-income text-[12.5px] font-medium mb-[14px]">
+                  <Icon name="check" size={15} />{easybankNotice}
+                </div>
+              )}
+              {expandedProvider === 'easybank' && (
+                <CredentialForm
+                  provider="easybank"
+                  isConfigured={credentials.easybank.configured}
+                  onSaved={() => { fetchCredentials(); setExpandedProvider(null) }}
+                />
+              )}
+            </SettingsPanel>
           </>
         ) : null}
       </div>
@@ -172,6 +210,15 @@ export default function SettingsPage() {
           initiate={() => api('/api/v1/bank_connections', { method: 'POST', body: { provider: 'trade_republic' } })}
           onConnected={() => { setShowTrModal(false); setTrNotice(t('trade_republic.connected_notice')) }}
           onClose={() => setShowTrModal(false)}
+        />
+      )}
+
+      {showEasybankModal && (
+        <EasybankPairingModal
+          title={t('easybank.pair_title')}
+          initiate={() => api('/api/v1/bank_connections', { method: 'POST', body: { provider: 'easybank' } })}
+          onConnected={() => { setShowEasybankModal(false); setEasybankNotice(t('easybank.connected_notice')) }}
+          onClose={() => setShowEasybankModal(false)}
         />
       )}
     </div>

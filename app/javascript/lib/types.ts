@@ -112,5 +112,6 @@ export interface CredentialsStatus {
   enable_banking: { configured: boolean; app_id?: string }
   gocardless: { configured: boolean }
   trade_republic: { configured: boolean; phone_number_masked?: string }
+  easybank: { configured: boolean; username_masked?: string }
   llm: { configured: boolean; base_url?: string; llm_model?: string }
 }

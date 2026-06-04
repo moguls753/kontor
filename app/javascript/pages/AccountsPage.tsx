@@ -7,6 +7,7 @@ import type { View } from '../components/SidebarNav'
 import { Amount, Btn, StatusBadge, Empty, initials } from '../components/ui'
 import Icon from '../components/Icon'
 import TradeRepublicPairingModal from '../components/TradeRepublicPairingModal'
+import EasybankPairingModal from '../components/EasybankPairingModal'
 
 interface AccountsPageProps {
   onNavigate?: (view: View) => void
@@ -21,6 +22,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
   const [trReconnectId, setTrReconnectId] = useState<number | null>(null)
+  const [easybankReconnectId, setEasybankReconnectId] = useState<number | null>(null)
   const editRef = useRef<HTMLInputElement>(null)
   const blurCancelledRef = useRef(false)
   const pollTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map())
@@ -88,10 +90,11 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   }
 
   const handleReconnect = (id: number) => {
-    // Trade Republic re-pairs through the 2FA modal; other providers redirect
-    // to the bank's own OAuth page.
+    // Trade Republic and easybank re-pair through their own modal (the sidecar
+    // may demand a code); other providers redirect to the bank's OAuth page.
     const conn = connections.find(c => c.id === id)
     if (conn?.provider === 'trade_republic') { setTrReconnectId(id); return }
+    if (conn?.provider === 'easybank') { setEasybankReconnectId(id); return }
     redirectReconnect(id)
   }
 
@@ -227,6 +230,15 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
           onClose={() => setTrReconnectId(null)}
         />
       )}
+
+      {easybankReconnectId != null && (
+        <EasybankPairingModal
+          title={t('easybank.repair_title')}
+          initiate={() => api(`/api/v1/bank_connections/${easybankReconnectId}/reconnect`, { method: 'POST' })}
+          onConnected={() => { setEasybankReconnectId(null); fetchConnections() }}
+          onClose={() => setEasybankReconnectId(null)}
+        />
+      )}
     </div>
   )
 }
@@ -266,7 +278,7 @@ function ConnectionCard({ bc, t, syncing, onSync, onReconnect, onDelete, editing
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <StatusBadge status={bc.status} label={t(`accounts.status_${bc.status}`)} />
-          {(bc.status === 'expired' || bc.status === 'error' || (bc.provider === 'trade_republic' && bc.status === 'pending')) ? (
+          {(bc.status === 'expired' || bc.status === 'error' || ((bc.provider === 'trade_republic' || bc.provider === 'easybank') && bc.status === 'pending')) ? (
             <Btn variant="secondary" size="sm" icon="link" onClick={onReconnect}>{t('accounts.reconnect')}</Btn>
           ) : (
             <button className="ibtn btn-sm w-8 h-8" onClick={onSync}
