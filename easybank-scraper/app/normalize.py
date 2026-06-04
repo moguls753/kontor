@@ -5,17 +5,22 @@ normalization is the part with real logic and edge cases, so it must be unit
 testable without a browser (see tests/test_normalize.py). app.easybank does all
 the browser work and hands the raw captured dicts here.
 
-The two captured payloads:
-  * RetailLanding              -> the account/card object (balance, IBAN, limits)
-  * AccountTransactionHistory  -> the transaction rows
+The captured payloads:
+  * RetailLanding -> the account/card object (balance, IBAN, limits)
+  * the transaction rows -> arrive under MORE THAN ONE op: AccountTransactionHistory
+    (default 30-day list) AND TransactionViewDirective/GetTransactions (the
+    long-range / post-SCA backfill). app.easybank collects them by Transactions[]
+    SHAPE rather than a fixed op, and this module flattens every Transactions[] it
+    finds across all captured pages.
 
-Both are VeriChannel envelopes that nest the useful data deep and inconsistently
+All are VeriChannel envelopes that nest the useful data deep and inconsistently
 (domestic vs. foreign cards differ), so we search by key rather than assume a
 fixed path.
 """
 
 from __future__ import annotations
 
+import hashlib
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
@@ -232,11 +237,25 @@ def _normalize_tx(tx: dict) -> dict:
         "type": find_first(tx, "TransactionNature"),
     }
     out.update(amts)
-    # ``id`` may legitimately be numeric (InternalID) — coerce to str so the
-    # Rails side has a consistent, hashable external id.
-    if out["id"] is not None:
-        out["id"] = str(out["id"])
+    # ``id`` may legitimately be numeric (InternalID) — coerce to str. When the
+    # bank gives NEITHER InternalID nor ReferenceNumber (seen on some pending
+    # rows), synthesize a STABLE content hash so true duplicates still collapse on
+    # the Rails unique (account_id, transaction_id) index and we never emit a null
+    # id — a null id fails the NOT-NULL/presence validation and would abort the
+    # whole ingest batch.
+    out["id"] = str(out["id"]) if out["id"] is not None else _synthetic_id(out)
     return out
+
+
+def _synthetic_id(tx: dict) -> str:
+    """Deterministic id for a row the bank gave no InternalID/ReferenceNumber.
+    Stable across syncs (so re-imports dedupe) and identical for true duplicates;
+    derived from the row's economic content."""
+    basis = "|".join(
+        str(tx.get(k) or "")
+        for k in ("booking_date", "value_date", "amount", "currency", "description", "merchant", "type")
+    )
+    return "eb-syn-" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:20]
 
 
 # --- account + balance -------------------------------------------------------

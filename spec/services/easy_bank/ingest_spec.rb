@@ -58,6 +58,22 @@ RSpec.describe EasyBank::Ingest do
       expect(account.transaction_records.count).to eq(2)
     end
 
+    it "skips malformed rows (missing id or date) without aborting the batch" do
+      good = easybank_sync_response["transactions"][1] # eb-tx-002
+      result = easybank_sync_response.merge("transactions" => [
+        { "id" => nil, "booking_date" => "2026-05-01", "amount" => "-1.00", "currency" => "EUR" },
+        good,
+        { "id" => "eb-tx-099", "booking_date" => nil, "amount" => "-2.00", "currency" => "EUR" }
+      ])
+
+      account = nil
+      expect { account = described_class.call(bank_connection, result) }.not_to raise_error
+
+      # the one good row lands; the id-less and date-less rows are skipped, not fatal
+      expect(account.transaction_records.count).to eq(1)
+      expect(account.transaction_records.first.transaction_id).to eq("eb-tx-002")
+    end
+
     it "tolerates a payload with no transactions" do
       result = easybank_sync_response.merge("transactions" => [])
 

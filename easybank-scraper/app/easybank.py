@@ -99,14 +99,19 @@ def _has_transactions(body) -> bool:
 
 class _Capture:
     """Accumulates the JSON the Angular app fetches. RetailLanding overwrites
-    (one dashboard); history accumulates so paginated "Weitere Umsätze" pages
-    are all retained for normalization."""
+    (one dashboard); history accumulates so paginated "Weitere Umsätze" pages are
+    all retained for normalization. `dropped` counts transaction-bearing bank
+    responses we failed to decode, so a silently-dropped page can be turned into a
+    hard error instead of a short result; `truncated` flags that pagination hit
+    PAGE_CAP (the history may be incomplete)."""
 
-    __slots__ = ("landing", "history_pages")
+    __slots__ = ("landing", "history_pages", "dropped", "truncated")
 
     def __init__(self) -> None:
         self.landing: dict | None = None
         self.history_pages: list[dict] = []
+        self.dropped: int = 0
+        self.truncated: bool = False
 
     def attach(self, page) -> None:
         def on_response(resp) -> None:
@@ -118,16 +123,25 @@ class _Capture:
                 if "/services/flow/AccountTransactionHistory" in url:
                     self.history_pages.append(resp.json())
                     return
-                # The long-range / post-SCA history may arrive under a different
-                # op name — capture any POST JSON that carries Transactions[].
-                if resp.request.method == "POST":
+                # The long-range / post-SCA history arrives under a different op
+                # (TransactionViewDirective/GetTransactions), so capture by shape —
+                # but ONLY from the bank's own origin, never a third party (the
+                # egress allowlist also permits the fingerprint host).
+                if resp.request.method == "POST" and url.startswith(BASE):
                     body = resp.json()
                     if _has_transactions(body):
                         self.history_pages.append(body)
             except Exception:
-                # A non-JSON or partially-read body is just a miss; never let a
-                # capture callback raise into Playwright's event loop.
-                pass
+                # A non-JSON / partially-read body is normally just a miss. But a
+                # bank transaction endpoint we couldn't decode is a SILENTLY
+                # DROPPED history page — record it so the caller fails loud rather
+                # than returning a short payload as success. Never re-raise into
+                # Playwright's event loop.
+                try:
+                    if resp.request.method == "POST" and url.startswith(BASE) and "Transaction" in url:
+                        self.dropped += 1
+                except Exception:
+                    pass
 
         page.on("response", on_response)
 
@@ -352,15 +366,24 @@ def _select_long_range(page) -> None:
 
 
 def _find_more_button(page):
-    """Locate the 'show more transactions' control. The label varies, so try the
-    known variants by role then by text and return the first visible match."""
-    for name in ("Mehr anzeigen", "Weitere Umsätze", "Mehr laden", "Mehr", "Weitere"):
-        for loc in (page.get_by_role("button", name=name), page.get_by_text(name, exact=False)):
-            try:
-                if loc.count() and loc.first.is_visible():
-                    return loc.first
-            except Exception:
-                continue
+    """Locate the 'show more transactions' control, returning it only if visible
+    AND enabled (a disabled-but-visible button is the end-of-history state — bail
+    instantly instead of burning a click + timeout). The label varies: match the
+    full unambiguous phrases by role or text, but the SHORT generic terms by
+    button ROLE only — a get_by_text('Mehr') substring would hit unrelated UI like
+    'Mehr Infos' / 'Weitere Konten' and click the wrong element."""
+    candidates = []
+    for name in ("Mehr anzeigen", "Weitere Umsätze", "Mehr laden"):
+        candidates.append(page.get_by_role("button", name=name))
+        candidates.append(page.get_by_text(name, exact=False))
+    for name in ("Mehr", "Weitere"):
+        candidates.append(page.get_by_role("button", name=name))
+    for loc in candidates:
+        try:
+            if loc.count() and loc.first.is_visible() and loc.first.is_enabled():
+                return loc.first
+        except Exception:
+            continue
     return None
 
 
@@ -383,13 +406,26 @@ def _paginate(page, capture: _Capture) -> None:
                 return  # click produced no new page -> end of history
         except Exception:
             return
-    log.info("pagination hit PAGE_CAP=%s; transaction history may be truncated", config.PAGE_CAP)
+    capture.truncated = True
+    log.warning("pagination hit PAGE_CAP=%s; transaction history may be truncated", config.PAGE_CAP)
 
 
 def _build_sync_result(capture: _Capture) -> dict:
     """Hand the captured payloads to the pure normalizer. history is the list of
-    captured pages (the normalizer flattens every Transactions[] it finds)."""
-    return normalize.normalize(capture.landing, capture.history_pages)
+    captured pages (the normalizer flattens every Transactions[] it finds).
+
+    Fail loud if a bank transaction page was dropped (undecodable) rather than
+    returning a short result as success; surface a `truncated` flag if pagination
+    hit PAGE_CAP so the caller knows the history may be incomplete."""
+    if capture.dropped:
+        raise TransientError(
+            f"{capture.dropped} transaction page(s) could not be decoded; "
+            "retrying to avoid ingesting a truncated history."
+        )
+    result = normalize.normalize(capture.landing, capture.history_pages)
+    if capture.truncated:
+        result["truncated"] = True
+    return result
 
 
 # --- public surface (called from main.py via asyncio.to_thread) --------------
@@ -453,6 +489,7 @@ def submit_mtan(pairing_id: str, code: str) -> dict:
     p = _take_pending(pairing_id)
     page, capture = p.page, p.capture
     keep_alive = False
+    handed_off = False
     try:
         _enter_mtan_code(page, code)
         log.info("mtan: code submitted; waiting for the modal to clear")
@@ -467,16 +504,32 @@ def submit_mtan(pairing_id: str, code: str) -> dict:
             log.info("mtan: modal still present -> wrong/expired code")
             raise MtanFailed("That mTAN code was wrong or expired. Request a new one.")
 
-        # Code accepted: the bank is ALREADY loading the long range ("Einen Moment
-        # Geduld", Zeitraum still 360). Do NOT touch the range control — just wait
-        # for the released history to land (a new captured page), then paginate via
-        # "Weitere Umsätze". The history arrives via the TransactionViewDirective,
-        # captured by shape in _Capture (see _has_transactions), not the flow op.
+        # Code accepted. Two shapes:
+        #  (A) range-select mTAN (the live-verified common path): the list is
+        #      already open and the bank now AUTO-loads the long range ("Einen
+        #      Moment Geduld", Zeitraum still 360) — wait for the released history
+        #      (arrives via the TransactionViewDirective, captured by shape), then
+        #      paginate. Do NOT touch the range control.
+        #  (B) login-time mTAN: we paused BEFORE the transaction list was ever
+        #      opened (_await_login_outcome saw the modal), so nothing auto-loads.
+        #      Detect that (no new page) and run the normal post-landing flow —
+        #      open the list, widen for a backfill — exactly like the password-only
+        #      login, instead of silently returning an empty result.
         log.info("mtan: accepted; waiting for the long-range history to load")
         before = len(capture.history_pages)
         deadline = time.monotonic() + config.NAV_TIMEOUT_MS / 1000
         while time.monotonic() < deadline and len(capture.history_pages) <= before:
             page.wait_for_timeout(500)
+        if len(capture.history_pages) == before:
+            log.info("mtan: nothing auto-loaded (login-time mTAN) -> completing the landing flow")
+            try:
+                return _complete_after_landing(page, capture, p.backfill_days)
+            except MtanRequired:
+                # Widening to the long range re-tripped the gate; _complete_after_
+                # landing re-stored THIS context under a new pairing, so finally
+                # must NOT close it.
+                handed_off = True
+                raise
         log.info("mtan: history pages now %s (was %s)", len(capture.history_pages), before)
         _paginate(page, capture)
         return _build_sync_result(capture)
@@ -487,12 +540,13 @@ def submit_mtan(pairing_id: str, code: str) -> dict:
     except Exception as e:  # noqa: BLE001
         raise TransientError("Failed to submit the mTAN due to a browser error.") from e
     finally:
-        # On a retryable wrong-code, put it back so /mtan can be called again;
-        # otherwise this login is done (success OR fatal) — close the browser.
+        # On a retryable wrong-code, put it back so /mtan can be called again.
+        # If the range gate re-tripped, the context was handed to a NEW pairing —
+        # leave it open. Otherwise this login is done (success OR fatal) — close it.
         if keep_alive:
             with _pending_lock:
                 _pending[pairing_id] = p
-        else:
+        elif not handed_off:
             _close_quietly(p.ctx)
 
 
@@ -544,12 +598,12 @@ def _wait_for_history(page, capture: _Capture, deadline_s: float) -> None:
 def _enter_mtan_code(page, code: str) -> None:
     """Enter the mTAN and submit. The bank shows six per-digit boxes, but those
     (#OTPPassword-Char*) are DISABLED display mirrors — the real, validated input
-    is the single #OTPPassword-Full-field. Fill it (fall back to the Char boxes /
-    a generic field), then click Bestätigen. Never logs the code."""
-    # The mTAN widget exposes #OTPPassword-Full-field (a single field that accepts
-    # the whole code and IS what the bank validates — proven live) plus six
-    # #OTPPassword-Char* boxes that aren't directly fillable here. Fill the
-    # Full-field first; fall back to the Char boxes, then a generic field.
+    is the single #OTPPassword-Full-field. Fill it (fall back to a generic numeric
+    field), then click Bestätigen. Never logs the code."""
+    # Fill #OTPPassword-Full-field (the validated input, proven live). The Char
+    # boxes are disabled mirrors — .fill() on them just blocks the full
+    # actionability timeout — so we don't try them; a generic numeric field is the
+    # only fallback.
     entered = False
     try:
         full = page.locator("#OTPPassword-Full-field")
@@ -559,16 +613,6 @@ def _enter_mtan_code(page, code: str) -> None:
             log.info("mtan: filled OTPPassword-Full-field")
     except Exception as e:
         log.info("mtan: full-field fill failed: %s", type(e).__name__)
-    if not entered:
-        chars = page.locator("input[id^='OTPPassword-Char']")
-        try:
-            if chars.count() >= len(code):
-                for i, ch in enumerate(code):
-                    chars.nth(i).fill(ch)
-                entered = True
-                log.info("mtan: filled Char boxes")
-        except Exception as e:
-            log.info("mtan: char fill failed: %s", type(e).__name__)
     if not entered:
         try:
             field = page.get_by_label("mTAN")

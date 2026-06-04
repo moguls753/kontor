@@ -126,3 +126,42 @@ def test_empty_inputs_are_safe():
     assert result["transactions"] == []
     assert result["account"]["iban"] is None
     assert result["otp_required"] is False
+
+
+def _bare_row(**over):
+    row = {
+        "Amount": {"Value": 5.0, "Currency": {"Code": "EUR"}},
+        "TransactionNature": "Debit",
+        "PostingDate": "2026-05-01T00:00:00+00:00",
+        "Description": "FOO",
+    }
+    row.update(over)
+    return row
+
+
+def test_idless_row_gets_a_stable_synthetic_id():
+    # Neither InternalID nor ReferenceNumber: must NOT yield id=None (that would
+    # fail the Rails presence/unique constraint and abort the whole ingest). It
+    # gets a deterministic content hash, identical for true duplicates.
+    a = normalize._normalize_tx(_bare_row())
+    b = normalize._normalize_tx(_bare_row())
+    assert a["id"] and a["id"].startswith("eb-syn-")
+    assert a["id"] == b["id"]
+
+
+def test_idless_rows_with_different_content_get_different_ids():
+    a = normalize._normalize_tx(_bare_row(Description="A"))
+    b = normalize._normalize_tx(_bare_row(Description="B"))
+    assert a["id"] != b["id"]
+
+
+def test_all_min_date_row_yields_null_booking_date():
+    # Every date field is the .NET min-date => booking_date is None; the Rails
+    # ingest skips such a degenerate row per-row rather than crashing the batch.
+    min_date = "0001-01-01T00:00:00+00:00"
+    tx = normalize._normalize_tx(_bare_row(
+        InternalID="X1", PostingDate=min_date, BookingDate=min_date,
+        ValueDate=min_date, TransactionDate=min_date, EffectiveDate=min_date,
+    ))
+    assert tx["id"] == "X1"
+    assert tx["booking_date"] is None

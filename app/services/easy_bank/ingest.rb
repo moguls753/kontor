@@ -30,9 +30,18 @@ module EasyBank
       account = ensure_account
       update_account(account)
 
+      skipped = 0
       (@result["transactions"] || []).each do |tx|
         upsert_transaction(account, tx)
+      rescue StandardError => e
+        # One malformed row (e.g. a bank row with no usable id or date) must NOT
+        # abort the whole batch — that would leave a partial, un-retryable import
+        # that reads as "already backfilled". Skip it and keep going; never log
+        # row content (amounts / PII).
+        skipped += 1
+        Rails.logger.warn("EasyBank::Ingest skipped a transaction (#{e.class})")
       end
+      Rails.logger.warn("EasyBank::Ingest skipped #{skipped} transaction(s)") if skipped.positive?
 
       account
     end
@@ -70,6 +79,12 @@ module EasyBank
     # duplicate page-1 capture on a backfill resume updates in place rather than
     # inserting twice. Mirrors upsert_eb_transaction's shape/SAVE behavior.
     def upsert_transaction(account, tx)
+      # Degenerate rows (no stable id, or no usable date anywhere) can't be
+      # deduped/stored — skip them via the caller's per-row rescue rather than
+      # raising a validation error that aborts the batch.
+      raise ArgumentError, "transaction has no id" if tx["id"].blank?
+      raise ArgumentError, "transaction has no booking_date" if tx["booking_date"].blank?
+
       record = account.transaction_records.find_or_initialize_by(transaction_id: tx["id"])
 
       record.assign_attributes(
