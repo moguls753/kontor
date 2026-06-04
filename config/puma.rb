@@ -29,7 +29,14 @@ threads_count = ENV.fetch("RAILS_MAX_THREADS", 3)
 threads threads_count, threads_count
 
 # Specifies the `port` that Puma will listen on to receive requests; default is 3000.
-port ENV.fetch("PORT", 3000)
+# When TLS_CERT/TLS_KEY are set, Puma serves HTTPS directly with that (self-signed)
+# cert — used so the Enable Banking OAuth callback works over https on a LAN box
+# (see compose.tls.yml). Otherwise plain HTTP (Thruster/Kamal terminate TLS upstream).
+if ENV["TLS_CERT"].to_s != "" && ENV["TLS_KEY"].to_s != ""
+  ssl_bind "0.0.0.0", ENV.fetch("PORT", 3000), { cert: ENV["TLS_CERT"], key: ENV["TLS_KEY"] }
+else
+  port ENV.fetch("PORT", 3000)
+end
 
 # Allow puma to be restarted by `bin/rails restart` command.
 plugin :tmp_restart

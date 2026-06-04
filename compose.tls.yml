@@ -1,0 +1,34 @@
+# HTTPS with your OWN self-signed cert, so the Enable Banking OAuth callback works
+# on a LAN box (https://<ip>:3000). Puma serves TLS directly — no proxy, so
+# request.base_url is already https and the callback URL matches what you register.
+#
+# Setup (once, in the kontor dir on the host):
+#   mkdir -p config/tls
+#   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+#     -keyout config/tls/key.pem -out config/tls/cert.pem \
+#     -subj "/CN=192.168.55.97" -addext "subjectAltName=IP:192.168.55.97"
+#   chmod 644 config/tls/key.pem        # so the container (uid 1000) can read it
+#
+# Run:
+#   docker compose -f compose.yml -f compose.build.yml -f compose.tls.yml up -d --build
+#
+# Then register  https://192.168.55.97:3000/api/v1/bank_connections/callback  in the
+# Enable Banking app's Redirect URLs, open the URL once and accept the cert.
+#
+# (Trade Republic + easybank don't need this — they're server-side scrapers. Plain
+# HTTP without this override works fine for them.)
+
+services:
+  kontor:
+    # Drop Thruster; run Puma directly. db:prepare still runs (entrypoint checks for
+    # the trailing "./bin/rails server"). Puma serves TLS via TLS_CERT/TLS_KEY.
+    command: ["./bin/rails", "server"]
+    environment:
+      TLS_CERT: config/tls/cert.pem
+      TLS_KEY: config/tls/key.pem
+    ports: !override
+      - "3000:3000"
+    volumes:
+      - ./config/tls:/rails/config/tls:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fk https://localhost:3000/up || exit 1"]

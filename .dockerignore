@@ -49,3 +49,6 @@
 # Ignore Docker-related files
 /.dockerignore
 /Dockerfile*
+
+# Local TLS cert+key (mounted at runtime, never baked)
+/config/tls/
