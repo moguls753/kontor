@@ -156,19 +156,21 @@ module Api
         render json: connection_json(bc.reload)
       end
 
-      # Submit the SMS mTAN to finish device pairing. Record last_paired_at so a
-      # later lost sidecar profile can be told apart from a fresh one and we never
-      # re-trigger the backfill mTAN unattended.
+      # Submit the SMS mTAN to finish the gated backfill. submit_mtan resumes the
+      # SAME paused browser context and returns the FULL sync payload (the
+      # ~360-day data on a first connect), so we INGEST what we already hold —
+      # never enqueue a re-fetch, which would trigger a SECOND mTAN. Record
+      # last_paired_at so a later lost sidecar profile can be told apart from a
+      # fresh one and we never re-trigger the backfill mTAN unattended.
       def confirm_easybank(bc)
         credential = Current.user.easybank_credential
         return render json: { error: "easybank not configured" }, status: :unprocessable_content unless credential
 
-        scraper_client("easybank").submit_mtan(pairing_id: params[:pairing_id], code: params[:code])
+        result = scraper_client("easybank").submit_mtan(pairing_id: params[:pairing_id], code: params[:code])
 
-        ensure_easybank_account(bc)
+        EasyBank::Ingest.call(bc, result)
         bc.update!(status: "authorized", error_message: nil)
         credential.update!(last_paired_at: Time.current)
-        SyncAccountsJob.perform_later(bc.id)
 
         render json: connection_json(bc.reload)
       end
@@ -280,16 +282,24 @@ module Api
         render_easybank_error(bc, e)
       end
 
-      # Log in via the sidecar. A fully device-paired profile logs straight in
-      # (no mTAN) and we authorize + sync immediately. Otherwise the sidecar
-      # raises MtanRequired and we hand the challenge to the frontend, which
-      # collects the SMS code and posts it to confirm_2fa.
+      # Connect via the sidecar's /sync. The FIRST connect (no transactions yet)
+      # requests the one-time ~360-day backfill, which the bank gates behind an
+      # SMS mTAN — the sidecar raises MtanRequired and we hand the challenge to
+      # the frontend, which collects the code and posts it to confirm_2fa (where
+      # the paused browser context resumes and returns the deep payload). Every
+      # other connect/reconnect uses the routine 30-day range; a fully
+      # device-paired profile then comes straight back with the payload (no
+      # mTAN) and we ingest + authorize immediately. A fresh-device 30-day
+      # connect can still raise MtanRequired, which is handled the same way.
       def start_easybank_login(bc, credential)
-        scraper_client("easybank").login(username: credential.username, password: credential.password)
+        days = easybank_first_connect?(bc) ? EasyBank::ScraperClient::LONG_BACKFILL_DAYS : EasyBank::ScraperClient::SHORT_BACKFILL_DAYS
+        result = scraper_client("easybank").sync(username: credential.username, password: credential.password, backfill_days: days)
 
-        ensure_easybank_account(bc)
+        # No mTAN gate: ingest the payload we already hold (never enqueue a
+        # re-fetch — a 360-day re-fetch would trigger a SECOND mTAN).
+        EasyBank::Ingest.call(bc, result)
         bc.update!(status: "authorized", error_message: nil)
-        SyncAccountsJob.perform_later(bc.id)
+        credential.update!(last_paired_at: Time.current)
         render json: connection_json(bc.reload)
       rescue EasyBank::MtanRequired => e
         render json: {
@@ -302,13 +312,13 @@ module Api
         }, status: :created
       end
 
-      # The easybank connection always backs exactly one credit-card account,
-      # keyed by a synthetic account_uid. Idempotent across logins/reconnects.
-      def ensure_easybank_account(bc)
-        bc.accounts.find_or_create_by!(account_uid: "easybank") do |a|
-          a.name = bc.institution_name.presence || "easybank Kreditkarte"
-          a.currency = "EUR"
-        end
+      # The one-time deep backfill runs only on the first connect — when this
+      # connection has no transactions yet (no account at all, or an account
+      # with no transaction_records). Every later connect/reconnect already has
+      # history and uses the routine 30-day range.
+      def easybank_first_connect?(bc)
+        account = bc.accounts.find_by(account_uid: "easybank")
+        account.nil? || account.transaction_records.none?
       end
 
       # Map an EasyBank::Error to a status the frontend can act on. Mirrors

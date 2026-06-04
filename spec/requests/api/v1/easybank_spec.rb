@@ -12,12 +12,21 @@ RSpec.describe "easybank login + mTAN", type: :request do
   describe "POST /api/v1/bank_connections (easybank)" do
     before { create(:easybank_credential, user: user) }
 
-    it "authorizes immediately, creates the account and syncs when no mTAN is needed" do
-      allow(easybank_client).to receive(:login).and_return(easybank_sync_response)
+    it "requests the one-time 360-day backfill on the very first connect" do
+      allow(easybank_client).to receive(:sync).and_return(easybank_sync_response)
 
+      post api_v1_bank_connections_path, params: { provider: "easybank" }, as: :json
+
+      expect(easybank_client).to have_received(:sync).with(hash_including(backfill_days: 360))
+    end
+
+    it "ingests the payload and authorizes when the first connect needs no mTAN" do
+      allow(easybank_client).to receive(:sync).and_return(easybank_sync_response)
+
+      # No re-fetch is enqueued: connect ingests the payload it already holds.
       expect {
         post api_v1_bank_connections_path, params: { provider: "easybank" }, as: :json
-      }.to have_enqueued_job(SyncAccountsJob)
+      }.not_to have_enqueued_job(SyncAccountsJob)
 
       expect(response).to have_http_status(:ok)
       body = response.parsed_body
@@ -27,11 +36,14 @@ RSpec.describe "easybank login + mTAN", type: :request do
       bc = user.bank_connections.find_by(provider: "easybank")
       expect(bc.institution_id).to eq("easybank")
       expect(bc.status).to eq("authorized")
-      expect(bc.accounts.find_by(account_uid: "easybank")).to be_present
+      account = bc.accounts.find_by(account_uid: "easybank")
+      expect(account).to be_present
+      expect(account.transaction_records.count).to eq(2)
+      expect(user.easybank_credential.reload.last_paired_at).to be_present
     end
 
-    it "returns an mTAN challenge and keeps the connection pending when login needs an SMS code" do
-      allow(easybank_client).to receive(:login).and_raise(
+    it "returns an mTAN challenge and keeps the connection pending when the backfill needs an SMS code" do
+      allow(easybank_client).to receive(:sync).and_raise(
         EasyBank::MtanRequired.new(
           "SMS sent",
           pairing_id: "pid-1", masked_phone: "+49 *** 1234", reference: "ref-9", expires_in: 300
@@ -53,7 +65,7 @@ RSpec.describe "easybank login + mTAN", type: :request do
     end
 
     it "reuses the single connection instead of accumulating orphans" do
-      allow(easybank_client).to receive(:login).and_return(easybank_sync_response)
+      allow(easybank_client).to receive(:sync).and_return(easybank_sync_response)
 
       2.times { post api_v1_bank_connections_path, params: { provider: "easybank" }, as: :json }
 
@@ -61,7 +73,7 @@ RSpec.describe "easybank login + mTAN", type: :request do
     end
 
     it "surfaces a rejected login as 422 and marks the connection in error" do
-      allow(easybank_client).to receive(:login).and_raise(EasyBank::LoginFailed.new("bad credentials"))
+      allow(easybank_client).to receive(:sync).and_raise(EasyBank::LoginFailed.new("bad credentials"))
 
       post api_v1_bank_connections_path, params: { provider: "easybank" }, as: :json
 
@@ -84,16 +96,20 @@ RSpec.describe "easybank login + mTAN", type: :request do
     let!(:credential) { create(:easybank_credential, user: user) }
     let(:bc) { create(:bank_connection, :easybank, user: user, status: "pending") }
 
-    it "finishes pairing: creates the account, authorizes, records last_paired_at and syncs" do
-      allow(easybank_client).to receive(:submit_mtan).and_return("status" => "ok")
+    it "ingests the resumed backfill payload, authorizes and records last_paired_at without a re-fetch" do
+      allow(easybank_client).to receive(:submit_mtan).and_return(easybank_sync_response)
 
+      # submit_mtan returns the full (deep) payload — ingest it, never enqueue a
+      # re-fetch (that would trigger a SECOND mTAN).
       expect {
         post confirm_2fa_api_v1_bank_connection_path(bc), params: { pairing_id: "pid-1", code: "123456" }, as: :json
-      }.to have_enqueued_job(SyncAccountsJob)
+      }.not_to have_enqueued_job(SyncAccountsJob)
 
       expect(response).to have_http_status(:ok)
       expect(bc.reload.status).to eq("authorized")
-      expect(bc.accounts.find_by(account_uid: "easybank")).to be_present
+      account = bc.accounts.find_by(account_uid: "easybank")
+      expect(account).to be_present
+      expect(account.transaction_records.count).to eq(2)
       expect(credential.reload.last_paired_at).to be_present
     end
 
@@ -109,15 +125,17 @@ RSpec.describe "easybank login + mTAN", type: :request do
   end
 
   describe "POST /api/v1/bank_connections/:id/reconnect (easybank)" do
-    it "re-initiates login on an expired connection" do
-      create(:easybank_credential, user: user)
-      bc = create(:bank_connection, :easybank, user: user, status: "expired")
-      allow(easybank_client).to receive(:login).and_return(easybank_sync_response)
+    let!(:credential) { create(:easybank_credential, user: user) }
+    let(:bc) { create(:bank_connection, :easybank, user: user, status: "expired") }
 
-      expect {
-        post reconnect_api_v1_bank_connection_path(bc), as: :json
-      }.to have_enqueued_job(SyncAccountsJob)
+    it "uses the routine 30-day range on a reconnect that already has history" do
+      account = create(:account, bank_connection: bc, account_uid: "easybank")
+      create(:transaction_record, account: account)
+      allow(easybank_client).to receive(:sync).and_return(easybank_sync_response)
 
+      post reconnect_api_v1_bank_connection_path(bc), as: :json
+
+      expect(easybank_client).to have_received(:sync).with(hash_including(backfill_days: 30))
       expect(response).to have_http_status(:ok)
       expect(bc.reload.status).to eq("authorized")
     end

@@ -178,6 +178,17 @@ RSpec.describe SyncAccountsJob, type: :job do
     described_class.perform_now(bc.id)
   end
 
+  it "ingests the easybank payload through the shared EasyBank::Ingest service" do
+    create(:easybank_credential, :paired, user: user)
+    bc = create(:bank_connection, :easybank, user: user)
+    create(:account, bank_connection: bc, account_uid: "easybank")
+
+    allow(easybank_client).to receive(:sync).and_return(easybank_sync_response)
+    expect(EasyBank::Ingest).to receive(:call).with(bc, easybank_sync_response).and_call_original
+
+    described_class.perform_now(bc.id)
+  end
+
   it "deduplicates easybank transactions on repeat sync" do
     create(:easybank_credential, :paired, user: user)
     bc = create(:bank_connection, :easybank, user: user)

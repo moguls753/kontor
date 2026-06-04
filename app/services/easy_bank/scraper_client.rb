@@ -19,6 +19,14 @@ module EasyBank
     OPEN_TIMEOUT = 5
     READ_TIMEOUT = 120
 
+    # Mirrors the sidecar's BACKFILL_LONG_DAYS: the one-time deep history range
+    # requested only at the first interactive connect. >= 360 makes the sidecar
+    # select the long range, which is gated behind an SMS mTAN (raises
+    # MtanRequired) — so this MUST never be requested unattended.
+    LONG_BACKFILL_DAYS = 360
+    # The routine range used everywhere else (background syncs, reconnects).
+    SHORT_BACKFILL_DAYS = 30
+
     def initialize(base_url: ENV.fetch("EASYBANK_SIDECAR_URL", DEFAULT_URL), token: ENV["EASYBANK_SIDECAR_TOKEN"])
       @base_url = base_url
       @token = token
@@ -41,7 +49,7 @@ module EasyBank
     # defaults to the sidecar's own default (30); the 360-day backfill is only ever
     # requested at interactive connect because it triggers an SMS mTAN.
     # -> parsed body hash (string keys)
-    def sync(username:, password:, backfill_days: 30)
+    def sync(username:, password:, backfill_days: SHORT_BACKFILL_DAYS)
       post("/sync", { username: username, password: password, backfill_days: backfill_days })
     end
 
