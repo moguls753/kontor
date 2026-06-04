@@ -11,10 +11,17 @@ Rails.application.routes.draw do
       end
       resources :institutions, only: %i[ index ]
       resources :bank_connections, only: %i[ index show create destroy ] do
+        collection do
+          # Stable Open Banking callback (no per-connection id): the connection is
+          # resolved from the `state` param the provider echoes back. Lets a single
+          # redirect URL be registered with the provider (e.g. Enable Banking).
+          get :callback
+        end
         member do
           get :callback
           post :sync
           post :reconnect
+          post :confirm_2fa
         end
       end
       resources :categories, only: %i[ index create update destroy ] do

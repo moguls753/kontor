@@ -16,3 +16,8 @@ production:
   sync_all_accounts:
     class: SyncAllAccountsJob
     schedule: every 6 hours
+  sync_scraped_balances:
+    class: SyncScrapedBalancesJob
+    # Once a day at 04:00 Berlin time. Explicit TZ via Fugit cron zone suffix so
+    # it doesn't drift with the app's default timezone.
+    schedule: "0 4 * * * Europe/Berlin"

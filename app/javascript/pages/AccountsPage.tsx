@@ -6,6 +6,7 @@ import type { BankConnection, BankConnectionAccount } from '../lib/types'
 import type { View } from '../components/SidebarNav'
 import { Amount, Btn, StatusBadge, Empty, initials } from '../components/ui'
 import Icon from '../components/Icon'
+import TradeRepublicPairingModal from '../components/TradeRepublicPairingModal'
 
 interface AccountsPageProps {
   onNavigate?: (view: View) => void
@@ -19,6 +20,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   const [syncingIds, setSyncingIds] = useState<Set<number>>(new Set())
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [trReconnectId, setTrReconnectId] = useState<number | null>(null)
   const editRef = useRef<HTMLInputElement>(null)
   const blurCancelledRef = useRef(false)
   const pollTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map())
@@ -85,7 +87,15 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     }
   }
 
-  const handleReconnect = async (id: number) => {
+  const handleReconnect = (id: number) => {
+    // Trade Republic re-pairs through the 2FA modal; other providers redirect
+    // to the bank's own OAuth page.
+    const conn = connections.find(c => c.id === id)
+    if (conn?.provider === 'trade_republic') { setTrReconnectId(id); return }
+    redirectReconnect(id)
+  }
+
+  const redirectReconnect = async (id: number) => {
     try {
       const r = await api(`/api/v1/bank_connections/${id}/reconnect`, { method: 'POST' })
       if (r.ok) {
@@ -208,6 +218,15 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
           ))}
         </div>
       )}
+
+      {trReconnectId != null && (
+        <TradeRepublicPairingModal
+          title={t('trade_republic.repair_title')}
+          initiate={() => api(`/api/v1/bank_connections/${trReconnectId}/reconnect`, { method: 'POST' })}
+          onConnected={() => { setTrReconnectId(null); fetchConnections() }}
+          onClose={() => setTrReconnectId(null)}
+        />
+      )}
     </div>
   )
 }
@@ -247,13 +266,13 @@ function ConnectionCard({ bc, t, syncing, onSync, onReconnect, onDelete, editing
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <StatusBadge status={bc.status} label={t(`accounts.status_${bc.status}`)} />
-          {(bc.status === 'authorized' || bc.status === 'pending') ? (
+          {(bc.status === 'expired' || bc.status === 'error' || (bc.provider === 'trade_republic' && bc.status === 'pending')) ? (
+            <Btn variant="secondary" size="sm" icon="link" onClick={onReconnect}>{t('accounts.reconnect')}</Btn>
+          ) : (
             <button className="ibtn btn-sm w-8 h-8" onClick={onSync}
               title={syncing ? t('accounts.syncing') : t('accounts.sync')} disabled={syncing || bc.status !== 'authorized'}>
               <Icon name="sync" size={16} className={syncing ? 'spin' : ''} />
             </button>
-          ) : (
-            <Btn variant="secondary" size="sm" icon="link" onClick={onReconnect}>{t('accounts.reconnect')}</Btn>
           )}
           <button className="ibtn btn-sm w-8 h-8" title={t('accounts.delete_connection')} onClick={onDelete}>
             <Icon name="trash" size={15} />

@@ -5,9 +5,11 @@
 #  id                  :integer          not null, primary key
 #  account_type        :string
 #  account_uid         :string           not null
+#  available_credit    :decimal(15, 2)
 #  balance_amount      :decimal(15, 2)
 #  balance_type        :string
 #  balance_updated_at  :datetime
+#  credit_limit        :decimal(15, 2)
 #  currency            :string(3)        default("EUR")
 #  iban                :string
 #  identification_hash :string

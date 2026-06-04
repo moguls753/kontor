@@ -13,6 +13,16 @@ RSpec.describe "Api::V1::Credentials", type: :request do
       expect(body["enable_banking"]["configured"]).to be true
       expect(body["gocardless"]["configured"]).to be false
     end
+
+    it "masks the Trade Republic phone and never returns the PIN" do
+      create(:trade_republic_credential, user: user)
+      get api_v1_credentials_path, as: :json
+      body = response.parsed_body
+      expect(body["trade_republic"]["configured"]).to be true
+      expect(body["trade_republic"]["phone_number_masked"]).to start_with("+49")
+      expect(response.body).not_to include("1234")
+      expect(response.body).not_to include("15112345678")
+    end
   end
 
   describe "POST /api/v1/credentials" do
@@ -32,6 +42,15 @@ RSpec.describe "Api::V1::Credentials", type: :request do
       }, as: :json
       expect(response).to have_http_status(:created)
       expect(user.reload.go_cardless_credential).to be_present
+    end
+
+    it "creates Trade Republic credentials" do
+      post api_v1_credentials_path, params: {
+        provider: "trade_republic",
+        credentials: { phone_number: "+4915112345678", pin: "1234" }
+      }, as: :json
+      expect(response).to have_http_status(:created)
+      expect(user.reload.trade_republic_credential).to be_present
     end
 
     it "rejects missing params" do

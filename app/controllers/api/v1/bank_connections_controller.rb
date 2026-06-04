@@ -15,6 +15,13 @@ module Api
         credential = provider_credential(params[:provider])
         return render json: { error: "#{params[:provider]} not configured" }, status: :unprocessable_content unless credential
 
+        # Trade Republic pairs through the sidecar (no OAuth redirect) and uses a
+        # synthetic institution_id with a one-per-user guard — handle separately.
+        return create_trade_republic(credential) if params[:provider] == "trade_republic"
+        # easybank logs in through its own sidecar (no OAuth redirect), same
+        # synthetic institution_id / one-per-user pattern.
+        return create_easybank(credential) if params[:provider] == "easybank"
+
         bc = Current.user.bank_connections.build(
           provider: params[:provider],
           institution_id: params[:institution_id],
@@ -39,7 +46,9 @@ module Api
       end
 
       def callback
-        bc = Current.user.bank_connections.find(params[:id])
+        # `id` is present on the member route (GoCardless); the stable collection
+        # route resolves the connection from the `state` the provider echoes back.
+        bc = Current.user.bank_connections.find(params[:id] || params[:state])
 
         if params[:error].present?
           bc.update!(status: "error", error_message: params[:error])
@@ -94,24 +103,91 @@ module Api
           create_enable_banking(bc, credential)
         when "gocardless"
           create_gocardless(bc, credential)
+        when "trade_republic"
+          start_tr_pairing(bc, credential)
+        when "easybank"
+          start_easybank_login(bc, credential)
         end
       rescue EnableBanking::ApiError, GoCardless::ApiError => e
         bc&.update!(status: "error", error_message: e.message)
         render json: { error: e.message }, status: :bad_gateway
+      rescue TradeRepublic::Error => e
+        render_tr_error(bc, e)
+      rescue EasyBank::Error => e
+        render_easybank_error(bc, e)
+      end
+
+      # Complete a 2FA challenge with the code from the app push (Trade Republic)
+      # or the SMS mTAN (easybank). On success ensure the single account exists and
+      # kick off the first sync. A wrong/expired code leaves the connection
+      # retryable (mirrors the GoCardless callback). Branches on the provider
+      # because the two flows talk to different sidecars with different payloads.
+      def confirm_2fa
+        bc = Current.user.bank_connections.find(params[:id])
+
+        case bc.provider
+        when "trade_republic" then confirm_trade_republic(bc)
+        when "easybank" then confirm_easybank(bc)
+        else
+          render json: { error: "#{bc.provider} does not support 2FA confirmation" }, status: :unprocessable_content
+        end
+      rescue TradeRepublic::Error => e
+        render_tr_error(bc, e)
+      rescue EasyBank::Error => e
+        render_easybank_error(bc, e)
       end
 
       private
+
+      def confirm_trade_republic(bc)
+        credential = Current.user.trade_republic_credential
+        return render json: { error: "trade_republic not configured" }, status: :unprocessable_content unless credential
+
+        result = scraper_client("trade_republic").pair_finish(pairing_id: params[:pairing_id], code: params[:code])
+        credential.update!(session_blob: result[:session_blob], last_paired_at: Time.current)
+
+        bc.accounts.find_or_create_by!(account_uid: "trade_republic") do |a|
+          a.name = bc.institution_name.presence || "Trade Republic"
+          a.currency = "EUR"
+        end
+        bc.update!(status: "authorized", error_message: nil)
+        SyncAccountsJob.perform_later(bc.id)
+
+        render json: connection_json(bc.reload)
+      end
+
+      # Submit the SMS mTAN to finish device pairing. Record last_paired_at so a
+      # later lost sidecar profile can be told apart from a fresh one and we never
+      # re-trigger the backfill mTAN unattended.
+      def confirm_easybank(bc)
+        credential = Current.user.easybank_credential
+        return render json: { error: "easybank not configured" }, status: :unprocessable_content unless credential
+
+        scraper_client("easybank").submit_mtan(pairing_id: params[:pairing_id], code: params[:code])
+
+        ensure_easybank_account(bc)
+        bc.update!(status: "authorized", error_message: nil)
+        credential.update!(last_paired_at: Time.current)
+        SyncAccountsJob.perform_later(bc.id)
+
+        render json: connection_json(bc.reload)
+      end
 
       def provider_credential(provider)
         case provider
         when "enable_banking" then Current.user.enable_banking_credential
         when "gocardless" then Current.user.go_cardless_credential
+        when "trade_republic" then Current.user.trade_republic_credential
+        when "easybank" then Current.user.easybank_credential
         end
       end
 
       def create_enable_banking(bc, credential)
         client = EnableBanking::Client.new(app_id: credential.app_id, private_key_pem: credential.private_key_pem)
-        callback_url = "#{request.base_url}/api/v1/bank_connections/#{bc.id}/callback"
+        # Stable callback (no per-connection id) so it matches the single redirect
+        # URL registered with Enable Banking; the connection is recovered from the
+        # `state` param EB echoes back to the callback.
+        callback_url = "#{request.base_url}/api/v1/bank_connections/callback"
 
         result = client.start_authorization(
           aspsp: { name: bc.institution_id, country: bc.country_code },
@@ -132,6 +208,137 @@ module Api
 
         bc.update!(requisition_id: result[:id], link: result[:link])
         render json: { id: bc.id, redirect_url: result[:link] }, status: :created
+      end
+
+      # Reuse/replace the user's single Trade Republic connection — the
+      # [user_id, institution_id] index is NOT unique, so guard explicitly to
+      # avoid accumulating orphans. institution_id is synthetic and must be set
+      # before save (it is NOT NULL).
+      def create_trade_republic(credential)
+        bc = Current.user.bank_connections.find_or_initialize_by(
+          provider: "trade_republic",
+          institution_id: "trade_republic"
+        )
+        bc.assign_attributes(
+          institution_name: "Trade Republic",
+          country_code: "DE",
+          status: "pending",
+          error_message: nil
+        )
+        bc.save!
+        start_tr_pairing(bc, credential)
+      rescue TradeRepublic::Error => e
+        render_tr_error(bc, e)
+      end
+
+      def start_tr_pairing(bc, credential)
+        result = scraper_client("trade_republic").pair_start(phone_number: credential.phone_number, pin: credential.pin)
+        render json: {
+          id: bc.id,
+          pairing_id: result[:pairing_id],
+          countdown_seconds: result[:countdown_seconds],
+          channel: result[:channel]
+        }, status: :created
+      end
+
+      # Map a TradeRepublic::Error to a status the frontend can act on.
+      def render_tr_error(bc, error)
+        case error
+        when TradeRepublic::PairingExpiredError
+          bc&.update!(status: "error", error_message: error.message)
+          render json: { error: "pairing_expired", message: error.message }, status: :gone
+        when TradeRepublic::PairingFailedError
+          # Wrong/expired code or PIN — leave the connection retryable.
+          render json: { error: "pairing_failed", message: error.message }, status: :unprocessable_content
+        when TradeRepublic::SessionExpiredError
+          bc&.update!(status: "expired", error_message: error.message)
+          render json: { error: "session_expired", message: error.message }, status: :conflict
+        else # ApiError, SidecarUnavailableError
+          bc&.update!(status: "error", error_message: error.message)
+          render json: { error: "scraper_unavailable", message: error.message }, status: :bad_gateway
+        end
+      end
+
+      # Reuse/replace the user's single easybank connection — the
+      # [user_id, institution_id] index is NOT unique, so guard explicitly to
+      # avoid accumulating orphans. institution_id is synthetic and must be set
+      # before save (it is NOT NULL). Mirrors create_trade_republic.
+      def create_easybank(credential)
+        bc = Current.user.bank_connections.find_or_initialize_by(
+          provider: "easybank",
+          institution_id: "easybank"
+        )
+        bc.assign_attributes(
+          institution_name: "easybank Kreditkarte",
+          country_code: "DE",
+          status: "pending",
+          error_message: nil
+        )
+        bc.save!
+        start_easybank_login(bc, credential)
+      rescue EasyBank::Error => e
+        render_easybank_error(bc, e)
+      end
+
+      # Log in via the sidecar. A fully device-paired profile logs straight in
+      # (no mTAN) and we authorize + sync immediately. Otherwise the sidecar
+      # raises MtanRequired and we hand the challenge to the frontend, which
+      # collects the SMS code and posts it to confirm_2fa.
+      def start_easybank_login(bc, credential)
+        scraper_client("easybank").login(username: credential.username, password: credential.password)
+
+        ensure_easybank_account(bc)
+        bc.update!(status: "authorized", error_message: nil)
+        SyncAccountsJob.perform_later(bc.id)
+        render json: connection_json(bc.reload)
+      rescue EasyBank::MtanRequired => e
+        render json: {
+          id: bc.id,
+          mtan_required: true,
+          pairing_id: e.pairing_id,
+          masked_phone: e.masked_phone,
+          reference: e.reference,
+          expires_in: e.expires_in
+        }, status: :created
+      end
+
+      # The easybank connection always backs exactly one credit-card account,
+      # keyed by a synthetic account_uid. Idempotent across logins/reconnects.
+      def ensure_easybank_account(bc)
+        bc.accounts.find_or_create_by!(account_uid: "easybank") do |a|
+          a.name = bc.institution_name.presence || "easybank Kreditkarte"
+          a.currency = "EUR"
+        end
+      end
+
+      # Map an EasyBank::Error to a status the frontend can act on. Mirrors
+      # render_tr_error. (MtanRequired never reaches here — it is rendered inline
+      # by start_easybank_login as a 201 challenge, not surfaced as an error.)
+      def render_easybank_error(bc, error)
+        case error
+        when EasyBank::MtanFailed
+          # Wrong/expired SMS code — leave the connection retryable.
+          render json: { error: "mtan_failed", message: error.message }, status: :unprocessable_content
+        when EasyBank::LoginFailed
+          # Bad username/password — the stored credential must be corrected.
+          bc&.update!(status: "error", error_message: error.message)
+          render json: { error: "login_failed", message: error.message }, status: :unprocessable_content
+        when EasyBank::SessionExpiredError
+          bc&.update!(status: "expired", error_message: error.message)
+          render json: { error: "session_expired", message: error.message }, status: :conflict
+        else # ApiError, SidecarUnavailableError
+          bc&.update!(status: "error", error_message: error.message)
+          render json: { error: "scraper_unavailable", message: error.message }, status: :bad_gateway
+        end
+      end
+
+      # Provider-aware: each scraped provider has its own network-isolated sidecar.
+      def scraper_client(provider)
+        @scraper_clients ||= {}
+        @scraper_clients[provider] ||= case provider
+        when "trade_republic" then TradeRepublic::ScraperClient.new
+        when "easybank" then EasyBank::ScraperClient.new
+        end
       end
 
       def callback_enable_banking(bc)

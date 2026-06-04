@@ -64,5 +64,23 @@ FactoryBot.define do
       institution_id { "TOMORROW_SOLDE1S" }
       institution_name { "Tomorrow" }
     end
+
+    trait :trade_republic do
+      provider { "trade_republic" }
+      institution_id { "trade_republic" }
+      institution_name { "Trade Republic" }
+      country_code { "DE" }
+      session_id { nil }
+      valid_until { nil }
+    end
+
+    trait :easybank do
+      provider { "easybank" }
+      institution_id { "easybank" }
+      institution_name { "easybank Kreditkarte" }
+      country_code { "DE" }
+      session_id { nil }
+      valid_until { nil }
+    end
   end
 end

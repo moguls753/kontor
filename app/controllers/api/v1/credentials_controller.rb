@@ -4,12 +4,15 @@ module Api
       def show
         eb = Current.user.enable_banking_credential
         gc = Current.user.go_cardless_credential
-
+        tr = Current.user.trade_republic_credential
+        easybank = Current.user.easybank_credential
         llm = Current.user.llm_credential
 
         render json: {
           enable_banking: eb ? { configured: true, app_id: eb.app_id } : { configured: false },
           gocardless: gc ? { configured: true } : { configured: false },
+          trade_republic: tr ? { configured: true, phone_number_masked: tr.phone_number_masked } : { configured: false },
+          easybank: easybank ? { configured: true, username_masked: easybank.username_masked } : { configured: false },
           llm: llm ? { configured: true, base_url: llm.base_url, llm_model: llm.llm_model } : { configured: false }
         }
       end
@@ -25,6 +28,12 @@ module Api
         when "llm"
           return render json: { error: "Already configured" }, status: :conflict if Current.user.llm_credential
           credential = Current.user.build_llm_credential(llm_params)
+        when "trade_republic"
+          return render json: { error: "Already configured" }, status: :conflict if Current.user.trade_republic_credential
+          credential = Current.user.build_trade_republic_credential(tr_params)
+        when "easybank"
+          return render json: { error: "Already configured" }, status: :conflict if Current.user.easybank_credential
+          credential = Current.user.build_easybank_credential(easybank_params)
         else
           return render json: { error: "Invalid provider" }, status: :unprocessable_content
         end
@@ -50,6 +59,14 @@ module Api
           credential = Current.user.llm_credential
           return render json: { error: "Not configured" }, status: :not_found unless credential
           credential.assign_attributes(llm_params)
+        when "trade_republic"
+          credential = Current.user.trade_republic_credential
+          return render json: { error: "Not configured" }, status: :not_found unless credential
+          credential.assign_attributes(tr_params)
+        when "easybank"
+          credential = Current.user.easybank_credential
+          return render json: { error: "Not configured" }, status: :not_found unless credential
+          credential.assign_attributes(easybank_params)
         else
           return render json: { error: "Invalid provider" }, status: :unprocessable_content
         end
@@ -109,6 +126,14 @@ module Api
 
       def llm_params
         params.expect(credentials: [ :base_url, :api_key, :llm_model ])
+      end
+
+      def tr_params
+        params.expect(credentials: [ :phone_number, :pin ])
+      end
+
+      def easybank_params
+        params.expect(credentials: [ :username, :password ])
       end
     end
   end

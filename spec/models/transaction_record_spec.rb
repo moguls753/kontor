@@ -12,6 +12,10 @@
 #  debtor_iban           :string
 #  debtor_name           :string
 #  entry_reference       :string
+#  exchange_rate         :decimal(18, 8)
+#  mcc                   :string
+#  original_amount       :decimal(15, 2)
+#  original_currency     :string(3)
 #  remittance            :text
 #  status                :string           default("booked")
 #  value_date            :date

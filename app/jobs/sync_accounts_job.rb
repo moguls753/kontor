@@ -3,6 +3,13 @@ class SyncAccountsJob < ApplicationJob
 
   retry_on EnableBanking::RateLimitError, wait: 6.hours, attempts: 3
   retry_on GoCardless::RateLimitError, wait: 6.hours, attempts: 3
+  # Trade Republic transient failures: retry, never expire. Safe to register on
+  # this shared job because these classes are only ever raised for the TR branch.
+  retry_on TradeRepublic::SidecarUnavailableError, wait: 10.minutes, attempts: 3
+  retry_on TradeRepublic::ApiError, wait: 10.minutes, attempts: 3
+  # easybank transient failures: same policy, same single-branch safety.
+  retry_on EasyBank::SidecarUnavailableError, wait: 10.minutes, attempts: 3
+  retry_on EasyBank::ApiError, wait: 10.minutes, attempts: 3
 
   def perform(bank_connection_id)
     @bc = BankConnection.find(bank_connection_id)
@@ -16,6 +23,8 @@ class SyncAccountsJob < ApplicationJob
     case @bc.provider
     when "enable_banking" then sync_enable_banking
     when "gocardless" then sync_gocardless
+    when "trade_republic" then sync_trade_republic
+    when "easybank" then sync_easybank
     end
 
     @bc.update!(last_synced_at: Time.current)
@@ -28,11 +37,25 @@ class SyncAccountsJob < ApplicationJob
     raise unless reauth_required?(e)
 
     @bc.update!(status: "expired", error_message: REAUTH_MESSAGE)
+  rescue TradeRepublic::SessionExpiredError
+    # The scraped cookie session lapsed (sidecar 409). This is a *different*
+    # class than the EB/GC ApiError above and isn't caught by reauth_required?,
+    # so it needs its own rescue. Transient TR failures (ApiError /
+    # SidecarUnavailableError) are handled by retry_on and never reach here.
+    @bc.update!(status: "expired", error_message: TR_REAUTH_MESSAGE)
+  rescue EasyBank::SessionExpiredError
+    # The scraped easybank session lapsed (sidecar 409 with error
+    # "session_expired", or a background sync that came back needing an mTAN —
+    # see sync_easybank). Re-pairing is interactive, so expire the connection;
+    # transient failures are handled by retry_on and never reach here.
+    @bc.update!(status: "expired", error_message: EASYBANK_REAUTH_MESSAGE)
   end
 
   private
 
   REAUTH_MESSAGE = "Bank consent has expired. Reconnect this connection to resume syncing."
+  TR_REAUTH_MESSAGE = "Trade Republic session expired. Reconnect to re-pair."
+  EASYBANK_REAUTH_MESSAGE = "easybank session expired. Reconnect to re-pair."
 
   def reauth_required?(error)
     [ 401, 403 ].include?(error.status)
@@ -59,6 +82,131 @@ class SyncAccountsJob < ApplicationJob
       sync_gc_transactions(client, account)
       account.update!(last_synced_at: Time.current)
     end
+  end
+
+  # Balance-only: fetch the single total from the scraper sidecar and persist the
+  # refreshed cookie session. No transactions. A 409 surfaces as
+  # TradeRepublic::SessionExpiredError (handled in the rescue above); transient
+  # failures are retried via retry_on and never expire the connection.
+  def sync_trade_republic
+    credential = @bc.user.trade_republic_credential
+    account = @bc.accounts.first
+    return unless credential && account
+
+    result = scraper_client.balance(
+      phone_number: credential.phone_number,
+      session_blob: credential.session_blob
+    )
+
+    # Persist the refreshed cookie session first, so a flaky balance line never
+    # costs us the (more valuable) renewed session.
+    credential.update!(session_blob: result[:session_blob]) if result[:session_blob].present?
+
+    # Defensive: a 200 with a blank total would otherwise raise and dead-letter
+    # the job (it is neither a SessionExpired nor a retryable error). Skip the
+    # write instead — the next daily run retries. A healthy sidecar always
+    # returns a canonical decimal string.
+    total = result[:total]
+    return if total.blank?
+
+    account.update!(
+      balance_amount: BigDecimal(total.to_s),
+      currency: result[:currency].presence || "EUR",
+      balance_type: "expected",
+      balance_updated_at: Time.current,
+      last_synced_at: Time.current
+    )
+  end
+
+  def scraper_client
+    @scraper_client ||= TradeRepublic::ScraperClient.new
+  end
+
+  # --- easybank ---
+
+  # Full sync (balance + transactions) for the single credit-card account via the
+  # easybank sidecar. ALWAYS backfill_days: 30 here — the 360-day backfill triggers
+  # an SMS mTAN and must NEVER run unattended; it happens only at interactive
+  # connect. A 409 session_expired surfaces as EasyBank::SessionExpiredError
+  # (handled in the rescue above); transient failures are retried via retry_on.
+  def sync_easybank
+    credential = @bc.user.easybank_credential
+    account = @bc.accounts.first
+    return unless credential && account
+
+    result = easybank_scraper_client.sync(
+      username: credential.username,
+      password: credential.password,
+      backfill_days: 30
+    )
+
+    # The background job cannot prompt for an mTAN. If the sidecar signals one is
+    # needed, treat it like an expired session: the user must reconnect (where the
+    # interactive mTAN flow lives). Raised so the rescue arm expires the connection.
+    raise EasyBank::SessionExpiredError.new("mTAN required — reconnect to re-pair") if result["otp_required"]
+
+    update_easybank_account(account, result)
+
+    (result["transactions"] || []).each do |tx|
+      upsert_easybank_transaction(account, tx)
+    end
+  end
+
+  def update_easybank_account(account, result)
+    balance = result["balance"] || {}
+    acct = result["account"] || {}
+
+    account.update!(
+      # Signed string straight from the sidecar (a credit-card balance owed is
+      # negative). BigDecimal keeps full precision.
+      balance_amount: balance["value"].present? ? BigDecimal(balance["value"]) : account.balance_amount,
+      currency: balance["currency"].presence || account.currency,
+      balance_type: "expected",
+      iban: acct["iban"].presence || account.iban,
+      name: acct["name"].presence || account.name,
+      account_type: acct["type"].presence || account.account_type,
+      credit_limit: money_value(acct["credit_limit"]),
+      available_credit: money_value(acct["available_credit"]),
+      balance_updated_at: Time.current,
+      last_synced_at: Time.current
+    )
+  end
+
+  # find_or_initialize on the sidecar's stable id keeps this idempotent — a
+  # duplicate page-1 capture on a backfill resume updates in place rather than
+  # inserting twice. Mirrors upsert_eb_transaction's shape/SAVE behavior.
+  def upsert_easybank_transaction(account, tx)
+    record = account.transaction_records.find_or_initialize_by(transaction_id: tx["id"])
+
+    record.assign_attributes(
+      amount: BigDecimal(tx["amount"]), # already SIGNED (Debit negative, Credit positive)
+      currency: tx["currency"],
+      booking_date: Date.parse(tx["booking_date"]),
+      value_date: tx["value_date"].present? ? Date.parse(tx["value_date"]) : nil,
+      status: tx["is_pending"] ? "pending" : "booked",
+      remittance: tx["description"],
+      # The LLM categorizer reads remittance + creditor_name — surface the merchant
+      # there so card purchases get a usable categorization signal.
+      creditor_name: tx["merchant"],
+      original_amount: tx["original_amount"].present? ? BigDecimal(tx["original_amount"]) : nil,
+      original_currency: tx["original_currency"],
+      exchange_rate: tx["exchange_rate"].present? ? BigDecimal(tx["exchange_rate"].to_s) : nil,
+      mcc: tx["mcc"]
+    )
+    record.save!
+  end
+
+  # credit_limit / available_credit arrive as { "value", "currency" } objects or
+  # null. We only persist the decimal value (currency is the account's).
+  def money_value(obj)
+    return nil if obj.blank?
+
+    value = obj["value"]
+    value.present? ? BigDecimal(value) : nil
+  end
+
+  def easybank_scraper_client
+    @easybank_scraper_client ||= EasyBank::ScraperClient.new
   end
 
   # --- Enable Banking ---

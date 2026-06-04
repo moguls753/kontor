@@ -33,7 +33,7 @@ class BankConnection < ApplicationRecord
   belongs_to :user
   has_many :accounts, dependent: :destroy
 
-  enum :provider, { enable_banking: "enable_banking", gocardless: "gocardless" }
+  enum :provider, { enable_banking: "enable_banking", gocardless: "gocardless", trade_republic: "trade_republic", easybank: "easybank" }
   enum :status, { pending: "pending", authorized: "authorized", expired: "expired", error: "error" }
 
   validates :institution_id, presence: true

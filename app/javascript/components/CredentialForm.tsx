@@ -5,7 +5,7 @@ import { Btn } from './ui'
 import Icon from './Icon'
 
 interface CredentialFormProps {
-  provider: 'enable_banking' | 'gocardless' | 'llm'
+  provider: 'enable_banking' | 'gocardless' | 'llm' | 'trade_republic'
   isConfigured: boolean
   onSaved: () => void
   initialValues?: Record<string, string>
@@ -23,6 +23,10 @@ export default function CredentialForm({ provider, isConfigured, onSaved, initia
   // GoCardless fields
   const [secretId, setSecretId] = useState('')
   const [secretKey, setSecretKey] = useState('')
+
+  // Trade Republic fields
+  const [phone, setPhone] = useState('')
+  const [pin, setPin] = useState('')
 
   // LLM fields
   const [baseUrl, setBaseUrl] = useState(initialValues?.base_url ?? '')
@@ -45,6 +49,8 @@ export default function CredentialForm({ provider, isConfigured, onSaved, initia
       credentials = { app_id: appId, private_key_pem: privateKey }
     } else if (provider === 'gocardless') {
       credentials = { secret_id: secretId, secret_key: secretKey }
+    } else if (provider === 'trade_republic') {
+      credentials = { phone_number: phone, pin }
     } else {
       credentials = { base_url: baseUrl, llm_model: llmModel, api_key: apiKey || '' }
     }
@@ -103,6 +109,17 @@ export default function CredentialForm({ provider, isConfigured, onSaved, initia
           <label className="block">
             <span className="field-label">{t('settings.secret_key')}</span>
             <input className="field field-mono" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} placeholder="••••••••" required />
+          </label>
+        </div>
+      ) : provider === 'trade_republic' ? (
+        <div className="settings-2col grid grid-cols-[1fr_140px] gap-[15px]">
+          <label className="block">
+            <span className="field-label">{t('settings.tr_phone')}</span>
+            <input className="field field-mono" value={phone} onChange={e => setPhone(e.target.value)} placeholder={t('settings.tr_phone_placeholder')} autoComplete="off" required />
+          </label>
+          <label className="block">
+            <span className="field-label">{t('settings.tr_pin')}</span>
+            <input className="field field-mono" type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value)} placeholder="••••" autoComplete="off" required />
           </label>
         </div>
       ) : (

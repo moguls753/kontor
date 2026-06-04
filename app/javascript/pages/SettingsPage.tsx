@@ -4,7 +4,8 @@ import { api } from '../lib/api'
 import LanguageSwitcher from '../components/LanguageSwitcher'
 import CredentialForm from '../components/CredentialForm'
 import ConnectBankFlow from '../components/ConnectBankFlow'
-import { Btn } from '../components/ui'
+import TradeRepublicPairingModal from '../components/TradeRepublicPairingModal'
+import { Btn, Eyebrow } from '../components/ui'
 import Icon from '../components/Icon'
 import type { IconName } from '../components/Icon'
 import type { CredentialsStatus } from '../lib/types'
@@ -15,6 +16,8 @@ export default function SettingsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
+  const [showTrModal, setShowTrModal] = useState(false)
+  const [trNotice, setTrNotice] = useState('')
 
   const fetchCredentials = async () => {
     setIsLoading(true)
@@ -39,6 +42,8 @@ export default function SettingsPage() {
       <div className="page-head"><h1 className="page-title">{t('settings.title')}</h1></div>
 
       <div className="grid gap-4">
+        <Eyebrow>{t('settings.group_general')}</Eyebrow>
+
         {/* Language */}
         <SettingsPanel icon="settings" title={t('settings.language')} desc={t('settings.language_description')}>
           <LanguageSwitcher />
@@ -77,6 +82,8 @@ export default function SettingsPage() {
               )}
             </SettingsPanel>
 
+            <Eyebrow className="mt-2">{t('settings.group_open_banking')}</Eyebrow>
+
             {/* Enable Banking */}
             <SettingsPanel icon="bank" title={t('settings.enable_banking')} desc={t('settings.enable_banking_description')}
               status={credentials.enable_banking.configured}
@@ -114,13 +121,59 @@ export default function SettingsPage() {
               )}
             </SettingsPanel>
 
-            {/* Connect a bank */}
+            {/* Connect a bank (Open Banking only) */}
             <SettingsPanel icon="plus" title={t('settings.connect_bank')} desc={t('settings.connect_bank_description')}>
               <ConnectBankFlow credentials={credentials} />
+            </SettingsPanel>
+
+            <Eyebrow className="mt-2">{t('settings.group_direct')}</Eyebrow>
+
+            {/* Trade Republic */}
+            <SettingsPanel icon="shield" title={t('settings.trade_republic')} desc={t('settings.trade_republic_description')}
+              status={credentials.trade_republic.configured}
+              statusLabel={credentials.trade_republic.configured ? t('settings.configured') : t('settings.not_configured')}
+              action={
+                <div className="flex items-center gap-2">
+                  {credentials.trade_republic.configured && (
+                    <Btn variant="primary" size="sm" icon="link" onClick={() => { setTrNotice(''); setShowTrModal(true) }}>
+                      {t('settings.tr_connect')}
+                    </Btn>
+                  )}
+                  <Btn variant="ghost" size="sm" onClick={() => toggleProvider('trade_republic')}>
+                    {credentials.trade_republic.configured ? t('settings.update_credentials') : t('settings.configure')}
+                  </Btn>
+                </div>
+              }>
+              {credentials.trade_republic.configured && credentials.trade_republic.phone_number_masked && (
+                <p className={'text-ink-faint mono text-[11.5px] ' + (expandedProvider === 'trade_republic' || trNotice ? 'mb-[14px]' : 'mb-0')}>
+                  {credentials.trade_republic.phone_number_masked}
+                </p>
+              )}
+              {trNotice && (
+                <div className="flex items-center gap-2 text-income text-[12.5px] font-medium mb-[14px]">
+                  <Icon name="check" size={15} />{trNotice}
+                </div>
+              )}
+              {expandedProvider === 'trade_republic' && (
+                <CredentialForm
+                  provider="trade_republic"
+                  isConfigured={credentials.trade_republic.configured}
+                  onSaved={() => { fetchCredentials(); setExpandedProvider(null) }}
+                />
+              )}
             </SettingsPanel>
           </>
         ) : null}
       </div>
+
+      {showTrModal && (
+        <TradeRepublicPairingModal
+          title={t('trade_republic.pair_title')}
+          initiate={() => api('/api/v1/bank_connections', { method: 'POST', body: { provider: 'trade_republic' } })}
+          onConnected={() => { setShowTrModal(false); setTrNotice(t('trade_republic.connected_notice')) }}
+          onClose={() => setShowTrModal(false)}
+        />
+      )}
     </div>
   )
 }
