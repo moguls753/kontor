@@ -353,10 +353,13 @@ def login(username: str, password: str, backfill_days: int = 30) -> dict:
     /mtan resumes the exact same intended range.
     """
     _evict_expired()
-    ctx, page = _launch()
-    capture = _Capture()
-    capture.attach(page)
+    ctx = None
     try:
+        # _launch() (the Chromium spawn) lives INSIDE the try so a launch failure
+        # surfaces as a clean TransientError (503), not an unhandled 500.
+        ctx, page = _launch()
+        capture = _Capture()
+        capture.attach(page)
         _fill_login(page, username, password)
 
         # Wait for the bank to settle into ONE of two states, pumping the event
