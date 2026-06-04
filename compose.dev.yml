@@ -1,0 +1,26 @@
+# Local-development override.
+#
+# Publishes the tr-scraper sidecar to 127.0.0.1 so a host-run Rails dev server
+# (`bin/dev`) can reach it. To make a host-published port work, the container
+# also needs a bridge attachment (`web`) — an internal-only network has no host
+# route. EGRESS is still funneled through squid by the exported HTTPS_PROXY (all
+# of pytr's HTTP clients honour it, proven by the Phase-1 gate), so TR traffic
+# stays on the allowlist; the bridge only adds a loopback INGRESS port.
+#
+# DEV ONLY. Production uses compose.scraper.yml alone: the sidecar stays on the
+# internal appnet, unpublished, and kontor reaches it over that internal network.
+#
+# Usage — run only the sidecar + proxy (not the dockerized Rails):
+#   docker compose -f compose.scraper.yml -f compose.dev.yml up -d egress-proxy tr-scraper
+# Then start your Rails dev server with the sidecar wired in:
+#   SCRAPER_SIDECAR_URL=http://localhost:8099 \
+#   SCRAPER_SIDECAR_TOKEN=$(grep -m1 '^SCRAPER_SIDECAR_TOKEN=' .env | cut -d= -f2-) \
+#   bin/dev
+
+services:
+  tr-scraper:
+    networks:
+      - appnet
+      - web
+    ports:
+      - "127.0.0.1:8099:8000"

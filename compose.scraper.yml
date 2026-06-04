@@ -1,0 +1,124 @@
+# Trade Republic scraper stack — for a TrueNAS "Custom App" (docker-compose).
+#
+# Topology (the egress isolation is the whole point — see docs/trade-republic.md):
+#
+#   kontor (Rails) ──HTTP+X-Sidecar-Token──► tr-scraper (pytr)
+#        │  appnet + web                          │  appnet ONLY
+#        │  EB/GC/LLM go direct to internet       │  no internet, no resolver
+#        ▼                                        ▼  HTTPS_PROXY=egress-proxy
+#   (published port)                         egress-proxy (squid)
+#                                              appnet + web; does the DNS;
+#                                              CONNECT:443 allowlist only:
+#                                              .traderepublic.com .awswaf.com
+#
+# - tr-scraper sits on `appnet` (internal) only: it has no route off the box and
+#   no working DNS, so its sole path out is the squid allowlist.
+# - kontor MUST run with RAILS_ENV=production AND SOLID_QUEUE_IN_PUMA=true or the
+#   recurring scheduler never runs in Puma (config/puma.rb) — that would stop the
+#   daily TR balance job *and* the existing 6h account sync.
+#
+# Phase-1 egress gate runs only the two sidecar services:
+#   docker compose -f compose.scraper.yml up --build egress-proxy tr-scraper
+#
+# Required env (see .env.example): SCRAPER_SIDECAR_TOKEN, and for kontor also
+# RAILS_MASTER_KEY.
+
+name: kontor-tr
+
+services:
+  egress-proxy:
+    image: ubuntu/squid:latest
+    restart: unless-stopped
+    volumes:
+      - ./egress-proxy/squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - appnet
+      - web
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3128"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  tr-scraper:
+    build: ./scraper
+    restart: unless-stopped
+    depends_on:
+      egress-proxy:
+        condition: service_healthy
+    environment:
+      SIDECAR_TOKEN: ${SCRAPER_SIDECAR_TOKEN:?set SCRAPER_SIDECAR_TOKEN in .env}
+      SESSION_SCRATCH_DIR: /scratch
+      # Every HTTP client (stdlib requests, curl_cffi, websockets) must inherit
+      # the proxy, so export it in both cases. NO_PROXY only covers loopback so
+      # the healthcheck reaches the local server directly.
+      HTTPS_PROXY: http://egress-proxy:3128
+      https_proxy: http://egress-proxy:3128
+      HTTP_PROXY: http://egress-proxy:3128
+      http_proxy: http://egress-proxy:3128
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    networks:
+      - appnet
+    # Hardening: no route out except the proxy, read-only root, no extra caps.
+    read_only: true
+    tmpfs:
+      - /scratch
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request as u,sys; o=u.build_opener(u.ProxyHandler({})); sys.exit(0 if o.open('http://127.0.0.1:8000/health',timeout=3).status==200 else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  kontor:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      egress-proxy:
+        condition: service_healthy
+      tr-scraper:
+        condition: service_healthy
+    environment:
+      RAILS_ENV: production
+      # Required so Solid Queue's recurring scheduler runs inside Puma.
+      SOLID_QUEUE_IN_PUMA: "true"
+      RAILS_MASTER_KEY: ${RAILS_MASTER_KEY}
+      SCRAPER_SIDECAR_URL: http://tr-scraper:8000
+      SCRAPER_SIDECAR_TOKEN: ${SCRAPER_SIDECAR_TOKEN:?set SCRAPER_SIDECAR_TOKEN in .env}
+    volumes:
+      - kontor_storage:/rails/storage
+    ports:
+      - "3000:80"
+    networks:
+      - appnet
+      - web
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/up"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+networks:
+  # Internal: no gateway to the host/internet, IPv6 disabled so there is no
+  # alternative route for the scraper to slip out on.
+  appnet:
+    internal: true
+    enable_ipv6: false
+  # Internet-facing bridge for kontor (EB/GC/LLM) and the proxy's upstream.
+  web:
+    driver: bridge
+
+volumes:
+  kontor_storage:

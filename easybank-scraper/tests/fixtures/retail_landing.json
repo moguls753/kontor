@@ -1,0 +1,27 @@
+{
+  "Result": { "IsSuccess": true },
+  "Item": {
+    "InitialCallResponses": [
+      {
+        "Response": {
+          "Item": {
+            "Accounts": [
+              {
+                "AccountType": "CreditCard",
+                "IBAN": "DE00100100001234567890",
+                "Number": "1234567890",
+                "FullNumber": "DE00100100001234567890",
+                "AccountName": "Barclays Visa",
+                "ProductName": "Barclays Visa Card",
+                "CurrentBalance": { "Value": -123.45, "Currency": { "Code": "EUR" } },
+                "CurrentCreditLimit": { "Value": 2000.00, "Currency": { "Code": "EUR" } },
+                "TotalCreditLimit": { "Value": 2500.00, "Currency": { "Code": "EUR" } },
+                "AvailableCreditLimit": { "Value": 1876.55, "Currency": { "Code": "EUR" } }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

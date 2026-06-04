@@ -1,0 +1,6 @@
+# Dev/test dependencies for the sidecar (not shipped in the runtime image).
+#
+# Run the tests inside the built image (it already has pytr + the awswaf stack):
+#   docker run --rm -e SIDECAR_TOKEN=test -v "$PWD/scraper/tests:/app/tests" \
+#     kontor-tr-scraper:dev sh -c "pip install -q pytest && python -m pytest /app/tests -q"
+pytest>=8

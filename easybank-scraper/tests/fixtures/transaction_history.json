@@ -1,0 +1,102 @@
+{
+  "Result": { "IsSuccess": true },
+  "Item": {
+    "InitialCallResponses": [
+      {
+        "Response": {
+          "Item": {
+            "OTPRequired": false,
+            "HasMore": false,
+            "TotalRowCount": 5,
+            "Transactions": [
+              {
+                "InternalID": 900001,
+                "ReferenceNumber": "REF-900001",
+                "TransactionNature": "Debit",
+                "TransactionType": "Unbilled",
+                "Description": "REWE Markt GmbH",
+                "MerchantName": "REWE",
+                "MCCCode": "5411",
+                "IsPending": false,
+                "ExchangeRate": 0.0,
+                "FormattedLocalAmount": "-26,80 €",
+                "BookingDate": "0001-01-01T00:00:00+00:00",
+                "PostingDate": "2026-05-31T00:00:00+00:00",
+                "ValueDate": "2026-05-30T08:00:00+00:00",
+                "TransactionDate": "2026-05-30T08:00:00+00:00",
+                "Amount": { "Value": 26.80, "Currency": { "Code": "EUR" } },
+                "LocalCurrencyAmount": { "Value": 26.80, "Currency": { "Code": "EUR" } }
+              },
+              {
+                "InternalID": 900002,
+                "ReferenceNumber": "REF-900002",
+                "TransactionNature": "Debit",
+                "TransactionType": "Unbilled",
+                "Description": "AMZN Mktp US",
+                "MerchantData": { "Name": "Amazon US" },
+                "MCCCode": "5942",
+                "IsPending": false,
+                "ExchangeRate": 0.9123,
+                "FormattedLocalAmount": "-49,55 €",
+                "FormattedAmount": "-54,32 USD",
+                "BookingDate": "0001-01-01T00:00:00+00:00",
+                "ValueDate": "2026-05-28T19:16:16+00:00",
+                "TransactionDate": "2026-05-28T19:16:16+00:00",
+                "Amount": { "Value": 54.32, "Currency": { "Code": "USD" } },
+                "LocalCurrencyAmount": { "Value": 49.55, "Currency": { "Code": "EUR" } }
+              },
+              {
+                "InternalID": 900003,
+                "ReferenceNumber": "REF-900003",
+                "TransactionNature": "Credit",
+                "TransactionType": "Billed",
+                "Description": "Per Lastschrift dankend erhalten",
+                "MerchantName": null,
+                "MCCCode": null,
+                "IsPending": false,
+                "ExchangeRate": 0.0,
+                "FormattedLocalAmount": "+418,39 €",
+                "BookingDate": "2026-05-25T00:00:00+00:00",
+                "ValueDate": "2026-05-25T00:00:00+00:00",
+                "Amount": { "Value": 418.39, "Currency": { "Code": "EUR" } },
+                "LocalCurrencyAmount": { "Value": 418.39, "Currency": { "Code": "EUR" } }
+              },
+              {
+                "ReferenceNumber": "REF-900004",
+                "TransactionNature": "Debit",
+                "TransactionType": "Pending",
+                "Description": "DM Drogeriemarkt",
+                "MerchantName": "dm",
+                "MCCCode": "5912",
+                "IsPending": false,
+                "ExchangeRate": 0.0,
+                "FormattedLocalAmount": "-12,99 €",
+                "BookingDate": "0001-01-01T00:00:00+00:00",
+                "PostingDate": "0001-01-01T00:00:00+00:00",
+                "ValueDate": "2026-06-01T07:40:03+00:00",
+                "TransactionDate": "2026-06-01T07:40:03+00:00",
+                "Amount": { "Value": 12.99, "Currency": { "Code": "EUR" } },
+                "LocalCurrencyAmount": { "Value": 12.99, "Currency": { "Code": "EUR" } }
+              },
+              {
+                "InternalID": 900005,
+                "ReferenceNumber": "REF-900005",
+                "TransactionType": "Unbilled",
+                "Description": "Sign fallback (no TransactionNature)",
+                "MerchantName": "Mystery Shop",
+                "MCCCode": "5999",
+                "IsPending": false,
+                "ExchangeRate": 0.0,
+                "FormattedLocalAmount": "-7,77 €",
+                "BookingDate": "0001-01-01T00:00:00+00:00",
+                "ValueDate": "2026-05-20T10:00:00+00:00",
+                "Amount": { "Value": 7.77, "Currency": { "Code": "EUR" } },
+                "LocalCurrencyAmount": { "Value": 7.77, "Currency": { "Code": "EUR" } }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

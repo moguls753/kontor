@@ -1,0 +1,104 @@
+# easybank / Barclaycard DE scraper stack — for a TrueNAS "Custom App"
+# (docker-compose). Standalone from compose.scraper.yml (the Trade Republic
+# stack), which is left untouched; run them side by side or independently.
+#
+# Topology (egress isolation is the whole point — mirrors the TR stack):
+#
+#   kontor (Rails) ──HTTP+X-Sidecar-Token──► easybank-scraper (CloakBrowser)
+#        (separate stack / direct internet)        │  ebnet ONLY
+#                                                   │  no internet, no resolver
+#                                                   ▼  HTTPS_PROXY=easybank-egress
+#                                              easybank-egress-proxy (squid)
+#                                                ebnet + web; does the DNS;
+#                                                CONNECT:443 allowlist only:
+#                                                .easybank.de .crashninja.net
+#
+# - easybank-scraper sits on `ebnet` (internal) only: no route off the box and no
+#   working DNS, so its sole path out is the squid allowlist.
+# - UNLIKE tr-scraper, this service is NOT read_only and NOT cap-stripped to the
+#   bone: a real Chromium needs to write its profile, shm and temp dirs and needs
+#   the syscalls to spawn renderer processes. The egress lock-down (internal
+#   network + allowlist proxy) is what contains it, not a read-only rootfs.
+#
+# Run just the two sidecar services (Phase-1 egress gate):
+#   docker compose -f compose.easybank.yml up --build easybank-egress-proxy easybank-scraper
+#
+# Required env (see .env.example): EASYBANK_SIDECAR_TOKEN.
+
+name: kontor-easybank
+
+services:
+  easybank-egress-proxy:
+    image: ubuntu/squid:latest
+    restart: unless-stopped
+    volumes:
+      - ./egress-proxy/easybank-squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - ebnet
+      - web
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3128"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  easybank-scraper:
+    build: ./easybank-scraper
+    restart: unless-stopped
+    depends_on:
+      easybank-egress-proxy:
+        condition: service_healthy
+    environment:
+      SIDECAR_TOKEN: ${EASYBANK_SIDECAR_TOKEN:?set EASYBANK_SIDECAR_TOKEN in .env}
+      PROFILE_DIR: /profile
+      HEADLESS: "true"
+      # The browser's ONLY egress: point every client at the easybank proxy. The
+      # PROXY_URL var is what config.py / CloakBrowser read for the browser; the
+      # HTTP(S)_PROXY env vars cover any incidental stdlib/library traffic too.
+      PROXY_URL: http://easybank-egress-proxy:3128
+      HTTPS_PROXY: http://easybank-egress-proxy:3128
+      https_proxy: http://easybank-egress-proxy:3128
+      HTTP_PROXY: http://easybank-egress-proxy:3128
+      http_proxy: http://easybank-egress-proxy:3128
+      # NO_PROXY only covers loopback so the healthcheck reaches the local server
+      # directly without trying to tunnel through squid.
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    networks:
+      - ebnet
+    # Persistent trusted-device profile (rw): this IS the "remembered device" the
+    # bank checks, so it must survive restarts or every login faces a fresh mTAN.
+    volumes:
+      - easybank-profile:/profile
+    # Chromium needs a sane /dev/shm or it crashes renderers under memory pressure.
+    shm_size: "1gb"
+    # Deliberately NOT read_only and NOT cap_drop ALL (see header): a real browser
+    # writes its profile/temp and spawns sandboxed child processes. Keep the one
+    # cheap, safe hardening that doesn't break Chromium.
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request as u,sys; o=u.build_opener(u.ProxyHandler({})); sys.exit(0 if o.open('http://127.0.0.1:8000/health',timeout=3).status==200 else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  # Internal: no gateway to the host/internet, IPv6 disabled so there is no
+  # alternative route for the scraper to slip out on. Distinct name from the TR
+  # stack's `appnet` so the two stacks never share a network.
+  ebnet:
+    internal: true
+    enable_ipv6: false
+  # Internet-facing bridge for the proxy's upstream only.
+  web:
+    driver: bridge
+
+volumes:
+  easybank-profile:

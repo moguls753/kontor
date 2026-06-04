@@ -1,0 +1,13 @@
+# Runtime dependencies for the easybank-scraper sidecar.
+#
+# Unlike the tr-scraper (which stubs playwright and uses a pure-Python WAF
+# solver), this sidecar drives a REAL stealth Chromium: easybank fingerprints
+# the device and relies on a trusted-device cookie that only a genuine browser
+# reproduces. cloakbrowser is the stealth Playwright wrapper; it auto-downloads
+# its own patched Chromium (~200MB) on first launch (see Dockerfile / README).
+
+cloakbrowser
+playwright
+
+fastapi>=0.115
+uvicorn[standard]>=0.32

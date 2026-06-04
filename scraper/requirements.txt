@@ -1,0 +1,25 @@
+# Runtime dependencies for the tr-scraper sidecar.
+#
+# pytr itself is installed separately and pinned exact in the Dockerfile with
+# --no-deps, so that its `playwright` dependency is NOT pulled in (we ship a
+# stub and use the pure-Python awswaf solver instead). The list below is pytr
+# 0.4.9's own dependency set minus playwright, plus the web server.
+#
+# websockets is pinned >=16 deliberately: squid answers the proxy CONNECT with
+# HTTP/1.0, and websockets <16 rejects HTTP/1.0 proxy replies, which would break
+# the wss://api.traderepublic.com path.
+
+babel
+certifi
+coloredlogs
+cryptography
+curl-cffi
+packaging
+pathvalidate
+pygments
+requests-futures
+shtab
+websockets>=16,<17
+
+fastapi>=0.115
+uvicorn[standard]>=0.32

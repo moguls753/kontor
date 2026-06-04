@@ -1,0 +1,5 @@
+# Dev/test dependencies for the easybank-scraper sidecar (not shipped in the
+# runtime image). The normalization tests are PURE Python and need no browser:
+#
+#   uv run --with pytest python -m pytest easybank-scraper/tests -q
+pytest>=8
