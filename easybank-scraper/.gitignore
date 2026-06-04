@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local CloakBrowser cache / runtime profile (never commit a real profile)
+.cloakbrowser/
+profile/

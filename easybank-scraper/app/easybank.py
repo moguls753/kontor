@@ -80,6 +80,23 @@ class TransientError(ScraperError):
 
 
 # --- captured-response holder ------------------------------------------------
+def _has_transactions(body) -> bool:
+    """True if a decoded JSON payload carries a non-empty Transactions[] array
+    anywhere. The long-range / post-SCA history can arrive under a different op
+    name than AccountTransactionHistory, so we detect it by shape, not URL."""
+    stack = [body]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            txs = node.get("Transactions")
+            if isinstance(txs, list) and txs:
+                return True
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return False
+
+
 class _Capture:
     """Accumulates the JSON the Angular app fetches. RetailLanding overwrites
     (one dashboard); history accumulates so paginated "Weitere Umsätze" pages
@@ -97,8 +114,16 @@ class _Capture:
             try:
                 if "/services/flow/RetailLanding" in url:
                     self.landing = resp.json()
-                elif "/services/flow/AccountTransactionHistory" in url:
+                    return
+                if "/services/flow/AccountTransactionHistory" in url:
                     self.history_pages.append(resp.json())
+                    return
+                # The long-range / post-SCA history may arrive under a different
+                # op name — capture any POST JSON that carries Transactions[].
+                if resp.request.method == "POST":
+                    body = resp.json()
+                    if _has_transactions(body):
+                        self.history_pages.append(body)
             except Exception:
                 # A non-JSON or partially-read body is just a miss; never let a
                 # capture callback raise into Playwright's event loop.
@@ -284,54 +309,78 @@ def _open_transaction_list(page) -> None:
         pass
 
 
-def _select_long_range(page) -> None:
-    """Open the 'Zeitraum' control and pick the longest range for a backfill.
-
-    This deliberately triggers the bank's OTPRequired (mTAN) gate — releasing
-    history that far back needs a second factor. The caller only does this for an
-    explicit long backfill; the default 30-day path never touches this control,
-    so it never provokes an mTAN.
-    """
+def _select_range(page, option_name: str, native_needle: str) -> None:
+    """Pick a 'Zeitraum' option. The control is a Select2 widget over a hidden
+    native <select id="select-DateRangeSelectorCombobox"> (options 0=30d,
+    1=since-statement, 2=90d, 3=180d, 4="Letzten 360 Tage", 5=custom). Drive the
+    visible widget like a human; fall back to setting the native value and firing
+    change for both the native binding and Select2 (which binds through jQuery)."""
     try:
-        page.get_by_text("Zeitraum", exact=False).first.click(timeout=config.ACTION_TIMEOUT_MS)
+        page.locator("#select2-select-DateRangeSelectorCombobox-container").click(timeout=config.ACTION_TIMEOUT_MS)
     except Exception:
-        return
-    # Prefer an explicit "360"/"Tage" option; otherwise take the last (longest)
-    # option offered. Best-effort — selectors here are the bank's, not ours.
-    for label in ("360", "Letzte 360 Tage", "Längster", "Gesamter"):
         try:
-            opt = page.get_by_text(label, exact=False)
-            if opt.count() > 0:
-                opt.first.click(timeout=config.ACTION_TIMEOUT_MS)
-                return
+            page.get_by_label("Zeitraum").click(timeout=config.ACTION_TIMEOUT_MS)
         except Exception:
-            continue
+            pass
     try:
-        opts = page.get_by_role("option")
-        if opts.count() > 0:
-            opts.last.click(timeout=config.ACTION_TIMEOUT_MS)
+        page.get_by_role("option", name=option_name).click(timeout=config.ACTION_TIMEOUT_MS)
+        return
+    except Exception:
+        pass
+    try:
+        page.evaluate(
+            """(needle) => {
+                 const s = document.querySelector('#select-DateRangeSelectorCombobox');
+                 if (!s) return;
+                 const o = Array.from(s.options).find(x => x.text.includes(needle));
+                 if (o) { s.value = o.value; }
+                 s.dispatchEvent(new Event('change', { bubbles: true }));
+                 if (window.jQuery) window.jQuery(s).trigger('change');
+               }""",
+            native_needle,
+        )
     except Exception:
         pass
 
 
+def _select_long_range(page) -> None:
+    """Pick 'Letzten 360 Tage'. This deliberately trips the bank's OTPRequired
+    (mTAN) gate — releasing history that far back needs a second factor. Only the
+    explicit long backfill calls this; the default 30-day path never does, so it
+    never provokes an mTAN."""
+    _select_range(page, "Letzten 360 Tage", "360")
+
+
+def _find_more_button(page):
+    """Locate the 'show more transactions' control. The label varies, so try the
+    known variants by role then by text and return the first visible match."""
+    for name in ("Mehr anzeigen", "Weitere Umsätze", "Mehr laden", "Mehr", "Weitere"):
+        for loc in (page.get_by_role("button", name=name), page.get_by_text(name, exact=False)):
+            try:
+                if loc.count() and loc.first.is_visible():
+                    return loc.first
+            except Exception:
+                continue
+    return None
+
+
 def _paginate(page, capture: _Capture) -> None:
-    """Click 'Weitere Umsätze' until it is gone or we hit PAGE_CAP. Each click
-    fires another AccountTransactionHistory call that the capture appends. LOG
-    (never raise) if we stop early because of the cap."""
-    for clicked in range(config.PAGE_CAP):
+    """Smash the 'show more' button until it is gone, a click yields no new page,
+    or we hit PAGE_CAP. Each click fires another history call the capture appends."""
+    for _ in range(config.PAGE_CAP):
+        more = _find_more_button(page)
+        if more is None:
+            return
         try:
-            more = page.get_by_role("button", name="Weitere Umsätze")
-            if more.count() == 0:
-                more = page.get_by_text("Weitere Umsätze", exact=False)
-            if more.count() == 0 or not more.first.is_enabled():
-                return
             before = len(capture.history_pages)
-            more.first.click(timeout=config.ACTION_TIMEOUT_MS)
-            # Wait for the click's history page to land before clicking again
-            # (wait_for_timeout pumps the event loop; time.sleep would not).
+            more.click(timeout=config.ACTION_TIMEOUT_MS)
+            # wait_for_timeout pumps the event loop so the captured page lands;
+            # time.sleep would not.
             end = time.monotonic() + (config.ACTION_TIMEOUT_MS / 1000)
             while time.monotonic() < end and len(capture.history_pages) == before:
                 page.wait_for_timeout(300)
+            if len(capture.history_pages) == before:
+                return  # click produced no new page -> end of history
         except Exception:
             return
     log.info("pagination hit PAGE_CAP=%s; transaction history may be truncated", config.PAGE_CAP)
@@ -406,17 +455,31 @@ def submit_mtan(pairing_id: str, code: str) -> dict:
     keep_alive = False
     try:
         _enter_mtan_code(page, code)
+        log.info("mtan: code submitted; waiting for the modal to clear")
 
-        # Pump-wait for the outcome: dashboard => success; modal still present =>
-        # the code was wrong/expired (retryable).
-        outcome = _await_login_outcome(page, capture, config.NAV_TIMEOUT_MS / 1000)
-        if outcome == "mtan":
+        # The code is correct iff the modal clears; a modal that persists past the
+        # window => a wrong/expired code (retryable).
+        deadline = time.monotonic() + config.NAV_TIMEOUT_MS / 1000
+        while time.monotonic() < deadline and _looks_like_mtan(page):
+            page.wait_for_timeout(500)
+        if _looks_like_mtan(page):
             keep_alive = True
+            log.info("mtan: modal still present -> wrong/expired code")
             raise MtanFailed("That mTAN code was wrong or expired. Request a new one.")
-        if outcome == "timeout":
-            raise TransientError("The bank did not load the dashboard after the mTAN.")
 
-        return _complete_after_landing(page, capture, p.backfill_days)
+        # Code accepted: the bank is ALREADY loading the long range ("Einen Moment
+        # Geduld", Zeitraum still 360). Do NOT touch the range control — just wait
+        # for the released history to land (a new captured page), then paginate via
+        # "Weitere Umsätze". The history arrives via the TransactionViewDirective,
+        # captured by shape in _Capture (see _has_transactions), not the flow op.
+        log.info("mtan: accepted; waiting for the long-range history to load")
+        before = len(capture.history_pages)
+        deadline = time.monotonic() + config.NAV_TIMEOUT_MS / 1000
+        while time.monotonic() < deadline and len(capture.history_pages) <= before:
+            page.wait_for_timeout(500)
+        log.info("mtan: history pages now %s (was %s)", len(capture.history_pages), before)
+        _paginate(page, capture)
+        return _build_sync_result(capture)
     except MtanFailed:
         raise
     except ScraperError:
@@ -479,27 +542,44 @@ def _wait_for_history(page, capture: _Capture, deadline_s: float) -> None:
 
 
 def _enter_mtan_code(page, code: str) -> None:
-    """Type the mTAN. Banks split it into per-digit boxes that auto-advance, so
-    focus the first OTP box and type the whole string; fall back to a single
-    field, then submit. Never logs the code."""
-    typed = False
+    """Enter the mTAN and submit. The bank shows six per-digit boxes, but those
+    (#OTPPassword-Char*) are DISABLED display mirrors — the real, validated input
+    is the single #OTPPassword-Full-field. Fill it (fall back to the Char boxes /
+    a generic field), then click Bestätigen. Never logs the code."""
+    # The mTAN widget exposes #OTPPassword-Full-field (a single field that accepts
+    # the whole code and IS what the bank validates — proven live) plus six
+    # #OTPPassword-Char* boxes that aren't directly fillable here. Fill the
+    # Full-field first; fall back to the Char boxes, then a generic field.
+    entered = False
     try:
-        boxes = page.locator("input[autocomplete='one-time-code'], input[inputmode='numeric'], input[maxlength='1']")
-        if boxes.count() > 0:
-            boxes.first.click(timeout=config.ACTION_TIMEOUT_MS)
-            page.keyboard.type(code, delay=40)  # digits auto-advance across boxes
-            typed = True
-    except Exception:
-        pass
-    if not typed:
+        full = page.locator("#OTPPassword-Full-field")
+        if full.count():
+            full.first.fill(code, timeout=config.ACTION_TIMEOUT_MS)
+            entered = True
+            log.info("mtan: filled OTPPassword-Full-field")
+    except Exception as e:
+        log.info("mtan: full-field fill failed: %s", type(e).__name__)
+    if not entered:
+        chars = page.locator("input[id^='OTPPassword-Char']")
+        try:
+            if chars.count() >= len(code):
+                for i, ch in enumerate(code):
+                    chars.nth(i).fill(ch)
+                entered = True
+                log.info("mtan: filled Char boxes")
+        except Exception as e:
+            log.info("mtan: char fill failed: %s", type(e).__name__)
+    if not entered:
         try:
             field = page.get_by_label("mTAN")
             if field.count() == 0:
-                field = page.locator("input[type='text'], input[type='tel'], input[type='password']").first
-            field.fill(code, timeout=config.ACTION_TIMEOUT_MS)
+                field = page.locator("input[inputmode='numeric'], input[type='tel']")
+            field.first.fill(code, timeout=config.ACTION_TIMEOUT_MS)
+            log.info("mtan: filled generic field")
         except Exception as e:
             raise TransientError("Could not locate the mTAN input field.") from e
 
+    page.wait_for_timeout(400)  # let the widget validate / enable the submit button
     confirm = page.get_by_role("button", name="Bestätigen")
     if confirm.count() == 0:
         confirm = page.get_by_text("Bestätigen", exact=False).first

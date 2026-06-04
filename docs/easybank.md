@@ -130,11 +130,16 @@ captured dicts to `normalize()`.
   The first login from a profile the bank doesn't recognise returns
   `mtan_required` (a `pairing_id` + masked phone); the UI shows the code modal,
   and submitting it pairs the device so later logins are password-only.
-- **Deep-history (360-day) backfill is a sidecar capability, not yet wired.** The
-  sidecar supports a long backfill (`backfill_days ≥ 360`, which easybank gates
-  behind a second factor, `OTPRequired`), but **no Rails caller requests it
-  today** — connect and the background job both use 30 days, so there is
-  currently no automatic one-time deep backfill. See *Future work*.
+- **First connect does a one-time ~360-day backfill (mTAN-gated); reconnect and
+  daily sync use 30 days.** On the first pair the connect flow requests
+  `backfill_days: 360`, which easybank gates behind an SMS mTAN (`OTPRequired`);
+  the code modal handles it and the resulting ~year of history is ingested in one
+  shot. Later reconnects and the background job use the 30-day window (no mTAN).
+  **Live-verified end-to-end** (a full 365-day pull, ~110 tx). The long-range
+  transactions don't arrive via the same `AccountTransactionHistory` op as the
+  30-day list — they come from the `TransactionViewDirective` after the SCA, so
+  the sidecar captures history **by payload shape** (any response carrying a
+  non-empty `Transactions[]`), not by a fixed URL.
 - **Background syncs never submit an mTAN.** If one ever returns
   `otp_required: true`, Kontor treats it like an expired session: the connection
   is marked **Expired** and you reconnect (where the interactive mTAN flow lives).
@@ -235,13 +240,12 @@ uv run --with pytest python -m pytest easybank-scraper/tests -q
    username and password. These are encrypted at rest (ActiveRecord encryption);
    the password is never returned by the API and the username is shown masked.
 2. **Connect a Bank → easybank** (or it's auto-selected if it's your only
-   provider). On a trusted-device profile the login is password-only and a
-   single "easybank Kreditkarte" account appears immediately, with its balance,
-   credit limit, and the **last ~30 days** of transactions. (A one-time
-   deep-history backfill isn't wired yet — see *Future work*.)
-   - If the device isn't trusted yet, an **SMS mTAN** is sent: the modal shows a
-     masked phone number; enter the code (within its validity window) and the
-     profile then remembers the device.
+   provider). The **first** connect pulls a one-time **~360-day** backfill, which
+   easybank protects with an **SMS mTAN**: the modal shows a masked phone number;
+   enter the code within its ~5-minute validity window. A single "easybank
+   Kreditkarte" account then appears with its balance, credit limit, and ~a year
+   of transactions. Later reconnects and the daily sync fetch the **last ~30
+   days** and are password-only on a trusted-device profile.
 3. The balance + recent transactions refresh **daily at 04:00 Europe/Berlin**
    (`SyncScrapedBalancesJob`, with per-connection jitter, capped to a 30-day
    backfill), and on demand via the **Sync** button.
@@ -267,9 +271,10 @@ connection.
   means even a compromised token can exfiltrate nothing beyond easybank and the
   fingerprint host.
 - **mTAN context lifetime:** a paused, mTAN-pending browser context is held in
-  memory only for the bank's code-validity window (`MTAN_TTL_S`, default 300 s);
-  a sweeper closes any that outlive it so neither Chromium processes nor the
-  in-memory registry leak.
+  memory for `MTAN_TTL_S` (default 600 s). The bank's own code is valid only
+  ~5 minutes (shown in the modal), so that is the real deadline — submit promptly.
+  A sweeper closes any context that outlives the TTL so neither Chromium
+  processes nor the in-memory registry leak.
 - **Validate against your statement** after the first connect: confirm the
   **sign** of a known debit and credit, and that a **foreign-currency**
   transaction shows the EUR value in `amount` and the original currency in
@@ -278,9 +283,5 @@ connection.
 
 ## Future work
 
-- **Wire the one-time 360-day backfill.** The sidecar already supports
-  `backfill_days ≥ 360`; the connect flow could request it on first pair (routing
-  the resulting `OTPRequired` through the existing mTAN modal) so a new connection
-  starts with deep history instead of only the last 30 days.
 - **Scalable Capital** has the same "no aggregator" problem and can reuse this
   CloakBrowser + allowlist framework (out of scope here).

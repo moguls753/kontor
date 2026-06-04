@@ -59,7 +59,7 @@ NAV_TIMEOUT_MS = int(os.environ.get("NAV_TIMEOUT_MS", "45000"))
 # How long a paused, mTAN-pending browser context is held in memory between
 # /login and /mtan. Matches the bank's own code validity; a sweeper closes any
 # context that outlives it so neither Chromium processes nor the registry leak.
-MTAN_TTL_S = float(os.environ.get("MTAN_TTL_S", "300"))
+MTAN_TTL_S = float(os.environ.get("MTAN_TTL_S", "600"))
 
 # Hard ceiling on simultaneously-paused mTAN logins. A safety valve so a burst of
 # /login calls can't accumulate live browser contexts; over this, the oldest
