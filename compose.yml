@@ -68,7 +68,10 @@ services:
       start_period: 10s
 
   tr-scraper:
-    build: ./scraper
+    # Pulled from GHCR. To build from source instead (development / arm64 / a
+    # tag not yet published), add the build override:
+    #   docker compose -f compose.yml -f compose.build.yml up -d --build
+    image: ghcr.io/moguls753/kontor-tr-scraper:v0.1.0
     restart: unless-stopped
     depends_on:
       tr-egress-proxy:
@@ -124,7 +127,10 @@ services:
       start_period: 10s
 
   easybank-scraper:
-    build: ./easybank-scraper
+    # Pulled from GHCR (amd64 only — bakes CloakBrowser's Chromium). On arm64, or
+    # to build from source, use the build override:
+    #   docker compose -f compose.yml -f compose.build.yml up -d --build
+    image: ghcr.io/moguls753/kontor-easybank-scraper:v0.1.0
     restart: unless-stopped
     depends_on:
       easybank-egress-proxy:

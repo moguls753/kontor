@@ -1,0 +1,75 @@
+name: Release sidecar images
+
+# Build + push the two scraper sidecar images to GHCR on a version tag.
+# The Rails app (kontor) is NOT imaged here — it is built from source by the
+# operator (see docs/distribution.md). After this runs, compose.yml's pinned
+# tag (ghcr.io/<owner>/kontor-*-scraper:vX.Y.Z) resolves to these images.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Note: GHCR packages are PRIVATE by default. Make each package public once in
+# GitHub → Packages → <package> → Settings, so others can pull without auth.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pure-Python sidecar -> multi-arch is cheap.
+          - name: tr-scraper
+            context: ./scraper
+            platforms: linux/amd64,linux/arm64
+          # CloakBrowser bakes its Chromium per-arch and ships no arm64 binary,
+          # so this image is amd64 only; arm64 users build it via compose.build.yml.
+          - name: easybank-scraper
+            context: ./easybank-scraper
+            platforms: linux/amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU (for arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/kontor-${{ matrix.name }}
+          # Versioned tags only. Everything (compose.yml) pins :vX.Y.Z, and a
+          # floating :latest would be unsafe for the amd64-only easybank image and
+          # could move backwards on a late patch tag.
+          tags: |
+            type=ref,event=tag
+
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

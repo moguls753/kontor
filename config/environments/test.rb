@@ -50,4 +50,12 @@ Rails.application.configure do
 
   # Raise error when a before_action's only/except options reference missing actions.
   config.action_controller.raise_on_missing_callback_actions = true
+
+  # Deterministic, NON-SECRET keys so the encrypted-credential models and signed
+  # cookies work in test/CI WITHOUT the maintainer's Rails credentials/master.key.
+  # The test database is ephemeral scratch space, so these never protect real data.
+  config.active_record.encryption.primary_key = "test-ar-encryption-primary-key-not-secret"
+  config.active_record.encryption.deterministic_key = "test-ar-encryption-deterministic-key-not-secret"
+  config.active_record.encryption.key_derivation_salt = "test-ar-encryption-key-derivation-salt-not-secret"
+  config.secret_key_base = "test-secret-key-base-not-secret-ephemeral-test-env-only"
 end

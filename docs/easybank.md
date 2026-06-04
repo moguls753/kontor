@@ -166,9 +166,13 @@ remain for running or egress-gating a single sidecar standalone.)
    - `EASYBANK_SIDECAR_TOKEN` and `SCRAPER_SIDECAR_TOKEN` — shared secrets
      (`openssl rand -hex 32` each).
 2. Create a TrueNAS **Custom App** from `compose.yml` (or run
-   `docker compose -f compose.yml up -d --build`). The first build downloads
-   CloakBrowser's patched Chromium (~200 MB) and bakes it into the easybank
-   image; give the healthchecks their `start_period`.
+   `docker compose up -d --build`). This builds the Rails app from source and
+   **pulls** the `easybank-scraper` image (which already has CloakBrowser's
+   patched Chromium baked in, ~200 MB) from GHCR — so no local browser build.
+   Give the healthchecks their `start_period`. To build the sidecar from source
+   instead (arm64, or an unpublished tag), add the build override:
+   `docker compose -f compose.yml -f compose.build.yml up -d --build`. See
+   [`distribution.md`](distribution.md).
 
 > **Critical:** the `kontor` service **must** run with `RAILS_ENV=production` and
 > `SOLID_QUEUE_IN_PUMA=true`. Solid Queue's recurring scheduler only runs inside

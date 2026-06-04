@@ -38,33 +38,49 @@ Most personal finance tools are either closed-source SaaS (your data on someone 
 
 ### Docker (recommended)
 
-The easiest way to run Kontor. No Ruby, Node, or build tools needed — everything is inside the image.
+Kontor runs as a small Docker Compose stack: the Rails app plus two egress-locked
+scraper sidecars (Trade Republic and easybank/Barclaycard DE) with their proxies.
+The **Rails app is built from source** (so you generate your own secrets — nothing
+sensitive is baked into a shipped image); the **sidecars run as pre-built amd64
+images** from GHCR (build them locally on arm64).
 
-```yaml
-# docker-compose.yml
-services:
-  kontor:
-    image: ghcr.io/moguls753/kontor:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - kontor_data:/rails/storage
-    environment:
-      - SECRET_KEY_BASE=generate-a-64-char-hex-string
-
-volumes:
-  kontor_data:
-```
+**Requirements:** Docker + Docker Compose. Generating your Rails credentials
+(step 3) also needs a bundled Ruby 3.4+ **or** a one-off container — both recipes
+are in [docs/distribution.md](docs/distribution.md).
 
 ```bash
-# Generate a secret key
-openssl rand -hex 64
+# 1. Get the repo — it carries the compose files and the egress allowlists
+git clone https://github.com/moguls753/kontor.git
+cd kontor
 
-# Start Kontor
-docker compose up -d
+# 2. Create .env FIRST — Compose needs the sidecar tokens for EVERY command
+cp .env.example .env
+#   set SCRAPER_SIDECAR_TOKEN  and  EASYBANK_SIDECAR_TOKEN  (each: openssl rand -hex 32)
+#   leave RAILS_MASTER_KEY blank for now
+
+# 3. Generate your OWN Rails secrets (the repo ships none). Needs Ruby + gems;
+#    no local Ruby? use the container recipe in docs/distribution.md instead.
+bundle install
+bin/rails credentials:edit       # creates config/master.key + credentials.yml.enc
+bin/rails db:encryption:init     # prints 3 ActiveRecord encryption keys
+bin/rails credentials:edit       # paste them under an  active_record_encryption:  block
+#   ⚠ those encryption keys are REQUIRED — without them, saving any bank
+#     credential fails at runtime.
+#   Then set RAILS_MASTER_KEY in .env to the contents of config/master.key.
+
+# 4. Launch — builds the Rails app (baking your credentials), starts the stack,
+#    runs migrations
+docker compose up -d --build
 ```
 
-The app will be available at `http://localhost:3000`. The volume persists your SQLite database and uploaded files across restarts.
+Kontor is then at `http://localhost:3000`. SQLite data and the trusted-device
+scraper profile persist in named volumes across restarts.
+
+> **Sidecar images:** the `docker compose up` pull path needs the sidecar images
+> published to GHCR **and** set public (via a `v*` release — see
+> [docs/distribution.md](docs/distribution.md)). On **arm64**, or before a public
+> release exists, build the sidecars from source instead:
+> `docker compose -f compose.yml -f compose.build.yml up -d --build`
 
 ### From source (development)
 

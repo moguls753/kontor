@@ -1,0 +1,27 @@
+# Build override for the scraper sidecars.
+#
+# compose.yml PULLS the sidecars as published images (ghcr.io/moguls753/...).
+# This override builds them from source instead — for:
+#   - development on this repo,
+#   - CI,
+#   - architectures without a published image (the easybank-scraper image is
+#     amd64-only because CloakBrowser bakes its Chromium per-arch; arm64 builds
+#     it locally here),
+#   - a tag that hasn't been pushed to GHCR yet.
+#
+# Usage:
+#   docker compose -f compose.yml -f compose.build.yml build
+#   docker compose -f compose.yml -f compose.build.yml up -d --build
+#
+# (kontor itself is always built from source — its build: lives in compose.yml.)
+
+services:
+  # pull_policy: build → always build from source on this override (never attempt
+  # to pull the pinned GHCR tag first, which would print a spurious 403 and could
+  # silently reuse a stale local image).
+  tr-scraper:
+    build: ./scraper
+    pull_policy: build
+  easybank-scraper:
+    build: ./easybank-scraper
+    pull_policy: build

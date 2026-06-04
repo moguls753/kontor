@@ -34,6 +34,12 @@
 # Ignore key files for decrypting credentials and more.
 /config/*.key
 
+# Not shipped: each self-hoster generates their own (see README / docs/distribution.md).
+# A committed credentials.yml.enc is AES-encrypted; only your config/master.key
+# (never in git) can read it — the standard Rails model, safe in a public repo.
+# Keep master.key out of git and out of logs/CI output.
+/config/credentials.yml.enc
+
 # Private keys & certificates — never commit (Enable Banking app key, TLS certs).
 *.pem
 *.key
