@@ -53,6 +53,9 @@ services:
       # Every HTTP client (stdlib requests, curl_cffi, websockets) must inherit
       # the proxy, so export it in both cases. NO_PROXY only covers loopback so
       # the healthcheck reaches the local server directly.
+      # CloakBrowser reads PROXY_URL for the WAF-token mint; the HTTP(S)_PROXY
+      # vars cover pytr's stdlib/curl_cffi/websocket traffic too.
+      PROXY_URL: http://egress-proxy:3128
       HTTPS_PROXY: http://egress-proxy:3128
       https_proxy: http://egress-proxy:3128
       HTTP_PROXY: http://egress-proxy:3128
@@ -61,13 +64,15 @@ services:
       no_proxy: localhost,127.0.0.1
     networks:
       - appnet
-    # Hardening: no route out except the proxy, read-only root, no extra caps.
-    read_only: true
+    # The sidecar now runs a real (stealth) Chromium to mint the AWS-WAF token at
+    # pairing, so — like the easybank sidecar — it can't be read_only / cap_drop:ALL
+    # (the browser writes its profile/temp and spawns sandboxed children). Keep the
+    # egress lock (the primary control: appnet-only, proxy is the sole route out)
+    # plus no-new-privileges, and give Chromium a sane /dev/shm.
     tmpfs:
       - /scratch
       - /tmp
-    cap_drop:
-      - ALL
+    shm_size: "1gb"
     security_opt:
       - no-new-privileges:true
     healthcheck:

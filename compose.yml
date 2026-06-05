@@ -79,9 +79,12 @@ services:
     environment:
       SIDECAR_TOKEN: ${SCRAPER_SIDECAR_TOKEN:?set SCRAPER_SIDECAR_TOKEN in .env}
       SESSION_SCRATCH_DIR: /scratch
-      # Every HTTP client (stdlib requests, curl_cffi, websockets) must inherit
-      # the proxy, so export it in both cases. NO_PROXY only covers loopback so
-      # the healthcheck reaches the local server directly.
+      # The browser's ONLY egress: point every client at the TR proxy. PROXY_URL
+      # is what config.py / CloakBrowser read for the WAF-minting browser; the
+      # HTTP(S)_PROXY env vars cover pytr's stdlib requests / curl_cffi /
+      # websockets traffic too. NO_PROXY only covers loopback so the healthcheck
+      # reaches the local server directly without tunnelling through squid.
+      PROXY_URL: http://tr-egress-proxy:3128
       HTTPS_PROXY: http://tr-egress-proxy:3128
       https_proxy: http://tr-egress-proxy:3128
       HTTP_PROXY: http://tr-egress-proxy:3128
@@ -90,13 +93,16 @@ services:
       no_proxy: localhost,127.0.0.1
     networks:
       - tr-net
-    # Hardening: no route out except the proxy, read-only root, no extra caps.
-    read_only: true
+    # No route out except the proxy (tr-net is internal). We mint the AWS WAF
+    # token with a real stealth Chromium at pairing, so — like easybank-scraper —
+    # we drop read_only/cap_drop ALL (a browser writes its profile/temp and
+    # spawns sandboxed child processes) and keep the cheap, safe hardening that
+    # doesn't break Chromium.
     tmpfs:
       - /scratch
       - /tmp
-    cap_drop:
-      - ALL
+    # Chromium needs a sane /dev/shm or it crashes renderers under memory pressure.
+    shm_size: "1gb"
     security_opt:
       - no-new-privileges:true
     healthcheck:

@@ -27,6 +27,11 @@ from . import config, tr_api
 # WARNING so none of that ever lands in logs. Never log request bodies here.
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("pytr").setLevel(logging.WARNING)
+# CloakBrowser/Playwright are chatty at INFO/DEBUG (and we never want their noise
+# — or a navigated WAF URL — around the mint); pin both to WARNING, mirroring the
+# easybank sidecar. Defense-in-depth against a future DEBUG flag leaking URLs.
+logging.getLogger("cloakbrowser").setLevel(logging.WARNING)
+logging.getLogger("playwright").setLevel(logging.WARNING)
 log = logging.getLogger("tr-scraper")
 
 app = FastAPI(

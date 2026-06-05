@@ -12,9 +12,11 @@ Design notes
 ------------
 * We never call pytr's interactive ``account.login()`` (it uses input()/getpass);
   we drive ``TradeRepublicApi`` directly.
-* The WAF token is solved with pytr's pure-Python ``awswaf`` path
-  (``waf_token="awswaf"``); playwright/headless-Chromium is intentionally
-  absent from the image (a stub satisfies pytr's module-level import).
+* TR gates the login (/api/v1/auth/*) behind AWS WAF Bot Control. pytr's
+  pure-Python ``awswaf`` token no longer passes, so ``app.waf`` mints a valid
+  ``aws-waf-token`` with a real stealth Chromium (CloakBrowser) and we hand it
+  to pytr for ``initiate_weblogin``. The browser is needed ONLY at pairing; the
+  authenticated balance session is not WAF-gated (no token, no browser).
 * pytr keeps subscription bookkeeping (``subscriptions``,
   ``_previous_responses``, ``_subscription_id_counter``, ``_lock``) as *class*
   attributes shared across instances. We shadow them per-instance so one
@@ -80,14 +82,14 @@ _BOND_PATTERN = re.compile(
 _PLACEHOLDER_PIN = "0000"
 
 
-def _build_api(phone_no: str, pin: str, cookies_file: str) -> TradeRepublicApi:
+def _build_api(phone_no: str, pin: str, cookies_file: str, waf_token=None) -> TradeRepublicApi:
     tr = TradeRepublicApi(
         phone_no=phone_no,
         pin=pin,
         locale=config.TR_LOCALE,
         save_cookies=True,
         cookies_file=cookies_file,
-        waf_token="awswaf",
+        waf_token=waf_token,
     )
     # pytr stores these as class attributes; shadow them per-instance so this
     # request's websocket bookkeeping cannot bleed into another request's.
@@ -123,7 +125,17 @@ def pair_start(phone_no: str, pin: str) -> tuple[TradeRepublicApi, int]:
     the app push. Returns the live api instance (to hold for completion) and the
     resend countdown in seconds. Raises PairingFailed / TransientError."""
     cookies_file = _scratch_file("tr-pair-")
-    tr = _build_api(phone_no, pin, cookies_file)
+    # AWS WAF Bot Control gates /api/v1/auth/* — mint a valid `aws-waf-token`
+    # with a real stealth browser (pytr's pure-Python awswaf no longer passes)
+    # and hand it to pytr's session for initiate_weblogin.
+    from . import waf
+
+    try:
+        waf_token = waf.mint_waf_token()
+    except waf.WafMintError as e:
+        _safe_unlink(cookies_file)
+        raise TransientError("Could not obtain a Trade Republic login challenge.") from e
+    tr = _build_api(phone_no, pin, cookies_file, waf_token=waf_token)
     try:
         countdown = tr.initiate_weblogin()
     except ValueError as e:
