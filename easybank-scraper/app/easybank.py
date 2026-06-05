@@ -97,6 +97,50 @@ def _has_transactions(body) -> bool:
     return False
 
 
+def _dump_tx_ids(url: str, body) -> None:
+    """TEMP DIAGNOSTIC (remove after we pick easybank's stable transaction id).
+
+    Logs, per captured transaction, only OPAQUE identity candidates + timestamps,
+    tagged by the source op (URL tail). Crucially it also logs a short content
+    CORRELATION hash of (booking/posting/value date + amount + merchant) so we can
+    tell whether the SAME purchase carries the SAME InternalID/ReferenceNumber
+    across the two capture sources (the 30-day list vs the 360-day backfill). It
+    deliberately does NOT log raw amounts or merchant names — only their hash."""
+    try:
+        import hashlib
+
+        op = url.rsplit("/", 1)[-1][:48]
+        rows: list[dict] = []
+        stack = [body]
+        while stack:
+            n = stack.pop()
+            if isinstance(n, dict):
+                t = n.get("Transactions")
+                if isinstance(t, list):
+                    rows.extend(x for x in t if isinstance(x, dict))
+                stack.extend(n.values())
+            elif isinstance(n, list):
+                stack.extend(n)
+
+        ff = normalize.find_first
+        log.info("TXDUMP src=%s count=%d", op, len(rows))
+        for t in rows[:60]:
+            local = ff(t, "LocalCurrencyAmount")
+            amt = local.get("Value") if isinstance(local, dict) else None
+            merch = ff(t, "MerchantName") or ff(ff(t, "MerchantData"), "Name")
+            corr = hashlib.sha1(f"{ff(t, 'BookingDate')}|{ff(t, 'PostingDate')}|{amt}|{merch}".encode()).hexdigest()[:8]
+            log.info(
+                "TXDUMP src=%s corr=%s internalid=%r ref=%r tdate=%r vdate=%r pdate=%r bdate=%r type=%r",
+                op, corr,
+                ff(t, "InternalID"), ff(t, "ReferenceNumber"),
+                ff(t, "TransactionDate"), ff(t, "ValueDate"),
+                ff(t, "PostingDate"), ff(t, "BookingDate"),
+                ff(t, "TransactionType"),
+            )
+    except Exception:  # diagnostics must never disturb capture
+        pass
+
+
 class _Capture:
     """Accumulates the JSON the Angular app fetches. RetailLanding overwrites
     (one dashboard); history accumulates so paginated "Weitere Umsätze" pages are
@@ -121,7 +165,9 @@ class _Capture:
                     self.landing = resp.json()
                     return
                 if "/services/flow/AccountTransactionHistory" in url:
-                    self.history_pages.append(resp.json())
+                    body = resp.json()
+                    _dump_tx_ids(url, body)  # TEMP DIAGNOSTIC
+                    self.history_pages.append(body)
                     return
                 # The long-range / post-SCA history arrives under a different op
                 # (TransactionViewDirective/GetTransactions), so capture by shape —
@@ -130,6 +176,7 @@ class _Capture:
                 if resp.request.method == "POST" and url.startswith(BASE):
                     body = resp.json()
                     if _has_transactions(body):
+                        _dump_tx_ids(url, body)  # TEMP DIAGNOSTIC
                         self.history_pages.append(body)
             except Exception:
                 # A non-JSON / partially-read body is normally just a miss. But a
