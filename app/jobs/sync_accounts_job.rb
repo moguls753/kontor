@@ -65,11 +65,26 @@ class SyncAccountsJob < ApplicationJob
     credential = @bc.user.enable_banking_credential
     client = EnableBanking::Client.new(app_id: credential.app_id, private_key_pem: credential.private_key_pem)
 
-    @bc.accounts.each do |account|
-      sync_eb_balances(client, account)
-      sync_eb_transactions(client, account)
-      account.update!(last_synced_at: Time.current)
-    end
+    @bc.accounts.each { |account| sync_eb_account(client, account) }
+  end
+
+  # A single account's ASPSP-side failure (e.g. a 400 ASPSP_ERROR from a stale
+  # or flaky account) must not abort its siblings or fail the whole connection.
+  # A consent-level reauth (401/403) still propagates so #perform's rescue marks
+  # the connection expired; any other ApiError is logged and skipped so the
+  # remaining accounts still sync.
+  def sync_eb_account(client, account)
+    sync_eb_balances(client, account)
+    sync_eb_transactions(client, account)
+    account.update!(last_synced_at: Time.current)
+  rescue EnableBanking::ApiError => e
+    # Reauth (401/403) and rate-limit (429) must reach the JOB-level handlers:
+    # the outer rescue expires the connection on reauth, and retry_on backs off
+    # on RateLimitError. Only a per-account ASPSP error (e.g. 400) is swallowed
+    # here so sibling accounts still sync.
+    raise if reauth_required?(e) || e.is_a?(EnableBanking::RateLimitError)
+
+    Rails.logger.warn("EnableBanking sync skipped account ##{account.id} (HTTP #{e.status})")
   end
 
   def sync_gocardless
@@ -169,10 +184,15 @@ class SyncAccountsJob < ApplicationJob
     )
   end
 
+  # Collect ALL pages first, then hand the whole batch to the ingest service.
+  # Fundamental matching (for rows with no transaction_id / entry_reference) needs
+  # the complete batch to claim-track, so two identical rows can't both match the
+  # same existing row — see EnableBanking::TransactionIngest.
   def sync_eb_transactions(client, account)
     date_from = sync_start_date(account)
     date_to = Date.current.iso8601
     continuation_key = nil
+    transactions = []
 
     loop do
       data = client.account_transactions(
@@ -182,35 +202,13 @@ class SyncAccountsJob < ApplicationJob
         continuation_key: continuation_key
       )
 
-      (data[:transactions] || []).each do |tx|
-        upsert_eb_transaction(account, tx)
-      end
+      transactions.concat(data[:transactions] || [])
 
       continuation_key = data[:continuation_key]
       break if continuation_key.nil?
     end
-  end
 
-  def upsert_eb_transaction(account, tx)
-    record = account.transaction_records.find_or_initialize_by(transaction_id: tx[:transaction_id])
-
-    amount = BigDecimal(tx[:transaction_amount][:amount])
-    amount = -amount if tx[:credit_debit_indicator] == "DBIT"
-
-    record.assign_attributes(
-      amount: amount,
-      currency: tx[:transaction_amount][:currency],
-      booking_date: tx[:booking_date],
-      value_date: tx[:value_date],
-      status: tx[:status] || "booked",
-      remittance: Array(tx[:remittance_information]).join(" "),
-      creditor_name: tx.dig(:creditor, :name),
-      creditor_iban: tx.dig(:creditor_account, :iban),
-      debtor_name: tx.dig(:debtor, :name),
-      debtor_iban: tx.dig(:debtor_account, :iban),
-      entry_reference: tx[:entry_reference]
-    )
-    record.save!
+    EnableBanking::TransactionIngest.call(account, transactions)
   end
 
   # --- GoCardless ---

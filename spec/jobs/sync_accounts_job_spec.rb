@@ -54,6 +54,120 @@ RSpec.describe SyncAccountsJob, type: :job do
     expect(account.transaction_records.count).to eq(2)
   end
 
+  it "ingests EB transactions that carry no transaction_id via a synthetic id, idempotently" do
+    create(:enable_banking_credential, user: user)
+    bc = create(:bank_connection, user: user, provider: "enable_banking")
+    account = create(:account, bank_connection: bc)
+
+    allow(eb_client).to receive(:account_balances).and_return(eb_balances_response)
+    allow(eb_client).to receive(:account_transactions).and_return(eb_transactions_response_without_ids)
+
+    2.times { described_class.perform_now(bc.id) }
+
+    expect(account.transaction_records.count).to eq(2)
+    expect(account.transaction_records.pluck(:transaction_id)).to all(be_present)
+    expect(account.transaction_records.pluck(:transaction_id)).to all(start_with("eb-gen-"))
+    expect(account.transaction_records.find_by(amount: -31.00)).to be_present
+    expect(account.transaction_records.find_by(amount: 428.00)).to be_present
+  end
+
+  it "updates an id-less EB tx in place when its mutable fields change, matching on fundamentals" do
+    create(:enable_banking_credential, user: user)
+    bc = create(:bank_connection, user: user, provider: "enable_banking")
+    account = create(:account, bank_connection: bc)
+
+    allow(eb_client).to receive(:account_balances).and_return(eb_balances_response)
+    allow(eb_client).to receive(:account_transactions).and_return(
+      eb_transactions_response_without_ids, eb_transactions_response_without_ids_mutated
+    )
+
+    described_class.perform_now(bc.id)
+    described_class.perform_now(bc.id)
+
+    expect(account.transaction_records.count).to eq(2)
+    updated = account.transaction_records.find_by(amount: -31.00)
+    expect(updated.remittance).to eq("PayPal settled")
+    expect(updated.value_date).to eq(Date.new(2026, 6, 4))
+  end
+
+  it "keeps two same-day same-amount id-less EB txs as two distinct rows, idempotently" do
+    create(:enable_banking_credential, user: user)
+    bc = create(:bank_connection, user: user, provider: "enable_banking")
+    account = create(:account, bank_connection: bc)
+
+    allow(eb_client).to receive(:account_balances).and_return(eb_balances_response)
+    allow(eb_client).to receive(:account_transactions).and_return(eb_transactions_response_same_day_pair)
+
+    2.times { described_class.perform_now(bc.id) }
+
+    expect(account.transaction_records.count).to eq(2)
+    expect(account.transaction_records.pluck(:remittance)).to contain_exactly("Spotify", "Netflix")
+  end
+
+  it "skips pending EB transactions and normalizes the booked status" do
+    create(:enable_banking_credential, user: user)
+    bc = create(:bank_connection, user: user, provider: "enable_banking")
+    account = create(:account, bank_connection: bc)
+
+    allow(eb_client).to receive(:account_balances).and_return(eb_balances_response)
+    allow(eb_client).to receive(:account_transactions).and_return(eb_transactions_response_with_pending)
+
+    described_class.perform_now(bc.id)
+
+    expect(account.transaction_records.count).to eq(1)
+    booked = account.transaction_records.find_by(transaction_id: "tx-booked-1")
+    expect(booked.status).to eq("booked")
+    expect(account.transaction_records.find_by(transaction_id: "tx-pending-1")).to be_nil
+  end
+
+  it "keeps syncing sibling accounts when one account hits a non-reauth ASPSP error" do
+    create(:enable_banking_credential, user: user)
+    bc = create(:bank_connection, user: user, provider: "enable_banking")
+    bad = create(:account, bank_connection: bc, account_uid: "uid-bad")
+    good = create(:account, bank_connection: bc, account_uid: "uid-good")
+
+    allow(eb_client).to receive(:account_balances).with(account_uid: "uid-bad")
+      .and_raise(EnableBanking::ApiError.new(status: 400, body: '{"error":"ASPSP_ERROR"}'))
+    allow(eb_client).to receive(:account_balances).with(account_uid: "uid-good")
+      .and_return(eb_balances_response)
+    allow(eb_client).to receive(:account_transactions).with(hash_including(account_uid: "uid-good"))
+      .and_return(eb_transactions_response)
+
+    described_class.perform_now(bc.id)
+
+    expect(good.transaction_records.count).to eq(2)
+    expect(bad.transaction_records.count).to eq(0)
+    expect(bad.reload.last_synced_at).to be_nil
+    expect(bc.reload.status).to eq("authorized")
+  end
+
+  it "re-raises an EB 429 so retry_on backs off and the connection stays authorized" do
+    create(:enable_banking_credential, user: user)
+    bc = create(:bank_connection, user: user, provider: "enable_banking")
+    create(:account, bank_connection: bc, account_uid: "uid-1")
+
+    allow(eb_client).to receive(:account_balances)
+      .and_raise(EnableBanking::RateLimitError.new(status: 429, body: '{"error":"RATE_LIMIT"}'))
+
+    expect { described_class.perform_now(bc.id) }.to have_enqueued_job(SyncAccountsJob)
+    expect(bc.reload.status).to eq("authorized")
+    expect(bc.last_synced_at).to be_nil
+  end
+
+  it "marks an EB connection expired when a data endpoint reports a reauth (401)" do
+    create(:enable_banking_credential, user: user)
+    bc = create(:bank_connection, user: user, provider: "enable_banking")
+    create(:account, bank_connection: bc, account_uid: "uid-1")
+
+    allow(eb_client).to receive(:account_balances)
+      .and_raise(EnableBanking::ApiError.new(status: 401, body: '{"error":"UNAUTHORIZED"}'))
+
+    described_class.perform_now(bc.id)
+
+    expect(bc.reload.status).to eq("expired")
+    expect(bc.error_message).to be_present
+  end
+
   it "skips and marks expired EB connections" do
     create(:enable_banking_credential, user: user)
     bc = create(:bank_connection, user: user, provider: "enable_banking", valid_until: 1.day.ago)
