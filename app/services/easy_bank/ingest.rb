@@ -32,6 +32,12 @@ module EasyBank
 
       skipped = 0
       (@result["transactions"] || []).each do |tx|
+        # Booked-only (mirrors GoCardless / Enable Banking): pending ('vorgemerkt')
+        # easybank rows carry an ephemeral ReferenceNumber that CHANGES to the ARN
+        # on settlement, so storing them would re-duplicate at the pending->booked
+        # transition. Skip them; only booked rows are persisted.
+        next if tx["is_pending"]
+
         upsert_transaction(account, tx)
       rescue StandardError => e
         # One malformed row (e.g. a bank row with no usable id or date) must NOT
@@ -92,7 +98,9 @@ module EasyBank
         currency: tx["currency"],
         booking_date: Date.parse(tx["booking_date"]),
         value_date: tx["value_date"].present? ? Date.parse(tx["value_date"]) : nil,
-        status: tx["is_pending"] ? "pending" : "booked",
+        # Booked-only ingest: we never store pending rows (see #call), so every
+        # row that reaches here is booked.
+        status: "booked",
         remittance: tx["description"],
         # The LLM categorizer reads remittance + creditor_name — surface the merchant
         # there so card purchases get a usable categorization signal.

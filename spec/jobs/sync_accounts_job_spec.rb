@@ -267,7 +267,7 @@ RSpec.describe SyncAccountsJob, type: :job do
     debit = account.transaction_records.find_by(transaction_id: "eb-tx-001")
     credit = account.transaction_records.find_by(transaction_id: "eb-tx-002")
     expect(debit.amount).to eq(BigDecimal("-26.80"))
-    expect(debit.status).to eq("pending")
+    expect(debit.status).to eq("booked")
     expect(debit.creditor_name).to eq("GitHub")
     expect(debit.original_amount).to eq(BigDecimal("-5.95"))
     expect(debit.original_currency).to eq("USD")
@@ -275,6 +275,9 @@ RSpec.describe SyncAccountsJob, type: :job do
     expect(debit.mcc).to eq("5734")
     expect(credit.amount).to eq(BigDecimal("150.00"))
     expect(credit.status).to eq("booked")
+
+    # Booked-only: the pending ('vorgemerkt') row is skipped, not stored.
+    expect(account.transaction_records.find_by(transaction_id: "eb-tx-003-pending")).to be_nil
 
     expect(account.reload.balance_amount).to eq(BigDecimal("-980.31"))
     expect(account.credit_limit).to eq(BigDecimal("4000.00"))

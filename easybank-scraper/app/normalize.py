@@ -218,9 +218,11 @@ def _normalize_tx(tx: dict) -> dict:
     xr = find_first(tx, "ExchangeRate")
     same_currency = amts["currency"] is not None and amts["currency"] == amts["original_currency"]
     out = {
-        # Stable id: the bank's InternalID, falling back to the printed
-        # ReferenceNumber when (e.g. on pending rows) it is absent.
-        "id": _first_of(tx, "InternalID", "ReferenceNumber"),
+        # Stable id: the printed ReferenceNumber (the card ARN / SEPA reference).
+        # We deliberately do NOT use InternalID — it is a per-FETCH UUID (proven
+        # unstable live: the same purchase carries a different InternalID in the
+        # 30-day list vs. the 360-day backfill), which would double every row.
+        "id": find_first(tx, "ReferenceNumber"),
         # BookingDate is the min-date until a row is booked, so fall back to the
         # posting/value/transaction date the user actually sees. Always a date.
         "booking_date": _first_date(tx, "BookingDate", "PostingDate", "ValueDate", "TransactionDate", "EffectiveDate"),
@@ -237,18 +239,17 @@ def _normalize_tx(tx: dict) -> dict:
         "type": find_first(tx, "TransactionNature"),
     }
     out.update(amts)
-    # ``id`` may legitimately be numeric (InternalID) — coerce to str. When the
-    # bank gives NEITHER InternalID nor ReferenceNumber (seen on some pending
-    # rows), synthesize a STABLE content hash so true duplicates still collapse on
-    # the Rails unique (account_id, transaction_id) index and we never emit a null
-    # id — a null id fails the NOT-NULL/presence validation and would abort the
-    # whole ingest batch.
+    # Coerce to str. When the bank gives no ReferenceNumber (rare / never seen in
+    # practice), synthesize a STABLE content hash so true duplicates still collapse
+    # on the Rails unique (account_id, transaction_id) index and we never emit a
+    # null id — a null id fails the NOT-NULL/presence validation and would abort
+    # the whole ingest batch.
     out["id"] = str(out["id"]) if out["id"] is not None else _synthetic_id(out)
     return out
 
 
 def _synthetic_id(tx: dict) -> str:
-    """Deterministic id for a row the bank gave no InternalID/ReferenceNumber.
+    """Deterministic id for a row the bank gave no ReferenceNumber.
     Stable across syncs (so re-imports dedupe) and identical for true duplicates;
     derived from the row's economic content."""
     basis = "|".join(

@@ -64,7 +64,8 @@ def test_all_transactions_collected_and_otp_flag():
 
 
 def test_domestic_eur_debit_signs_from_nature_and_dates_fall_back():
-    tx = _by_id(_result(), "900001")
+    # id comes from ReferenceNumber (NOT InternalID, which is a per-fetch UUID).
+    tx = _by_id(_result(), "REF-900001")
     # Unsigned 26.80 + TransactionNature "Debit" => negative.
     assert tx["amount"] == "-26.80"
     assert tx["currency"] == "EUR"
@@ -82,7 +83,7 @@ def test_domestic_eur_debit_signs_from_nature_and_dates_fall_back():
 
 
 def test_foreign_usd_debit_splits_eur_settled_vs_original_foreign():
-    tx = _by_id(_result(), "900002")
+    tx = _by_id(_result(), "REF-900002")
     assert tx["amount"] == "-49.55"
     assert tx["currency"] == "EUR"
     assert tx["original_amount"] == "-54.32"
@@ -93,7 +94,7 @@ def test_foreign_usd_debit_splits_eur_settled_vs_original_foreign():
 
 
 def test_credit_keeps_positive_sign():
-    tx = _by_id(_result(), "900003")
+    tx = _by_id(_result(), "REF-900003")
     assert tx["amount"] == "418.39"
     assert tx["currency"] == "EUR"
     assert tx["type"] == "Credit"
@@ -102,8 +103,8 @@ def test_credit_keeps_positive_sign():
 
 
 def test_pending_uses_transaction_type_and_reference_id():
-    # No InternalID => id falls back to ReferenceNumber. Pending comes from
-    # TransactionType == "Pending" (NOT the always-false IsPending).
+    # id comes from ReferenceNumber. Pending comes from TransactionType ==
+    # "Pending" (NOT the always-false IsPending).
     tx = _by_id(_result(), "REF-900004")
     assert tx["is_pending"] is True
     assert tx["amount"] == "-12.99"
@@ -114,7 +115,7 @@ def test_pending_uses_transaction_type_and_reference_id():
 
 def test_sign_falls_back_to_formatted_amount_when_nature_missing():
     # No TransactionNature; the sign must come from FormattedLocalAmount "-7,77 €".
-    tx = _by_id(_result(), "900005")
+    tx = _by_id(_result(), "REF-900005")
     assert tx["amount"] == "-7.77"
     assert tx["type"] is None
 
@@ -139,10 +140,25 @@ def _bare_row(**over):
     return row
 
 
+def test_id_comes_from_reference_number_not_internalid():
+    # The id is keyed on ReferenceNumber. InternalID is a per-FETCH UUID and must
+    # NEVER be used as identity (it changes every fetch and doubles rows).
+    tx = normalize._normalize_tx(_bare_row(InternalID="per-fetch-uuid", ReferenceNumber="ARN-123"))
+    assert tx["id"] == "ARN-123"
+
+
+def test_same_reference_number_with_different_internalid_yields_same_id():
+    # THE DEDUP PROPERTY: the same purchase captured from two endpoints carries
+    # the SAME ReferenceNumber but a DIFFERENT InternalID; both must map to one id.
+    a = normalize._normalize_tx(_bare_row(InternalID="uuid-from-30day-list", ReferenceNumber="ARN-77"))
+    b = normalize._normalize_tx(_bare_row(InternalID="uuid-from-360day-backfill", ReferenceNumber="ARN-77"))
+    assert a["id"] == b["id"] == "ARN-77"
+
+
 def test_idless_row_gets_a_stable_synthetic_id():
-    # Neither InternalID nor ReferenceNumber: must NOT yield id=None (that would
-    # fail the Rails presence/unique constraint and abort the whole ingest). It
-    # gets a deterministic content hash, identical for true duplicates.
+    # No ReferenceNumber: must NOT yield id=None (that would fail the Rails
+    # presence/unique constraint and abort the whole ingest). It gets a
+    # deterministic content hash, identical for true duplicates.
     a = normalize._normalize_tx(_bare_row())
     b = normalize._normalize_tx(_bare_row())
     assert a["id"] and a["id"].startswith("eb-syn-")
@@ -160,7 +176,7 @@ def test_all_min_date_row_yields_null_booking_date():
     # ingest skips such a degenerate row per-row rather than crashing the batch.
     min_date = "0001-01-01T00:00:00+00:00"
     tx = normalize._normalize_tx(_bare_row(
-        InternalID="X1", PostingDate=min_date, BookingDate=min_date,
+        ReferenceNumber="X1", PostingDate=min_date, BookingDate=min_date,
         ValueDate=min_date, TransactionDate=min_date, EffectiveDate=min_date,
     ))
     assert tx["id"] == "X1"

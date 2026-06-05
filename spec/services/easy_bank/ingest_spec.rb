@@ -36,7 +36,7 @@ RSpec.describe EasyBank::Ingest do
       credit = account.transaction_records.find_by(transaction_id: "eb-tx-002")
 
       expect(debit.amount).to eq(BigDecimal("-26.80"))
-      expect(debit.status).to eq("pending")
+      expect(debit.status).to eq("booked")
       expect(debit.remittance).to eq("GITHUB INC")
       expect(debit.creditor_name).to eq("GitHub")
       expect(debit.original_amount).to eq(BigDecimal("-5.95"))
@@ -49,6 +49,15 @@ RSpec.describe EasyBank::Ingest do
       expect(credit.status).to eq("booked")
       expect(credit.original_amount).to be_nil
       expect(credit.exchange_rate).to be_nil
+    end
+
+    it "skips pending ('vorgemerkt') rows and stores only booked ones (booked-only)" do
+      account = described_class.call(bank_connection, easybank_sync_response)
+
+      # The is_pending row is dropped; the two booked rows are kept as 'booked'.
+      expect(account.transaction_records.find_by(transaction_id: "eb-tx-003-pending")).to be_nil
+      expect(account.transaction_records.pluck(:transaction_id)).to match_array(%w[eb-tx-001 eb-tx-002])
+      expect(account.transaction_records.pluck(:status).uniq).to eq(%w[booked])
     end
 
     it "deduplicates on transaction_id across repeat ingests" do
