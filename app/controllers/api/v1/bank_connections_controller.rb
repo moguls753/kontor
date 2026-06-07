@@ -186,13 +186,16 @@ module Api
           retry_in = ((bc.last_login_attempt_at + PAYPAL_MIN_SYNC_INTERVAL) - Time.current).to_i
           return render json: {
             error: "rate_limited",
-            message: "PayPal sync was attempted recently. Try again in about #{(retry_in / 3600.0).ceil} h.",
+            message: "PayPal sync was attempted recently. Try again in about #{(retry_in / 60.0).ceil} min.",
             retry_in: [ retry_in, 0 ].max
           }, status: :too_many_requests
         end
         bc.reload # pick up the stamped last_login_attempt_at
 
-        result = paypal_scraper_client.sync(username: credential.username, password: credential.password)
+        result = paypal_scraper_client.sync(
+          username: credential.username, password: credential.password,
+          date_from: PAYPAL_SYNC_DAYS.ago.to_date.iso8601
+        )
         Paypal::Ingest.call(bc, result)
         # Success resets the breaker and clears any prior error.
         bc.update!(status: "authorized", error_message: nil, consecutive_failures: 0)
@@ -249,10 +252,16 @@ module Api
         render json: connection_json(bc.reload)
       end
 
-      # Minimum spacing between PayPal logins (~1/day). Keeps us well under
-      # PayPal's velocity scoring so a warmed profile stays captcha-free, and is
-      # the rate-limit gate sync_paypal stamps/checks via last_login_attempt_at.
-      PAYPAL_MIN_SYNC_INTERVAL = 20.hours
+      # How far back each PayPal sync scrapes the activity window. Default a full
+      # year; idempotent ingest (keyed on the tx id) means re-scraping the window
+      # just upserts — no duplicates. Bump PAYPAL_SYNC_DAYS for a deeper one-off
+      # backfill (PayPal keeps ~3 years).
+      PAYPAL_SYNC_DAYS = (ENV["PAYPAL_SYNC_DAYS"] || 365).to_i.days
+      # Minimum spacing between PayPal logins — keeps us well under PayPal's velocity
+      # scoring (the captcha we hit was ~12 logins/min) while staying usable as a
+      # manual button. The rate-limit gate sync_paypal stamps/checks via
+      # last_login_attempt_at.
+      PAYPAL_MIN_SYNC_INTERVAL = (ENV["PAYPAL_MIN_SYNC_MINUTES"] || 10).to_i.minutes
       # Consecutive captcha/push-timeout failures before the connection is forced
       # to "error" (re-pair). A successful sync resets the counter.
       PAYPAL_MAX_CONSECUTIVE_FAILURES = 3
