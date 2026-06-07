@@ -411,24 +411,28 @@ def _find_more_button(page):
 
 
 def _paginate(page) -> bool:
-    """Click 'Mehr' until it is gone, a click yields no new rows, or we hit
-    PAGE_CAP. Returns True if PAGE_CAP was hit (the history may be truncated ->
-    the caller fails loud)."""
+    """PayPal's activity list is INFINITE-SCROLL — there is NO 'Mehr' button. Scroll
+    to the bottom repeatedly to lazy-load older rows until the row count stops
+    growing (the end of the date window) or we hit PAGE_CAP. Returns True if
+    PAGE_CAP was hit (possible truncation -> the caller fails loud)."""
+    rows_sel = "[class*='js_transactionItem-']"
+    last = page.locator(rows_sel).count()
     for _ in range(config.PAGE_CAP):
-        more = _find_more_button(page)
-        if more is None:
-            return False
-        before = page.locator("[class*='js_transactionItem-']").count()
         try:
-            _click(page, more)
+            page.keyboard.press("End")        # jump focus to page bottom
+            page.mouse.wheel(0, 120000)        # and scroll -> triggers the lazy-load
         except Exception:
             return False
-        # Pump the event loop so the new rows render; time.sleep would not (§10.6).
-        end = time.monotonic() + (config.ACTION_TIMEOUT_MS / 1000)
-        while time.monotonic() < end and page.locator("[class*='js_transactionItem-']").count() == before:
-            page.wait_for_timeout(300)
-        if page.locator("[class*='js_transactionItem-']").count() == before:
-            return False  # no new rows -> end of history
+        # Wait for the next chunk to lazy-load (a slow box can take a while); pump
+        # the event loop via wait_for_timeout, never time.sleep (§10.6).
+        end = time.monotonic() + (config.NAV_TIMEOUT_MS / 1000)
+        while time.monotonic() < end and page.locator(rows_sel).count() == last:
+            page.wait_for_timeout(400)
+        now = page.locator(rows_sel).count()
+        log.info("paginate: %d rows loaded", now)
+        if now == last:
+            return False  # no growth after a long wait -> reached the end of history
+        last = now
     log.warning("pagination hit PAGE_CAP=%s; activity may be truncated", config.PAGE_CAP)
     return True
 

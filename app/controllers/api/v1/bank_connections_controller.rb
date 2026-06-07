@@ -192,9 +192,20 @@ module Api
         end
         bc.reload # pick up the stamped last_login_attempt_at
 
+        # Window: scrape from the most recent stored transaction (minus a few days'
+        # overlap to catch late-settling / edited rows — idempotent ingest dedupes)
+        # back to today. FIRST connect (no transactions yet) falls back to the full
+        # PAYPAL_SYNC_DAYS backfill. This keeps routine syncs small/fast and only the
+        # one-time backfill walks the whole year.
+        last_booked = bc.accounts.first&.transaction_records&.maximum(:booking_date)
+        date_from = if last_booked
+                      (last_booked - PAYPAL_SYNC_OVERLAP_DAYS).iso8601
+        else
+                      PAYPAL_SYNC_DAYS.ago.to_date.iso8601
+        end
         result = paypal_scraper_client.sync(
           username: credential.username, password: credential.password,
-          date_from: PAYPAL_SYNC_DAYS.ago.to_date.iso8601
+          date_from: date_from
         )
         Paypal::Ingest.call(bc, result)
         # Success resets the breaker and clears any prior error.
@@ -252,11 +263,14 @@ module Api
         render json: connection_json(bc.reload)
       end
 
-      # How far back each PayPal sync scrapes the activity window. Default a full
-      # year; idempotent ingest (keyed on the tx id) means re-scraping the window
-      # just upserts — no duplicates. Bump PAYPAL_SYNC_DAYS for a deeper one-off
-      # backfill (PayPal keeps ~3 years).
+      # First-connect BACKFILL depth (no transactions yet): how far back to walk on
+      # the very first sync. Routine syncs are INCREMENTAL (since the last stored tx)
+      # — see sync_paypal. Idempotent ingest (keyed on the tx id) dedupes the overlap.
+      # Bump PAYPAL_SYNC_DAYS for a deeper one-off backfill (PayPal keeps ~3 years).
       PAYPAL_SYNC_DAYS = (ENV["PAYPAL_SYNC_DAYS"] || 365).to_i.days
+      # Incremental overlap: re-scrape this many days before the last stored tx so a
+      # late-settling or edited row near the boundary isn't missed (ingest dedupes).
+      PAYPAL_SYNC_OVERLAP_DAYS = (ENV["PAYPAL_SYNC_OVERLAP_DAYS"] || 3).to_i
       # Minimum spacing between PayPal logins — keeps us well under PayPal's velocity
       # scoring (the captcha we hit was ~12 logins/min) while staying usable as a
       # manual button. The rate-limit gate sync_paypal stamps/checks via

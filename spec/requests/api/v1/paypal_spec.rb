@@ -101,7 +101,7 @@ RSpec.describe "PayPal connect + manual sync", type: :request do
       expect(response.parsed_body["error"]).to eq("rate_limited")
     end
 
-    it "scrapes a 365-day window (passes date_from = 365.days.ago)" do
+    it "backfills a 365-day window on first connect (no stored transactions yet)" do
       freeze_time do
         expect(paypal_client).to receive(:sync).with(
           hash_including(date_from: 365.days.ago.to_date.iso8601)
@@ -110,6 +110,19 @@ RSpec.describe "PayPal connect + manual sync", type: :request do
         post sync_paypal_api_v1_bank_connection_path(bc), as: :json
         expect(response).to have_http_status(:ok)
       end
+    end
+
+    it "syncs incrementally from the most recent stored transaction (minus overlap)" do
+      account = create(:account, bank_connection: bc, account_uid: "paypal")
+      create(:transaction_record, account: account, booking_date: Date.new(2026, 5, 1))
+      create(:transaction_record, account: account, booking_date: Date.new(2026, 4, 10))
+
+      expect(paypal_client).to receive(:sync).with(
+        hash_including(date_from: (Date.new(2026, 5, 1) - 3).iso8601)
+      ).and_return(paypal_sync_response)
+
+      post sync_paypal_api_v1_bank_connection_path(bc), as: :json
+      expect(response).to have_http_status(:ok)
     end
 
     it "rejects a second sync within the rate-limit window with 429 rate_limited" do
