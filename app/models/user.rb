@@ -19,6 +19,7 @@ class User < ApplicationRecord
   has_one :go_cardless_credential, dependent: :destroy
   has_one :trade_republic_credential, dependent: :destroy
   has_one :easybank_credential, dependent: :destroy
+  has_one :paypal_credential, dependent: :destroy
   has_one :llm_credential, dependent: :destroy
   has_many :bank_connections, dependent: :destroy
   has_many :accounts, through: :bank_connections

@@ -256,6 +256,11 @@ export default {
     easybank_username_placeholder: 'easybank-Anmeldename',
     easybank_password: 'Passwort',
     easybank_connect: 'Verbinden',
+    paypal: 'PayPal',
+    paypal_description: 'Lies deine PayPal-Aktivität bei Bedarf über einen netzwerkisolierten Scraper. Nur manuelle Synchronisierung.',
+    paypal_username: 'E-Mail',
+    paypal_username_placeholder: 'PayPal-E-Mail',
+    paypal_password: 'Passwort',
   },
   trade_republic: {
     pair_title: 'Trade Republic verbinden',
@@ -298,5 +303,16 @@ export default {
     retry_start: 'Erneut versuchen',
     connected_notice: 'easybank verbunden. Siehe Seite „Konten“.',
     disclaimer: 'easybank hat keine offizielle API. Kontor liest nur deinen Kreditkarten-Saldo und die Umsätze, einmal täglich, über einen netzwerkisolierten Scraper. Dies ist inoffiziell und kann brechen, wenn easybank die Website ändert.',
+  },
+  paypal: {
+    sync: 'Jetzt synchronisieren',
+    syncing: 'Synchronisiere…',
+    approve_on_phone: 'Bestätige bei Aufforderung die PayPal-App-Benachrichtigung auf deinem Handy. Das kann eine Minute dauern.',
+    synced_notice: 'PayPal synchronisiert. Siehe Seite „Konten".',
+    try_again_later: 'PayPal konnte nicht synchronisiert werden. Bitte versuche es später erneut.',
+    rate_limited: 'PayPal wurde kürzlich synchronisiert. Versuche es in etwa {{hours}} Std. erneut.',
+    login_failed: 'Anmeldung fehlgeschlagen. Prüfe E-Mail und Passwort unter „Aktualisieren" und versuche es erneut.',
+    scraper_unavailable: 'Der PayPal-Scraper ist nicht erreichbar. Stelle sicher, dass der Sidecar läuft, und versuche es erneut.',
+    sync_error: 'PayPal konnte nicht synchronisiert werden. Bitte versuche es später erneut.',
   },
 }

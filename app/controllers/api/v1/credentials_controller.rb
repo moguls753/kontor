@@ -6,6 +6,7 @@ module Api
         gc = Current.user.go_cardless_credential
         tr = Current.user.trade_republic_credential
         easybank = Current.user.easybank_credential
+        paypal = Current.user.paypal_credential
         llm = Current.user.llm_credential
 
         render json: {
@@ -13,6 +14,7 @@ module Api
           gocardless: gc ? { configured: true } : { configured: false },
           trade_republic: tr ? { configured: true, phone_number_masked: tr.phone_number_masked } : { configured: false },
           easybank: easybank ? { configured: true, username_masked: easybank.username_masked } : { configured: false },
+          paypal: paypal ? { configured: true, username_masked: paypal.username_masked } : { configured: false },
           llm: llm ? { configured: true, base_url: llm.base_url, llm_model: llm.llm_model } : { configured: false }
         }
       end
@@ -34,6 +36,9 @@ module Api
         when "easybank"
           return render json: { error: "Already configured" }, status: :conflict if Current.user.easybank_credential
           credential = Current.user.build_easybank_credential(easybank_params)
+        when "paypal"
+          return render json: { error: "Already configured" }, status: :conflict if Current.user.paypal_credential
+          credential = Current.user.build_paypal_credential(paypal_params)
         else
           return render json: { error: "Invalid provider" }, status: :unprocessable_content
         end
@@ -67,6 +72,10 @@ module Api
           credential = Current.user.easybank_credential
           return render json: { error: "Not configured" }, status: :not_found unless credential
           credential.assign_attributes(easybank_params)
+        when "paypal"
+          credential = Current.user.paypal_credential
+          return render json: { error: "Not configured" }, status: :not_found unless credential
+          credential.assign_attributes(paypal_params)
         else
           return render json: { error: "Invalid provider" }, status: :unprocessable_content
         end
@@ -133,6 +142,10 @@ module Api
       end
 
       def easybank_params
+        params.expect(credentials: [ :username, :password ])
+      end
+
+      def paypal_params
         params.expect(credentials: [ :username, :password ])
       end
     end

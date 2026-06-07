@@ -256,6 +256,11 @@ export default {
     easybank_username_placeholder: 'easybank login name',
     easybank_password: 'Password',
     easybank_connect: 'Connect',
+    paypal: 'PayPal',
+    paypal_description: 'Read your PayPal activity on demand via a network-isolated scraper. Manual sync only.',
+    paypal_username: 'Email',
+    paypal_username_placeholder: 'PayPal email',
+    paypal_password: 'Password',
   },
   trade_republic: {
     pair_title: 'Connect Trade Republic',
@@ -298,5 +303,16 @@ export default {
     retry_start: 'Try again',
     connected_notice: 'easybank connected. See the Accounts page.',
     disclaimer: 'easybank has no official API. Kontor reads only your credit-card balance and transactions, once a day, through a network-isolated scraper. This is unofficial and may break if easybank changes their site.',
+  },
+  paypal: {
+    sync: 'Sync now',
+    syncing: 'Syncing…',
+    approve_on_phone: 'Approve the PayPal app notification on your phone if prompted. This can take a minute.',
+    synced_notice: 'PayPal synced. See the Accounts page.',
+    try_again_later: "PayPal couldn't sync. Please try again later.",
+    rate_limited: 'PayPal was synced recently. Try again in about {{hours}} h.',
+    login_failed: 'Login failed. Check your email and password under Update, then try again.',
+    scraper_unavailable: 'The PayPal scraper is unavailable. Make sure the sidecar is running, then try again.',
+    sync_error: "Couldn't sync PayPal. Please try again later.",
   },
 }

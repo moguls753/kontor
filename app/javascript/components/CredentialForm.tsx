@@ -5,7 +5,7 @@ import { Btn } from './ui'
 import Icon from './Icon'
 
 interface CredentialFormProps {
-  provider: 'enable_banking' | 'gocardless' | 'llm' | 'trade_republic' | 'easybank'
+  provider: 'enable_banking' | 'gocardless' | 'llm' | 'trade_republic' | 'easybank' | 'paypal'
   isConfigured: boolean
   onSaved: () => void
   initialValues?: Record<string, string>
@@ -32,6 +32,10 @@ export default function CredentialForm({ provider, isConfigured, onSaved, initia
   const [easybankUsername, setEasybankUsername] = useState('')
   const [easybankPassword, setEasybankPassword] = useState('')
 
+  // PayPal fields
+  const [paypalUsername, setPaypalUsername] = useState('')
+  const [paypalPassword, setPaypalPassword] = useState('')
+
   // LLM fields
   const [baseUrl, setBaseUrl] = useState(initialValues?.base_url ?? '')
   const [apiKey, setApiKey] = useState('')
@@ -57,6 +61,8 @@ export default function CredentialForm({ provider, isConfigured, onSaved, initia
       credentials = { phone_number: phone, pin }
     } else if (provider === 'easybank') {
       credentials = { username: easybankUsername, password: easybankPassword }
+    } else if (provider === 'paypal') {
+      credentials = { username: paypalUsername, password: paypalPassword }
     } else {
       credentials = { base_url: baseUrl, llm_model: llmModel, api_key: apiKey || '' }
     }
@@ -137,6 +143,17 @@ export default function CredentialForm({ provider, isConfigured, onSaved, initia
           <label className="block">
             <span className="field-label">{t('settings.easybank_password')}</span>
             <input className="field field-mono" type="password" value={easybankPassword} onChange={e => setEasybankPassword(e.target.value)} placeholder="••••••••" autoComplete="off" required />
+          </label>
+        </div>
+      ) : provider === 'paypal' ? (
+        <div className="settings-2col grid grid-cols-2 gap-[15px]">
+          <label className="block">
+            <span className="field-label">{t('settings.paypal_username')}</span>
+            <input className="field field-mono" value={paypalUsername} onChange={e => setPaypalUsername(e.target.value)} placeholder={t('settings.paypal_username_placeholder')} autoComplete="off" required />
+          </label>
+          <label className="block">
+            <span className="field-label">{t('settings.paypal_password')}</span>
+            <input className="field field-mono" type="password" value={paypalPassword} onChange={e => setPaypalPassword(e.target.value)} placeholder="••••••••" autoComplete="off" required />
           </label>
         </div>
       ) : (

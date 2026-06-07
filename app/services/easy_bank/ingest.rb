@@ -10,7 +10,12 @@ module EasyBank
   # strings, dates are 'YYYY-MM-DD'. Idempotent: the account and every
   # transaction are upserted on their stable ids, so a duplicate page-1 capture
   # on a backfill resume updates in place rather than inserting twice.
-  class Ingest
+  #
+  # The booked-only + synthetic-id + per-row-rescue + idempotent transaction
+  # upsert lives in ScraperIngestBase (shared with Paypal::Ingest). This subclass
+  # adds the easybank-specific account creation / balance + credit updates and the
+  # FX columns, which are NOT shared (PayPal has no balance surface here).
+  class Ingest < ScraperIngestBase
     # The easybank connection always backs exactly one credit-card account,
     # keyed by a synthetic account_uid (mirrors the controller's
     # ensure_easybank_account so an ingest can run even if no account exists yet,
@@ -21,34 +26,10 @@ module EasyBank
       new(bank_connection, result).call
     end
 
-    def initialize(bank_connection, result)
-      @bank_connection = bank_connection
-      @result = result || {}
-    end
-
     def call
       account = ensure_account
       update_account(account)
-
-      skipped = 0
-      (@result["transactions"] || []).each do |tx|
-        # Booked-only (mirrors GoCardless / Enable Banking): pending ('vorgemerkt')
-        # easybank rows carry an ephemeral ReferenceNumber that CHANGES to the ARN
-        # on settlement, so storing them would re-duplicate at the pending->booked
-        # transition. Skip them; only booked rows are persisted.
-        next if tx["is_pending"]
-
-        upsert_transaction(account, tx)
-      rescue StandardError => e
-        # One malformed row (e.g. a bank row with no usable id or date) must NOT
-        # abort the whole batch — that would leave a partial, un-retryable import
-        # that reads as "already backfilled". Skip it and keep going; never log
-        # row content (amounts / PII).
-        skipped += 1
-        Rails.logger.warn("EasyBank::Ingest skipped a transaction (#{e.class})")
-      end
-      Rails.logger.warn("EasyBank::Ingest skipped #{skipped} transaction(s)") if skipped.positive?
-
+      ingest_transactions(account)
       account
     end
 
@@ -81,36 +62,14 @@ module EasyBank
       )
     end
 
-    # find_or_initialize on the sidecar's stable id keeps this idempotent — a
-    # duplicate page-1 capture on a backfill resume updates in place rather than
-    # inserting twice. Mirrors upsert_eb_transaction's shape/SAVE behavior.
-    def upsert_transaction(account, tx)
-      # Degenerate rows (no stable id, or no usable date anywhere) can't be
-      # deduped/stored — skip them via the caller's per-row rescue rather than
-      # raising a validation error that aborts the batch.
-      raise ArgumentError, "transaction has no id" if tx["id"].blank?
-      raise ArgumentError, "transaction has no booking_date" if tx["booking_date"].blank?
-
-      record = account.transaction_records.find_or_initialize_by(transaction_id: tx["id"])
-
-      record.assign_attributes(
-        amount: BigDecimal(tx["amount"]), # already SIGNED (Debit negative, Credit positive)
-        currency: tx["currency"],
-        booking_date: Date.parse(tx["booking_date"]),
-        value_date: tx["value_date"].present? ? Date.parse(tx["value_date"]) : nil,
-        # Booked-only ingest: we never store pending rows (see #call), so every
-        # row that reaches here is booked.
-        status: "booked",
-        remittance: tx["description"],
-        # The LLM categorizer reads remittance + creditor_name — surface the merchant
-        # there so card purchases get a usable categorization signal.
-        creditor_name: tx["merchant"],
+    # Extend the shared wire mapping with easybank's FX + credit-card columns.
+    def transaction_attributes(tx)
+      super.merge(
         original_amount: tx["original_amount"].present? ? BigDecimal(tx["original_amount"]) : nil,
         original_currency: tx["original_currency"],
         exchange_rate: tx["exchange_rate"].present? ? BigDecimal(tx["exchange_rate"].to_s) : nil,
         mcc: tx["mcc"]
       )
-      record.save!
     end
 
     # credit_limit / available_credit arrive as { "value", "currency" } objects or

@@ -353,4 +353,14 @@ RSpec.describe SyncAccountsJob, type: :job do
     expect { described_class.perform_now(bc.id) }.to have_enqueued_job(SyncAccountsJob)
     expect(bc.reload.status).to eq("authorized")
   end
+
+  it "raises explicitly for a PayPal connection rather than silently no-op stamping last_synced_at" do
+    # PayPal is manual-sync-only and excluded from both scheduled jobs; reaching
+    # SyncAccountsJob means a mistaken enqueue, so the guard must FAIL LOUD and
+    # never stamp last_synced_at.
+    bc = create(:bank_connection, :paypal, user: user, status: "authorized", last_synced_at: nil)
+
+    expect { described_class.perform_now(bc.id) }.to raise_error(ArgumentError, /manual-sync-only/)
+    expect(bc.reload.last_synced_at).to be_nil
+  end
 end

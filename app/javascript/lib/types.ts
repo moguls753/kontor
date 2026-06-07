@@ -113,5 +113,6 @@ export interface CredentialsStatus {
   gocardless: { configured: boolean }
   trade_republic: { configured: boolean; phone_number_masked?: string }
   easybank: { configured: boolean; username_masked?: string }
+  paypal: { configured: boolean; username_masked?: string }
   llm: { configured: boolean; base_url?: string; llm_model?: string }
 }

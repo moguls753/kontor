@@ -1,0 +1,5 @@
+# Dev/test dependencies for the paypal-scraper sidecar (not shipped in the
+# runtime image). The normalize tests are PURE Python and need no browser:
+#
+#   uv run --with pytest python -m pytest paypal-scraper/tests -q
+pytest>=8

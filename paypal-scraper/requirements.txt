@@ -1,0 +1,14 @@
+# Runtime dependencies for the paypal-scraper sidecar.
+#
+# Like the easybank-scraper (and unlike the tr-scraper, which stubs playwright and
+# uses a pure-Python WAF solver), this sidecar drives a REAL stealth Chromium:
+# PayPal fingerprints the device and scores behavior with reCAPTCHA Enterprise,
+# which only a genuine, warmed browser survives. cloakbrowser is the stealth
+# Playwright wrapper; it auto-downloads its own patched Chromium (~200MB) on first
+# launch (baked into the image at build time — see Dockerfile).
+
+cloakbrowser
+playwright
+
+fastapi>=0.115
+uvicorn[standard]>=0.32

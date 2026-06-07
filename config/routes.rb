@@ -20,6 +20,10 @@ Rails.application.routes.draw do
         member do
           get :callback
           post :sync
+          # PayPal is manual-sync-only: a DEDICATED synchronous action (NOT #sync,
+          # which enqueues a background job) that blocks on the out-of-band device
+          # push and returns the ingest result inline. See §4/§10 of the plan.
+          post :sync_paypal
           post :reconnect
           post :confirm_2fa
         end

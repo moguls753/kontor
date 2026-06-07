@@ -25,3 +25,6 @@ services:
   easybank-scraper:
     build: ./easybank-scraper
     pull_policy: build
+  paypal-scraper:
+    build: ./paypal-scraper
+    pull_policy: build

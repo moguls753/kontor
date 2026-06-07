@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_06_04_120200) do
+ActiveRecord::Schema[8.1].define(version: 2026_06_06_120100) do
   create_table "accounts", force: :cascade do |t|
     t.string "account_type"
     t.string "account_uid", null: false
@@ -34,11 +34,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_04_120200) do
 
   create_table "bank_connections", force: :cascade do |t|
     t.string "authorization_id"
+    t.integer "consecutive_failures", default: 0, null: false
     t.string "country_code", limit: 2
     t.datetime "created_at", null: false
     t.text "error_message"
     t.string "institution_id", null: false
     t.string "institution_name"
+    t.datetime "last_login_attempt_at"
     t.datetime "last_synced_at"
     t.string "link"
     t.string "provider", default: "enable_banking", null: false
@@ -104,6 +106,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_04_120200) do
     t.index ["user_id"], name: "index_llm_credentials_on_user_id", unique: true
   end
 
+  create_table "paypal_credentials", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.text "password"
+    t.datetime "updated_at", null: false
+    t.integer "user_id", null: false
+    t.text "username"
+    t.index ["user_id"], name: "index_paypal_credentials_on_user_id", unique: true
+  end
+
   create_table "sessions", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.string "ip_address"
@@ -167,6 +178,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_04_120200) do
   add_foreign_key "enable_banking_credentials", "users"
   add_foreign_key "go_cardless_credentials", "users"
   add_foreign_key "llm_credentials", "users"
+  add_foreign_key "paypal_credentials", "users"
   add_foreign_key "sessions", "users"
   add_foreign_key "trade_republic_credentials", "users"
   add_foreign_key "transaction_records", "accounts"

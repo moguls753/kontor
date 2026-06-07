@@ -25,6 +25,14 @@ class SyncAccountsJob < ApplicationJob
     when "gocardless" then sync_gocardless
     when "trade_republic" then sync_trade_republic
     when "easybank" then sync_easybank
+    when "paypal"
+      # PayPal is manual-sync-only: the device push is out-of-band and cannot be
+      # approved unattended, so a background sync can never succeed. It is excluded
+      # from both scheduled fan-outs (SyncAllAccountsJob / SyncScrapedBalancesJob),
+      # so reaching here means something enqueued it by mistake. Raise EXPLICITLY
+      # rather than fall through to a silent no-op that would stamp last_synced_at
+      # and mask the bug.
+      raise ArgumentError, "PayPal connections are manual-sync-only (use sync_paypal); they must not be enqueued on SyncAccountsJob"
     end
 
     @bc.update!(last_synced_at: Time.current)

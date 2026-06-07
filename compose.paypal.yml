@@ -1,0 +1,119 @@
+# PayPal personal-account scraper stack — for a TrueNAS "Custom App"
+# (docker-compose). Standalone from compose.scraper.yml (Trade Republic) and
+# compose.easybank.yml (easybank / Barclaycard DE), which are left untouched;
+# run them side by side or independently.
+#
+# Topology (egress isolation is the whole point — mirrors the easybank stack):
+#
+#   kontor (Rails) ──HTTP+X-Sidecar-Token──► paypal-scraper (CloakBrowser)
+#        (separate stack / direct internet)        │  ppnet ONLY
+#                                                   │  no internet, no resolver
+#                                                   ▼  HTTPS_PROXY=paypal-egress
+#                                              paypal-egress-proxy (squid)
+#                                                ppnet + web; does the DNS;
+#                                                CONNECT:443 allowlist only:
+#                                                PayPal + reCAPTCHA hosts
+#
+# - paypal-scraper sits on `ppnet` (internal) only: no route off the box and no
+#   working DNS, so its sole path out is the squid allowlist.
+# - UNLIKE tr-scraper, this service is NOT read_only and NOT cap-stripped to the
+#   bone: a real Chromium needs to write its profile, shm and temp dirs and needs
+#   the syscalls to spawn renderer processes. The egress lock-down (internal
+#   network + allowlist proxy) is what contains it, not a read-only rootfs.
+# - PayPal is MANUAL-SYNC-ONLY: no background job drives it. The login does an
+#   out-of-band device push step-up the user approves on their phone, inside one
+#   blocking sync request. HUMANIZE=true + ~1/day rate-limiting (in Rails) keep
+#   the behavioral reCAPTCHA from firing.
+#
+# Run just the two sidecar services (Phase-1 egress gate):
+#   docker compose -f compose.paypal.yml up --build paypal-egress-proxy paypal-scraper
+#
+# Required env (see .env.example): PAYPAL_SIDECAR_TOKEN, PP_FINGERPRINT.
+
+name: kontor-paypal
+
+services:
+  paypal-egress-proxy:
+    image: ubuntu/squid:latest
+    restart: unless-stopped
+    volumes:
+      - ./egress-proxy/paypal-squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - ppnet
+      - web
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3128"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  paypal-scraper:
+    build: ./paypal-scraper
+    restart: unless-stopped
+    depends_on:
+      paypal-egress-proxy:
+        condition: service_healthy
+    environment:
+      SIDECAR_TOKEN: ${PAYPAL_SIDECAR_TOKEN:?set PAYPAL_SIDECAR_TOKEN in .env}
+      # Pinned per-install browser fingerprint (required, fail-closed): CloakBrowser
+      # randomizes --fingerprint per launch; pin it so PayPal sees ONE stable
+      # device across logins (kills the device-trust push step-up re-firing).
+      PP_FINGERPRINT: ${PP_FINGERPRINT:?set PP_FINGERPRINT in .env}
+      PROFILE_DIR: /profile
+      HEADLESS: "true"
+      # Human mouse-curves + typing delays. The spike's reCAPTCHA was velocity +
+      # robotic + humanize-OFF; on it (plus ~1/day rate-limiting in Rails) the
+      # behavioral score stays below the challenge threshold while staying headless.
+      HUMANIZE: "true"
+      # The browser's ONLY egress: point every client at the paypal proxy. The
+      # PROXY_URL var is what config.py / CloakBrowser read for the browser; the
+      # HTTP(S)_PROXY env vars cover any incidental stdlib/library traffic too.
+      PROXY_URL: http://paypal-egress-proxy:3128
+      HTTPS_PROXY: http://paypal-egress-proxy:3128
+      https_proxy: http://paypal-egress-proxy:3128
+      HTTP_PROXY: http://paypal-egress-proxy:3128
+      http_proxy: http://paypal-egress-proxy:3128
+      # NO_PROXY only covers loopback so the healthcheck reaches the local server
+      # directly without trying to tunnel through squid.
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    networks:
+      - ppnet
+    # Persistent warm profile (rw): the warmed/trusted device store. CloakBrowser's
+    # launch_persistent_context holds a SingletonLock, so the sidecar opens/closes
+    # the browser per request — continuity (the trusted device) comes from THIS
+    # on-disk profile, which therefore MUST survive restarts/rebuilds (named volume).
+    volumes:
+      - paypal-profile:/profile
+    # Chromium needs a sane /dev/shm or it crashes renderers under memory pressure.
+    shm_size: "1gb"
+    # Deliberately NOT read_only and NOT cap_drop ALL: a real browser writes its
+    # profile/temp and spawns sandboxed child processes. Keep the one cheap, safe
+    # hardening that doesn't break Chromium.
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request as u,sys; o=u.build_opener(u.ProxyHandler({})); sys.exit(0 if o.open('http://127.0.0.1:8000/health',timeout=3).status==200 else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  # Internal: no gateway to the host/internet, IPv6 disabled so there is no
+  # alternative route for the scraper to slip out on. Distinct name from the TR
+  # (appnet) and easybank (ebnet) stacks so the stacks never share a network.
+  ppnet:
+    internal: true
+    enable_ipv6: false
+  # Internet-facing bridge for the proxy's upstream only.
+  web:
+    driver: bridge
+
+volumes:
+  paypal-profile:

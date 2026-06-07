@@ -1,14 +1,16 @@
 # Kontor — FULL PRODUCTION STACK for a TrueNAS SCALE "Custom App".
 #
-# This is THE file to deploy: it merges the two standalone sidecar stacks
+# This is THE file to deploy: it merges the three standalone sidecar stacks
 # (compose.scraper.yml = Trade Republic, compose.easybank.yml = easybank /
-# Barclaycard DE) into one app so the single Rails service can reach BOTH
-# scraper sidecars, while each sidecar stays egress-locked to its own bank.
+# Barclaycard DE, compose.paypal.yml = PayPal) into one app so the single Rails
+# service can reach ALL scraper sidecars, while each sidecar stays egress-locked
+# to its own provider.
 #
 # The standalone files are NOT deleted — keep them for running an individual
 # sidecar or just the egress gate by hand, e.g.:
 #   docker compose -f compose.scraper.yml  up --build egress-proxy tr-scraper
 #   docker compose -f compose.easybank.yml up --build easybank-egress-proxy easybank-scraper
+#   docker compose -f compose.paypal.yml   up --build paypal-egress-proxy paypal-scraper
 #
 # Topology (STRICT per-provider egress isolation — see docs/trade-republic.md):
 #
@@ -20,31 +22,40 @@
 #   (Rails)       │                                                      │    .awswaf.com
 #   tr-net +      └──────────────────────────────────────────────────────┘
 #   eb-net +
-#   web           ┌──────────────── eb-net (internal) ────────────────┐
-#   (only         │  easybank-scraper   ──HTTPS_PROXY──►  easybank-egress-proxy (squid)
-#    service      │  (CloakBrowser)                       eb-net + web │
-#    on all       │  eb-net ONLY                          DNS + CONNECT:443
-#    three)  ─────┤  no internet, no resolver             allowlist:    │──► .easybank.de
-#                 │                                                      │    .crashninja.net
+#   pp-net +      ┌──────────────── eb-net (internal) ────────────────┐
+#   web           │  easybank-scraper   ──HTTPS_PROXY──►  easybank-egress-proxy (squid)
+#   (only         │  (CloakBrowser)                       eb-net + web │
+#    service      │  eb-net ONLY                          DNS + CONNECT:443
+#    on all       │  no internet, no resolver             allowlist:    │──► .easybank.de
+#    four)   ─────┤                                                      │    .crashninja.net
+#                 └──────────────────────────────────────────────────────┘
+#                 ┌──────────────── pp-net (internal) ────────────────┐
+#                 │  paypal-scraper     ──HTTPS_PROXY──►  paypal-egress-proxy (squid)
+#                 │  (CloakBrowser)                       pp-net + web │
+#                 │  pp-net ONLY                          DNS + CONNECT:443
+#                 │  no internet, no resolver             allowlist:    │──► PayPal +
+#                 │  MANUAL SYNC ONLY                                   │    reCAPTCHA
 #                 └──────────────────────────────────────────────────────┘
 #
 #   kontor also talks straight to the open internet on `web` for the LLM
 #   categorizer, Enable Banking and GoCardless.
 #
 # INVARIANTS — a single wrong `networks:` line is a security hole. Preserve exactly:
-#   (i)   tr-scraper and easybank-scraper share NO network → they cannot see each other.
+#   (i)   tr-scraper, easybank-scraper and paypal-scraper share NO network → none can
+#         see another.
 #   (ii)  each scraper is on its internal net ONLY → no internet except via its own
 #         allowlisting squid (HTTPS_PROXY / PROXY_URL point at that squid).
-#   (iii) the two proxies keep SEPARATE allowlists/confs (egress-proxy/squid.conf vs
-#         egress-proxy/easybank-squid.conf); neither scraper can reach the other's proxy.
-#   (iv)  kontor is the ONLY service bridging both internal nets + web.
+#   (iii) the three proxies keep SEPARATE allowlists/confs (egress-proxy/squid.conf,
+#         egress-proxy/easybank-squid.conf, egress-proxy/paypal-squid.conf); no scraper
+#         can reach another's proxy.
+#   (iv)  kontor is the ONLY service bridging all three internal nets + web.
 #
 # kontor MUST run with RAILS_ENV=production AND SOLID_QUEUE_IN_PUMA=true or the
 # recurring scheduler never runs in Puma (config/puma.rb:38) — that would stop
 # the daily TR balance job *and* the 6h account sync.
 #
 # Required env (see .env.example): RAILS_MASTER_KEY, SCRAPER_SIDECAR_TOKEN,
-# EASYBANK_SIDECAR_TOKEN.
+# EASYBANK_SIDECAR_TOKEN, PAYPAL_SIDECAR_TOKEN, PP_FINGERPRINT.
 
 name: kontor
 
@@ -181,7 +192,87 @@ services:
       retries: 5
       start_period: 20s
 
-  # ── Rails app — the ONLY service bridging both internal nets + web ─────────
+  # ── PayPal egress gate ────────────────────────────────────────────────────
+  paypal-egress-proxy:
+    image: ubuntu/squid:latest
+    restart: unless-stopped
+    volumes:
+      - ./egress-proxy/paypal-squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - pp-net
+      - web
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3128"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  paypal-scraper:
+    # Pulled from GHCR (amd64 only — bakes CloakBrowser's Chromium). On arm64, or
+    # to build from source, use the build override:
+    #   docker compose -f compose.yml -f compose.build.yml up -d --build
+    image: ghcr.io/moguls753/kontor-paypal-scraper:v0.1.0
+    restart: unless-stopped
+    depends_on:
+      paypal-egress-proxy:
+        condition: service_healthy
+    environment:
+      SIDECAR_TOKEN: ${PAYPAL_SIDECAR_TOKEN:?set PAYPAL_SIDECAR_TOKEN in .env}
+      # Pinned per-install browser fingerprint (required, fail-closed): CloakBrowser
+      # randomizes --fingerprint per launch; pin it so PayPal sees ONE stable
+      # device across logins (kills the device-trust push step-up re-firing).
+      PP_FINGERPRINT: ${PP_FINGERPRINT:?set PP_FINGERPRINT in .env}
+      PROFILE_DIR: /profile
+      HEADLESS: "true"
+      # Whole-/sync ceiling. Must clear login-nav + PUSH_DEADLINE_S + scrape (the
+      # push wait is NON-additive, capped at the remaining budget), so it is sized
+      # well above PUSH_DEADLINE_S(150), not at 165:
+      #   PUSH_DEADLINE_S(150) < SYNC_DEADLINE_S(250) < Rails READ_TIMEOUT(280) < Thruster(300)
+      SYNC_DEADLINE_S: "250"
+      # Human mouse-curves + typing delays. The spike's reCAPTCHA was velocity +
+      # robotic + humanize-OFF; on it (plus ~1/day rate-limiting in Rails) the
+      # behavioral score stays below the challenge threshold while staying headless.
+      HUMANIZE: "true"
+      # The browser's ONLY egress: point every client at the paypal proxy. The
+      # PROXY_URL var is what config.py / CloakBrowser read for the browser; the
+      # HTTP(S)_PROXY env vars cover any incidental stdlib/library traffic too.
+      PROXY_URL: http://paypal-egress-proxy:3128
+      HTTPS_PROXY: http://paypal-egress-proxy:3128
+      https_proxy: http://paypal-egress-proxy:3128
+      HTTP_PROXY: http://paypal-egress-proxy:3128
+      http_proxy: http://paypal-egress-proxy:3128
+      # NO_PROXY only covers loopback so the healthcheck reaches the local server
+      # directly without trying to tunnel through squid.
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    networks:
+      - pp-net
+    # Persistent warm profile (rw): the warmed/trusted device store. CloakBrowser's
+    # launch_persistent_context holds a SingletonLock, so the sidecar opens/closes
+    # the browser per request — continuity (the trusted device) comes from THIS
+    # on-disk profile, which therefore MUST survive restarts/rebuilds (named volume).
+    volumes:
+      - paypal-profile:/profile
+    # Chromium needs a sane /dev/shm or it crashes renderers under memory pressure.
+    shm_size: "1gb"
+    # Deliberately NOT read_only and NOT cap_drop ALL: a real browser writes its
+    # profile/temp and spawns sandboxed child processes. Keep the one cheap, safe
+    # hardening that doesn't break Chromium.
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request as u,sys; o=u.build_opener(u.ProxyHandler({})); sys.exit(0 if o.open('http://127.0.0.1:8000/health',timeout=3).status==200 else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── Rails app — the ONLY service bridging all internal nets + web ──────────
   kontor:
     build: .
     restart: unless-stopped
@@ -194,6 +285,10 @@ services:
         condition: service_healthy
       easybank-scraper:
         condition: service_healthy
+      paypal-egress-proxy:
+        condition: service_healthy
+      paypal-scraper:
+        condition: service_healthy
     environment:
       RAILS_ENV: production
       # Required so Solid Queue's recurring scheduler runs inside Puma.
@@ -205,6 +300,25 @@ services:
       # easybank sidecar (reached over eb-net).
       EASYBANK_SIDECAR_URL: http://easybank-scraper:8000
       EASYBANK_SIDECAR_TOKEN: ${EASYBANK_SIDECAR_TOKEN:?set EASYBANK_SIDECAR_TOKEN in .env}
+      # PayPal sidecar (reached over pp-net). MANUAL-SYNC-ONLY; the sync_paypal
+      # action blocks while the user approves the device push on their phone AND
+      # the post-approval scrape runs, so the whole timeout chain must clear
+      # login-nav + PUSH_DEADLINE_S(150) + scrape — NOT just 150. The sidecar's
+      # SYNC_DEADLINE_S(250) sizes that; the chain below stays above it:
+      #   PUSH_DEADLINE_S(150) < sidecar SYNC_DEADLINE_S(250) < Rails READ_TIMEOUT(280)
+      #   < Thruster idle/write(300). Thruster (./bin/thrust, the prod CMD) otherwise
+      #   cuts the blocking request at its ~30/60s default idle/write timeouts.
+      PAYPAL_SIDECAR_URL: http://paypal-scraper:8000
+      PAYPAL_SIDECAR_TOKEN: ${PAYPAL_SIDECAR_TOKEN:?set PAYPAL_SIDECAR_TOKEN in .env}
+      THRUSTER_HTTP_IDLE_TIMEOUT: "300"
+      THRUSTER_HTTP_WRITE_TIMEOUT: "300"
+      THRUSTER_HTTP_READ_TIMEOUT: "300"
+      # The blocking sync_paypal holds 1 Puma thread for ~2-3 min. config/puma.rb
+      # defaults to 3 threads with no worker_timeout; the Rails-side ~1/day rate
+      # limiter (stamped at request start) keeps this single-user-serialized so it
+      # can't starve the pool. Raise the floor a touch so a parallel page load
+      # during a push-block still has threads.
+      RAILS_MAX_THREADS: "5"
     volumes:
       - kontor_storage:/rails/storage
     ports:
@@ -212,6 +326,7 @@ services:
     networks:
       - tr-net
       - eb-net
+      - pp-net
       - web
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/up"]
@@ -222,12 +337,15 @@ services:
 
 networks:
   # Internal: no gateway to the host/internet, IPv6 disabled so there is no
-  # alternative route for the scraper to slip out on. tr-net and eb-net are
-  # distinct so the two scrapers never share a network (invariant i).
+  # alternative route for the scraper to slip out on. tr-net, eb-net and pp-net
+  # are distinct so the three scrapers never share a network (invariant i).
   tr-net:
     internal: true
     enable_ipv6: false
   eb-net:
+    internal: true
+    enable_ipv6: false
+  pp-net:
     internal: true
     enable_ipv6: false
   # Internet-facing bridge: kontor (EB/GC/LLM) and each proxy's upstream.
@@ -237,3 +355,6 @@ networks:
 volumes:
   kontor_storage:
   easybank-profile:
+  # PayPal warm/trusted-device profile. Named (not anonymous) so a rebuild/redeploy
+  # NEVER wipes it — losing it re-fires the device push step-up on the next login.
+  paypal-profile:

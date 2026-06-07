@@ -2,22 +2,24 @@
 #
 # Table name: bank_connections
 #
-#  id               :integer          not null, primary key
-#  country_code     :string(2)
-#  error_message    :text
-#  institution_name :string
-#  last_synced_at   :datetime
-#  link             :string
-#  provider         :string           default("enable_banking"), not null
-#  status           :string           default("pending"), not null
-#  valid_until      :datetime
-#  created_at       :datetime         not null
-#  updated_at       :datetime         not null
-#  authorization_id :string
-#  institution_id   :string           not null
-#  requisition_id   :string
-#  session_id       :string
-#  user_id          :integer          not null
+#  id                    :integer          not null, primary key
+#  consecutive_failures  :integer          default(0), not null
+#  country_code          :string(2)
+#  error_message         :text
+#  institution_name      :string
+#  last_login_attempt_at :datetime
+#  last_synced_at        :datetime
+#  link                  :string
+#  provider              :string           default("enable_banking"), not null
+#  status                :string           default("pending"), not null
+#  valid_until           :datetime
+#  created_at            :datetime         not null
+#  updated_at            :datetime         not null
+#  authorization_id      :string
+#  institution_id        :string           not null
+#  requisition_id        :string
+#  session_id            :string
+#  user_id               :integer          not null
 #
 # Indexes
 #
@@ -78,6 +80,15 @@ FactoryBot.define do
       provider { "easybank" }
       institution_id { "easybank" }
       institution_name { "easybank Kreditkarte" }
+      country_code { "DE" }
+      session_id { nil }
+      valid_until { nil }
+    end
+
+    trait :paypal do
+      provider { "paypal" }
+      institution_id { "paypal" }
+      institution_name { "PayPal" }
       country_code { "DE" }
       session_id { nil }
       valid_until { nil }

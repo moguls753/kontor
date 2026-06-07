@@ -12,4 +12,9 @@ RSpec.describe SyncAllAccountsJob, type: :job do
     create(:bank_connection, :trade_republic, user: user)
     expect { described_class.perform_now }.not_to have_enqueued_job(SyncAccountsJob)
   end
+
+  it "excludes PayPal (manual-sync-only; never enqueued automatically)" do
+    create(:bank_connection, :paypal, user: user)
+    expect { described_class.perform_now }.not_to have_enqueued_job(SyncAccountsJob)
+  end
 end

@@ -21,6 +21,10 @@ module Api
         # easybank logs in through its own sidecar (no OAuth redirect), same
         # synthetic institution_id / one-per-user pattern.
         return create_easybank(credential) if params[:provider] == "easybank"
+        # PayPal is manual-sync-only: connect just establishes the (authorized)
+        # connection record; the real login + scrape happens on demand via
+        # sync_paypal (no OAuth redirect, no login at connect time).
+        return create_paypal(credential) if params[:provider] == "paypal"
 
         bc = Current.user.bank_connections.build(
           provider: params[:provider],
@@ -83,6 +87,16 @@ module Api
 
       def sync
         bc = Current.user.bank_connections.find(params[:id])
+        # PayPal is manual-sync-only: its device push is out-of-band and cannot be
+        # approved unattended, so it must NEVER ride the background SyncAccountsJob
+        # (which would dead-letter on the job-level guard while this returned a
+        # misleading {queued: true}). Reject early; the UI uses sync_paypal instead.
+        if bc.paypal?
+          return render json: {
+            error: "manual_sync_only",
+            message: "PayPal connections sync manually — use sync_paypal."
+          }, status: :unprocessable_content
+        end
         SyncAccountsJob.perform_later(bc.id)
         render json: { queued: true }
       end
@@ -137,6 +151,66 @@ module Api
         render_easybank_error(bc, e)
       end
 
+      # Manual PayPal sync — a DEDICATED SYNCHRONOUS action (NOT #sync, which
+      # enqueues a background job). It calls the sidecar inline and BLOCKS while
+      # the user approves the out-of-band device push on their phone, then ingests
+      # the scraped activity and returns the result.
+      #
+      # Rate limit: stamp last_login_attempt_at at the START; reject a second sync
+      # within MIN_SYNC_INTERVAL (~1/day) with 429 rate_limited so we never burst
+      # logins against PayPal's velocity scoring. Circuit breaker: after N
+      # consecutive captcha/push-timeout failures the connection is forced to
+      # "error" (re-pair); a success resets the counter.
+      def sync_paypal
+        bc = Current.user.bank_connections.find(params[:id])
+        return render json: { error: "not_paypal", message: "Not a PayPal connection" }, status: :unprocessable_content unless bc.paypal?
+
+        credential = Current.user.paypal_credential
+        return render json: { error: "paypal not configured" }, status: :unprocessable_content unless credential
+
+        # Atomically check-AND-stamp the rate limit: a plain read-then-write would
+        # let a double-click / two tabs both pass the check and fire two logins
+        # (TOCTOU). A conditional UPDATE guarded by a WHERE on the OLD value lets
+        # exactly one request win; 0 rows affected => someone else just stamped it
+        # within the window, so we're rate-limited.
+        now = Time.current
+        cutoff = PAYPAL_MIN_SYNC_INTERVAL.ago
+        prior_login_attempt_at = bc.last_login_attempt_at # to roll back a no-login failure
+        claimed = BankConnection
+          .where(id: bc.id)
+          .where("last_login_attempt_at IS NULL OR last_login_attempt_at <= ?", cutoff)
+          .update_all(last_login_attempt_at: now)
+
+        if claimed.zero?
+          bc.reload
+          retry_in = ((bc.last_login_attempt_at + PAYPAL_MIN_SYNC_INTERVAL) - Time.current).to_i
+          return render json: {
+            error: "rate_limited",
+            message: "PayPal sync was attempted recently. Try again in about #{(retry_in / 3600.0).ceil} h.",
+            retry_in: [ retry_in, 0 ].max
+          }, status: :too_many_requests
+        end
+        bc.reload # pick up the stamped last_login_attempt_at
+
+        result = paypal_scraper_client.sync(username: credential.username, password: credential.password)
+        Paypal::Ingest.call(bc, result)
+        # Success resets the breaker and clears any prior error.
+        bc.update!(status: "authorized", error_message: nil, consecutive_failures: 0)
+
+        render json: connection_json(bc.reload)
+      rescue Paypal::SidecarUnavailableError, Paypal::ApiError, Paypal::InvalidRequestError => e
+        # No PayPal LOGIN actually occurred (the sidecar was down / rejected the
+        # request before driving the browser), so this must NOT consume the ~1/day
+        # rate-limit budget — otherwise a mere sidecar restart locks the user out
+        # for ~20h. Roll back the stamp we optimistically claimed above. These are
+        # transient/contract faults: don't expire the connection or trip the breaker.
+        bc.update_columns(last_login_attempt_at: prior_login_attempt_at) if bc
+        message = e.is_a?(Paypal::InvalidRequestError) ? "invalid_request" : "scraper_unavailable"
+        render json: { error: message, message: e.message }, status: :bad_gateway
+      rescue Paypal::Error => e
+        render_paypal_error(bc, e)
+      end
+
       private
 
       def confirm_trade_republic(bc)
@@ -175,12 +249,21 @@ module Api
         render json: connection_json(bc.reload)
       end
 
+      # Minimum spacing between PayPal logins (~1/day). Keeps us well under
+      # PayPal's velocity scoring so a warmed profile stays captcha-free, and is
+      # the rate-limit gate sync_paypal stamps/checks via last_login_attempt_at.
+      PAYPAL_MIN_SYNC_INTERVAL = 20.hours
+      # Consecutive captcha/push-timeout failures before the connection is forced
+      # to "error" (re-pair). A successful sync resets the counter.
+      PAYPAL_MAX_CONSECUTIVE_FAILURES = 3
+
       def provider_credential(provider)
         case provider
         when "enable_banking" then Current.user.enable_banking_credential
         when "gocardless" then Current.user.go_cardless_credential
         when "trade_republic" then Current.user.trade_republic_credential
         when "easybank" then Current.user.easybank_credential
+        when "paypal" then Current.user.paypal_credential
         end
       end
 
@@ -340,6 +423,82 @@ module Api
           bc&.update!(status: "error", error_message: error.message)
           render json: { error: "scraper_unavailable", message: error.message }, status: :bad_gateway
         end
+      end
+
+      # --- PayPal ---
+
+      # Reuse/replace the user's single PayPal connection — the
+      # [user_id, institution_id] index is NOT unique, so guard explicitly to
+      # avoid accumulating orphans. institution_id is synthetic and must be set
+      # before save (it is NOT NULL). Mirrors create_easybank, but PayPal does NOT
+      # log in at connect time (manual-sync-only): the connection is established as
+      # authorized and the first real login happens on demand via sync_paypal.
+      def create_paypal(credential)
+        bc = Current.user.bank_connections.find_or_initialize_by(
+          provider: "paypal",
+          institution_id: "paypal"
+        )
+        attrs = {
+          institution_name: "PayPal",
+          country_code: "DE"
+        }
+        # Do NOT silently reset a tripped circuit breaker on a plain create→sync: a
+        # connection already in "error" (N consecutive captcha/push failures) must
+        # require an explicit reconnect, not be un-tripped by re-submitting the
+        # connect form. Only (re)authorize a record that isn't already errored.
+        unless bc.persisted? && bc.status == "error"
+          attrs[:status] = "authorized"
+          attrs[:error_message] = nil
+          attrs[:consecutive_failures] = 0
+        end
+        bc.assign_attributes(attrs)
+        bc.save!
+        render json: connection_json(bc), status: :created
+      end
+
+      # Map a Paypal::Error to a status the frontend can act on. CaptchaBlocked and
+      # PushTimeout are NON-RETRYABLE and count toward the circuit breaker; after
+      # PAYPAL_MAX_CONSECUTIVE_FAILURES the connection is forced to "error".
+      def render_paypal_error(bc, error)
+        case error
+        when Paypal::PushTimeout
+          # DEFERRED-by-design: a push_timeout DID submit credentials + fire a
+          # device push (a real velocity event), so it legitimately consumes the
+          # ~1/day rate-limit budget — we do NOT roll back the last_login_attempt_at
+          # stamp here (unlike the no-login SidecarUnavailable path). Kept on purpose.
+          bump_paypal_breaker(bc)
+          render json: { error: "push_timeout", message: error.message }, status: :conflict
+        when Paypal::CaptchaBlocked
+          bump_paypal_breaker(bc)
+          render json: { error: "captcha_blocked", message: error.message }, status: :unprocessable_content
+        when Paypal::LoginFailed
+          # Bad username/password — the stored credential must be corrected. Not a
+          # transient/captcha failure, so it does NOT advance the breaker, but it
+          # does put the connection in error until the credential is fixed.
+          bc&.update!(status: "error", error_message: error.message)
+          render json: { error: "login_failed", message: error.message }, status: :unprocessable_content
+        else # ApiError, SidecarUnavailableError — transient; don't expire/breaker
+          render json: { error: "scraper_unavailable", message: error.message }, status: :bad_gateway
+        end
+      end
+
+      # Advance the circuit breaker on a captcha/push-timeout; once it reaches the
+      # threshold force the connection to "error" so the UI prompts a re-pair. A
+      # successful sync (sync_paypal) resets the counter.
+      def bump_paypal_breaker(bc)
+        return unless bc
+
+        failures = bc.consecutive_failures.to_i + 1
+        if failures >= PAYPAL_MAX_CONSECUTIVE_FAILURES
+          bc.update!(consecutive_failures: failures, status: "error",
+                     error_message: "PayPal sync failed repeatedly. Reconnect to re-pair.")
+        else
+          bc.update!(consecutive_failures: failures)
+        end
+      end
+
+      def paypal_scraper_client
+        @paypal_scraper_client ||= Paypal::ScraperClient.new
       end
 
       # Provider-aware: each scraped provider has its own network-isolated sidecar.
