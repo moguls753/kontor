@@ -27,9 +27,12 @@ Key decisions are pinned per PAYPAL_SCRAPER_PLAN.md §6 + §10 (which OVERRIDE �
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+
+log = logging.getLogger("paypal-scraper.normalize")
 
 # --- date parsing ------------------------------------------------------------
 # German month names, full and abbreviated (PayPal prints "Juni", "Apr.", "März",
@@ -192,11 +195,18 @@ def parse_header_year(header_text: str) -> int | None:
 
 
 def _resolve_year(month: int, day: int, carry_year: int | None, today: date) -> int:
-    """Pick the year for a (month, day). If a month-header carried one, use it;
-    else derive from today and, if the resulting date is in the FUTURE, step back
-    a year (the Dec->Jan boundary guard, §10.2)."""
+    """Pick the year for a (month, day). If a month-header carried one, use it —
+    UNLESS that would place the transaction in the FUTURE (a stale carry from a
+    later '...YYYY' header when the expected month-header was missing/unparsed): a
+    booked transaction is never in the future, so fall back to today-relative
+    resolution with the Dec->Jan step-back (§10.2)."""
     if carry_year is not None:
-        return carry_year
+        try:
+            if date(carry_year, month, day) <= today:
+                return carry_year
+            # else: carry would be in the future -> stale/wrong -> fall through.
+        except ValueError:
+            return carry_year  # invalid (e.g. 29 Feb); sanity-bound handles it
     year = today.year
     try:
         if date(year, month, day) > today:
@@ -290,13 +300,17 @@ def normalize(rows: list[dict], date_from: str, date_to: str, *, today: date | N
         except ValueError as e:
             raise ValueError(f"invalid date {year}-{month}-{day}: {e}") from e
 
-        # Sanity-bound: a wrong-year date parses cleanly, so the parse-error guard
-        # alone misses it. Reject anything outside the queried window (§10.2).
+        # Sanity-bound: a wrong-year date parses cleanly. The _resolve_year
+        # future-guard corrects stale-carry years; anything STILL outside the
+        # queried window is genuinely out of range (e.g. a boundary row PayPal
+        # included just beyond date_from) — SKIP it (logged) rather than abort the
+        # entire sync on a single row.
         if not (lo <= booking <= hi):
-            raise ValueError(
-                f"booking_date {booking.isoformat()} outside queried window "
-                f"[{date_from}, {date_to}]"
+            log.warning(
+                "skipping out-of-window booking_date %s (window [%s, %s])",
+                booking.isoformat(), date_from, date_to,
             )
+            continue
 
         rec = {
             "id": (str(row.get("id")).strip() or None),

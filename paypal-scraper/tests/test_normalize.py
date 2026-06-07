@@ -215,11 +215,11 @@ def test_unparseable_date_raises():
         _norm([_row(description_text="kein Datum . Zahlung")])
 
 
-def test_date_outside_window_is_rejected():
-    import pytest
+def test_date_outside_window_is_skipped_not_fatal():
     # "6. Juni" -> 2026-06-06 but the window ends 2026-06-05 => out of bounds.
-    with pytest.raises(ValueError):
-        normalize.normalize([_row()], "2026-05-01", "2026-06-05", today=TODAY)
+    # It is SKIPPED (logged), NOT fatal: one out-of-window row must never abort the
+    # whole sync (the wrong-year case is handled by _resolve_year's future-guard).
+    assert normalize.normalize([_row()], "2026-05-01", "2026-06-05", today=TODAY) == []
 
 
 def test_empty_rows_is_empty():

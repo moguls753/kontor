@@ -180,3 +180,40 @@ def test_scrape_rows_emits_headers_interleaved_and_feeds_year_carry():
     by = {r["id"]: r for r in recs}
     assert by["J1"]["booking_date"] == "2026-01-03"
     assert by["D1"]["booking_date"] == "2025-12-30"
+
+
+def test_year_carry_future_guard_when_dec_header_missing():
+    # Regression: PayPal didn't emit a "Dez. 2025" header, so the carry is a stale
+    # "Mai 2026". The future-guard must still resolve "30. Dez." to 2025 (a booked
+    # tx is never in the future) instead of 2026-12-30 (which aborted the sync).
+    from datetime import date
+    from app import normalize
+
+    nodes = [
+        _header_el("Mai 2026"),
+        _tx_el("M1", "−1,00 €", "5. Mai . Zahlung"),
+        _tx_el("D1", "−2,00 €", "30. Dez. . Zahlung"),  # no Dez header before it
+    ]
+    raw = paypal._scrape_rows(_Page(nodes))
+    recs = normalize.normalize(raw, "2025-06-07", "2026-06-07", today=date(2026, 6, 7))
+    by = {r["id"]: r for r in recs}
+    assert by["M1"]["booking_date"] == "2026-05-05"
+    assert by["D1"]["booking_date"] == "2025-12-30"  # stepped back, not 2026
+
+
+def test_normalize_skips_out_of_window_row_instead_of_aborting():
+    # A genuinely out-of-window row is skipped (logged), NOT fatal — one bad row
+    # must never kill the whole year sync.
+    from datetime import date
+    from app import normalize
+
+    nodes = [
+        _header_el("Juni 2024"),  # before date_from -> out of window
+        _tx_el("OLD", "−1,00 €", "5. Juni . Zahlung"),
+        _header_el("Mai 2026"),
+        _tx_el("OK", "−2,00 €", "5. Mai . Zahlung"),
+    ]
+    raw = paypal._scrape_rows(_Page(nodes))
+    recs = normalize.normalize(raw, "2025-06-07", "2026-06-07", today=date(2026, 6, 7))
+    ids = {r["id"] for r in recs}
+    assert "OK" in ids and "OLD" not in ids
