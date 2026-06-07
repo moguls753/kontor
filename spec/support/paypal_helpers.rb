@@ -5,11 +5,14 @@ module PaypalHelpers
   # is_pending is always false (the scraper is booked-only). One debit + one
   # credit so amount signing is exercised; one row carries a synthetic
   # "pp-syn-" id (a row PayPal gave no Transaktionscode for).
-  def paypal_sync_response(date_from: "2026-05-07", date_to: "2026-06-06")
+  def paypal_sync_response(date_from: "2026-05-07", date_to: "2026-06-06", balance: { "amount" => "0.00", "currency" => "EUR" })
     {
       "status" => "ok",
       "date_from" => date_from,
       "date_to" => date_to,
+      # The dashboard "PayPal-Guthaben" available balance (best-effort; null when
+      # the sidecar couldn't read the card).
+      "balance" => balance,
       "transactions" => [
         {
           "id" => "55X63072JY995300U",

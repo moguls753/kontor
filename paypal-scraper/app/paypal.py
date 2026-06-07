@@ -498,6 +498,67 @@ def scrape(page, date_from: str, date_to: str) -> list[dict]:
         raise TransientError(f"Failed to normalize a scraped row: {e}") from e
 
 
+# --- balance (best-effort, non-critical) -------------------------------------
+# The dashboard (/myaccount/summary) carries a "PayPal-Guthaben" card with the
+# available balance ("0,00 €" / "Verfügbar"). We read it text-anchored, NOT via a
+# brittle deep CSS path, so a layout reshuffle that keeps the heading still works.
+_BALANCE_HEADING = "PayPal-Guthaben"
+
+
+def read_balance(page) -> dict | None:
+    """Best-effort scrape of the "PayPal-Guthaben" card on the post-login
+    dashboard. Returns {"amount", "currency"} (e.g. {"amount":"0.00",
+    "currency":"EUR"}) or None.
+
+    Resilient + NON-fatal: ANY failure (card absent, no amount, locator/timeout)
+    returns None and is swallowed at debug level — the balance is non-critical and
+    must NEVER raise or fail the transaction sync. Must be called while still on
+    /myaccount, BEFORE scrape() navigates to the activity list.
+
+    Strategy: anchor on the heading text, climb to an enclosing container, read its
+    inner_text, and let normalize.parse_balance regex the first currency amount out
+    (reusing the activity-amount parsing). Never logs the balance value."""
+    try:
+        # Exact hook (verified from the real dashboard DOM): the available-balance
+        # amount sits in data-test-id="available-balance" (e.g. "0,00 €"), inside the
+        # data-test-id="balance" card. Prefer it; fall back to the heading-anchored
+        # ancestor walk if PayPal ever restructures the card.
+        try:
+            amount_el = page.locator("[data-test-id='available-balance']")
+            if amount_el.count():
+                text = (amount_el.first.inner_text(timeout=config.ACTION_TIMEOUT_MS) or "").strip()
+                balance = normalize.parse_balance(text)
+                if balance is not None:
+                    log.debug("balance: read available-balance")
+                    return balance
+        except Exception:
+            pass
+
+        anchor = page.get_by_text(_BALANCE_HEADING, exact=False)
+        if not anchor.count():
+            log.debug("balance: PayPal-Guthaben card not found")
+            return None
+        node = anchor.first
+        # Walk up a few ancestors so the amount + "Verfügbar" that sit beside the
+        # heading are inside the scope we read (the heading element alone is just
+        # the label). xpath ancestor levels, widening until an amount parses.
+        for xpath in ("xpath=.", "xpath=..", "xpath=../..", "xpath=../../.."):
+            try:
+                scope = node.locator(xpath)
+                text = (scope.inner_text(timeout=config.ACTION_TIMEOUT_MS) or "").strip()
+            except Exception:
+                continue
+            balance = normalize.parse_balance(text)
+            if balance is not None:
+                log.debug("balance: read PayPal-Guthaben card")
+                return balance
+        log.debug("balance: PayPal-Guthaben card had no parseable amount")
+        return None
+    except Exception:
+        log.debug("balance: read failed; skipping (non-critical)", exc_info=True)
+        return None
+
+
 # --- public surface (called from main.py via asyncio.to_thread) --------------
 def sync(username: str, password: str, date_from: str | None = None,
          date_to: str | None = None) -> dict:
@@ -521,10 +582,15 @@ def sync(username: str, password: str, date_from: str | None = None,
     try:
         ctx, page = _launch()
         login(page, username, password, push_deadline=push_deadline)
+        # Read the dashboard balance while still on /myaccount, BEFORE scrape()
+        # navigates to the activity list. Best-effort + non-fatal (returns None on
+        # any failure) so a missing/changed Guthaben card never fails the sync.
+        balance = read_balance(page)
         transactions = scrape(page, date_from, date_to)
         _close_quietly(ctx)
         return {
             "transactions": transactions,
+            "balance": balance,
             "date_from": date_from,
             "date_to": date_to,
         }

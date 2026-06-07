@@ -12,15 +12,24 @@ module Paypal
   # push_timeout) from the retryable transient ones.
   #
   # Read timeout is deliberately LONGER than the sidecar's own SYNC_DEADLINE_S
-  # (~250s) so the sidecar returns a clean push_timeout/transient first rather
+  # (~450s) so the sidecar returns a clean push_timeout/transient first rather
   # than Rails timing out the socket — see PAYPAL_SCRAPER_PLAN.md §10.7. The push
   # wait is NON-additive (bounded by the remaining sidecar budget), so the budget
   # must clear PUSH + login-nav + scrape, not just PUSH:
-  #   PUSH_DEADLINE_S(150) < sidecar SYNC_DEADLINE_S(250) < Rails READ_TIMEOUT(280) < Thruster(300)
+  #   PUSH_DEADLINE_S(150) < sidecar SYNC_DEADLINE_S(450) < Rails READ_TIMEOUT(480) < Thruster(510)
+  # A full-year backfill paginates several "Mehr" pages, so the scrape needs real
+  # headroom; READ_TIMEOUT is env-tunable (PAYPAL_READ_TIMEOUT) so it can be raised
+  # without a rebuild in future.
   class ScraperClient
     DEFAULT_URL = "http://paypal-scraper:8000".freeze
     OPEN_TIMEOUT = 5
-    READ_TIMEOUT = 280
+    # Guard the env override: a non-numeric or non-positive value would yield 0/
+    # garbage and invert the timeout chain, so fall back to 480 unless it parses
+    # to a positive integer.
+    READ_TIMEOUT = begin
+      parsed = ENV["PAYPAL_READ_TIMEOUT"].to_i
+      parsed.positive? ? parsed : 480
+    end
 
     def initialize(base_url: ENV.fetch("PAYPAL_SIDECAR_URL", DEFAULT_URL), token: ENV["PAYPAL_SIDECAR_TOKEN"])
       @base_url = base_url

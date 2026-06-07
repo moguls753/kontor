@@ -58,8 +58,10 @@ PROXY_URL = os.environ.get("PROXY_URL") or None
 
 # Hard cap on "Mehr" (show-more) pagination clicks during a sync. A safety valve
 # so a long window can't loop forever. Hitting the cap is FAIL-LOUD: we raise a
-# TransientError rather than return a truncated history as success.
-PAGE_CAP = int(os.environ.get("PAGE_CAP", "25"))
+# TransientError rather than return a truncated history as success. Default 60 to
+# match compose.yml (compose is the source of truth): the full-year window of a
+# busy personal account can exceed the old 25-page cap.
+PAGE_CAP = int(os.environ.get("PAGE_CAP", "60"))
 
 # How long we block, inside the ONE /sync request, polling for the user to
 # approve the PayPal-app device push on their phone. The push wait is bounded by a
@@ -74,15 +76,15 @@ PUSH_DEADLINE_S = float(os.environ.get("PUSH_DEADLINE_S", "150"))
 # push approval would be cut by this transient deadline (503) before the push
 # wait could raise PushTimeout (409) — inverting the error taxonomy and skipping
 # the circuit breaker. So this is NOT 165 (< 150 push + ~90 login): it is sized
-# above NAV + PUSH + scrape. Chain: PUSH_DEADLINE_S(150) < SYNC_DEADLINE_S(250)
-# < Rails READ_TIMEOUT(280) < Thruster idle/write(300).
-SYNC_DEADLINE_S = float(os.environ.get("SYNC_DEADLINE_S", "250"))
+# above NAV + PUSH + scrape. Chain: PUSH_DEADLINE_S(150) < SYNC_DEADLINE_S(450)
+# < Rails READ_TIMEOUT(480) < Thruster idle/write(510).
+SYNC_DEADLINE_S = float(os.environ.get("SYNC_DEADLINE_S", "450"))
 
 # Time (s) reserved out of SYNC_DEADLINE_S for the post-login scrape (navigation +
 # pagination + normalize). The push wait is capped at the remaining budget after
 # this reserve so the scrape that follows a just-approved push can still finish
 # before the sidecar's own SYNC_DEADLINE_S.
-SCRAPE_RESERVE_S = float(os.environ.get("SCRAPE_RESERVE_S", "60"))
+SCRAPE_RESERVE_S = float(os.environ.get("SCRAPE_RESERVE_S", "240"))
 
 # Per-action Playwright timeout (ms) for locator fills/clicks/waits.
 ACTION_TIMEOUT_MS = int(os.environ.get("ACTION_TIMEOUT_MS", "15000"))

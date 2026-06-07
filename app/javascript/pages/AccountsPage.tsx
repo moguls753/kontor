@@ -19,6 +19,9 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
   const [syncingIds, setSyncingIds] = useState<Set<number>>(new Set())
+  // Transient per-connection notices (used by the synchronous PayPal sync to
+  // surface the "approve on your phone" hint, success, or an error inline).
+  const [notices, setNotices] = useState<Record<number, { kind: 'info' | 'success' | 'error'; text: string }>>({})
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
   const [trReconnectId, setTrReconnectId] = useState<number | null>(null)
@@ -63,7 +66,37 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     setSyncingIds(prev => { const next = new Set(prev); next.delete(id); return next })
   }, [])
 
+  // PayPal syncs SYNCHRONOUSLY: a single blocking request the user approves via
+  // the out-of-band app push on their phone. No last_synced_at polling.
+  const handlePaypalSync = async (id: number) => {
+    setNotices(prev => ({ ...prev, [id]: { kind: 'info', text: t('paypal.approve_on_phone') } }))
+    setSyncingIds(prev => new Set(prev).add(id))
+    try {
+      const r = await api(`/api/v1/bank_connections/${id}/sync_paypal`, { method: 'POST' })
+      if (r.ok) {
+        await fetchConnections()
+        setNotices(prev => ({ ...prev, [id]: { kind: 'success', text: t('paypal.synced_notice') } }))
+        return
+      }
+
+      const data = await r.json().catch(() => ({}))
+      const msg = data.error === 'rate_limited'
+        ? t('paypal.rate_limited', { minutes: Math.max(1, Math.ceil((data.retry_in ?? 600) / 60)) })
+        : data.error === 'push_timeout' || data.error === 'captcha_blocked' ? t('paypal.try_again_later')
+        : data.error === 'login_failed' ? t('paypal.login_failed')
+        : data.error === 'scraper_unavailable' ? t('paypal.scraper_unavailable')
+        : (data.message || t('paypal.sync_error'))
+      setNotices(prev => ({ ...prev, [id]: { kind: 'error', text: msg } }))
+    } catch {
+      setNotices(prev => ({ ...prev, [id]: { kind: 'error', text: t('paypal.sync_error') } }))
+    } finally {
+      setSyncingIds(prev => { const next = new Set(prev); next.delete(id); return next })
+    }
+  }
+
   const handleSync = async (id: number) => {
+    if (connections.find(c => c.id === id)?.provider === 'paypal') { handlePaypalSync(id); return }
+
     const beforeSync = connections.find(c => c.id === id)?.last_synced_at
     setSyncingIds(prev => new Set(prev).add(id))
     try {
@@ -207,6 +240,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
               bc={bc}
               t={t}
               syncing={syncingIds.has(bc.id)}
+              notice={notices[bc.id]}
               onSync={() => handleSync(bc.id)}
               onReconnect={() => handleReconnect(bc.id)}
               onDelete={() => handleDelete(bc.id)}
@@ -247,6 +281,7 @@ interface ConnectionCardProps {
   bc: BankConnection
   t: (key: string, opts?: Record<string, unknown>) => string
   syncing: boolean
+  notice?: { kind: 'info' | 'success' | 'error'; text: string }
   onSync: () => void
   onReconnect: () => void
   onDelete: () => void
@@ -259,7 +294,7 @@ interface ConnectionCardProps {
   cancelRename: () => void
 }
 
-function ConnectionCard({ bc, t, syncing, onSync, onReconnect, onDelete, editingId, editValue, editRef, setEditValue, startRename, saveRename, cancelRename }: ConnectionCardProps) {
+function ConnectionCard({ bc, t, syncing, notice, onSync, onReconnect, onDelete, editingId, editValue, editRef, setEditValue, startRename, saveRename, cancelRename }: ConnectionCardProps) {
   const instName = bc.institution_name || bc.institution_id
   const count = bc.accounts.length
 
@@ -281,6 +316,8 @@ function ConnectionCard({ bc, t, syncing, onSync, onReconnect, onDelete, editing
           {(bc.status === 'expired' || bc.status === 'error' || ((bc.provider === 'trade_republic' || bc.provider === 'easybank') && bc.status === 'pending')) ? (
             <Btn variant="secondary" size="sm" icon="link" onClick={onReconnect}>{t('accounts.reconnect')}</Btn>
           ) : (
+            // The ↻ runs the generic background /sync for most providers; PayPal
+            // branches into a synchronous (phone-push) sync in handleSync.
             <button className="ibtn btn-sm w-8 h-8" onClick={onSync}
               title={syncing ? t('accounts.syncing') : t('accounts.sync')} disabled={syncing || bc.status !== 'authorized'}>
               <Icon name="sync" size={16} className={syncing ? 'spin' : ''} />
@@ -296,6 +333,22 @@ function ConnectionCard({ bc, t, syncing, onSync, onReconnect, onDelete, editing
         <div className="flex gap-2.5 items-start px-[18px] py-[11px] bg-danger-soft border-b border-line">
           <Icon name="alert" size={16} className="text-danger shrink-0 mt-px" />
           <span className="text-[12.5px] text-danger font-medium">{bc.error_message}</span>
+        </div>
+      )}
+
+      {notice && (
+        <div className="flex gap-2.5 items-start px-[18px] py-[11px] border-b border-line">
+          <Icon
+            name={notice.kind === 'success' ? 'check' : notice.kind === 'error' ? 'alert' : 'sync'}
+            size={16}
+            className={
+              (notice.kind === 'success' ? 'text-income' : notice.kind === 'error' ? 'text-danger' : 'text-brass-ink')
+              + ' shrink-0 mt-px' + (notice.kind === 'info' && syncing ? ' spin' : '')
+            }
+          />
+          <span className={'text-[12.5px] font-medium ' + (notice.kind === 'success' ? 'text-income' : notice.kind === 'error' ? 'text-danger' : 'text-ink-muted')}>
+            {notice.text}
+          </span>
         </div>
       )}
 

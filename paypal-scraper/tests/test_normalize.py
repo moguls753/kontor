@@ -69,6 +69,23 @@ def test_amount_bare_integer_still_parses():
     assert str(normalize.parse_amount("79 \u20ac")) == "79.00"
 
 
+# --- balance (PayPal-Guthaben card) ------------------------------------------
+def test_parse_balance_zero_euro_card_fragment():
+    # The card fragment uses the nbsp + the heading/Verfügbar copy around it.
+    frag = "PayPal-Guthaben\n0,00 €\nVerfügbar"
+    assert normalize.parse_balance(frag) == {"amount": "0.00", "currency": "EUR"}
+
+
+def test_parse_balance_nonzero_and_foreign():
+    assert normalize.parse_balance("1.234,56 €") == {"amount": "1234.56", "currency": "EUR"}
+    assert normalize.parse_balance("−10,60 $ USD") == {"amount": "-10.60", "currency": "USD"}
+
+
+def test_parse_balance_returns_none_without_amount():
+    assert normalize.parse_balance("PayPal-Guthaben Verfügbar") is None
+    assert normalize.parse_balance("") is None
+
+
 # --- description split (date . type) -----------------------------------------
 def test_description_splits_on_space_dot_space_not_abbrev_dot():
     assert normalize.split_description("6. Juni . Zahlung") == ("6. Juni", "Zahlung")

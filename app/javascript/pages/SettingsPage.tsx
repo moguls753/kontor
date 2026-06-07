@@ -21,9 +21,10 @@ export default function SettingsPage() {
   const [trNotice, setTrNotice] = useState('')
   const [showEasybankModal, setShowEasybankModal] = useState(false)
   const [easybankNotice, setEasybankNotice] = useState('')
-  // PayPal manual sync — a single SYNCHRONOUS, blocking request (no polling). The
-  // user approves the out-of-band device push on their phone while it blocks.
-  const [paypalSyncing, setPaypalSyncing] = useState(false)
+  // PayPal is connect-only here (like the other direct providers); the actual
+  // sync runs from the Accounts page via the generic ↻. create_paypal is
+  // idempotent and does NO login — it just ensures the authorized connection.
+  const [paypalConnecting, setPaypalConnecting] = useState(false)
   const [paypalNotice, setPaypalNotice] = useState('')
   const [paypalError, setPaypalError] = useState('')
 
@@ -45,32 +46,20 @@ export default function SettingsPage() {
 
   const toggleProvider = (p: string) => setExpandedProvider(prev => prev === p ? null : p)
 
-  // Manual PayPal sync. Ensures the (authorized) connection exists, then fires
-  // ONE synchronous sync_paypal that BLOCKS while the user approves the app push
-  // on their phone. No polling — the single request returns the final result.
-  const handlePaypalSync = async () => {
-    setPaypalSyncing(true); setPaypalNotice(''); setPaypalError('')
+  // Connect PayPal: ensure the authorized connection exists (idempotent, no
+  // login), then refresh. Syncing happens from the Accounts page.
+  const handlePaypalConnect = async () => {
+    setPaypalConnecting(true); setPaypalNotice(''); setPaypalError('')
     try {
-      // create_paypal is idempotent (find_or_initialize_by) — safe to call each sync.
-      const cr = await api('/api/v1/bank_connections', { method: 'POST', body: { provider: 'paypal' } })
-      const conn = await cr.json().catch(() => ({}))
-      if (!cr.ok || !conn.id) { setPaypalError(t('paypal.sync_error')); return }
-
-      const r = await api(`/api/v1/bank_connections/${conn.id}/sync_paypal`, { method: 'POST' })
-      if (r.ok) { setPaypalNotice(t('paypal.synced_notice')); return }
-
-      const data = await r.json().catch(() => ({}))
-      const msg = data.error === 'rate_limited'
-        ? t('paypal.rate_limited', { hours: Math.max(1, Math.ceil((data.retry_in ?? 3600) / 3600)) })
-        : data.error === 'push_timeout' || data.error === 'captcha_blocked' ? t('paypal.try_again_later')
-        : data.error === 'login_failed' ? t('paypal.login_failed')
-        : data.error === 'scraper_unavailable' ? t('paypal.scraper_unavailable')
-        : (data.message || t('paypal.sync_error'))
-      setPaypalError(msg)
+      const r = await api('/api/v1/bank_connections', { method: 'POST', body: { provider: 'paypal' } })
+      const conn = await r.json().catch(() => ({}))
+      if (!r.ok || !conn.id) { setPaypalError(t('paypal.sync_error')); return }
+      setPaypalNotice(t('paypal.connected_notice'))
+      fetchCredentials()
     } catch {
       setPaypalError(t('paypal.sync_error'))
     } finally {
-      setPaypalSyncing(false)
+      setPaypalConnecting(false)
     }
   }
 
@@ -242,8 +231,8 @@ export default function SettingsPage() {
               action={
                 <div className="flex items-center gap-2">
                   {credentials.paypal.configured && (
-                    <Btn variant="primary" size="sm" icon="sync" onClick={handlePaypalSync} disabled={paypalSyncing}>
-                      {paypalSyncing ? t('paypal.syncing') : t('paypal.sync')}
+                    <Btn variant="primary" size="sm" icon="link" onClick={handlePaypalConnect} disabled={paypalConnecting}>
+                      {paypalConnecting ? t('paypal.connecting') : t('paypal.connect')}
                     </Btn>
                   )}
                   <Btn variant="ghost" size="sm" onClick={() => toggleProvider('paypal')}>
@@ -252,21 +241,16 @@ export default function SettingsPage() {
                 </div>
               }>
               {credentials.paypal.configured && credentials.paypal.username_masked && (
-                <p className={'text-ink-faint mono text-[11.5px] ' + (expandedProvider === 'paypal' || paypalSyncing || paypalNotice || paypalError ? 'mb-[14px]' : 'mb-0')}>
+                <p className={'text-ink-faint mono text-[11.5px] ' + (expandedProvider === 'paypal' || paypalNotice || paypalError ? 'mb-[14px]' : 'mb-0')}>
                   {credentials.paypal.username_masked}
                 </p>
               )}
-              {paypalSyncing && (
-                <div className="flex items-center gap-2 text-ink-muted text-[12.5px] font-[550] mb-[14px]">
-                  <Icon name="sync" size={15} className="spin text-brass-ink" />{t('paypal.approve_on_phone')}
-                </div>
-              )}
-              {!paypalSyncing && paypalNotice && (
+              {paypalNotice && (
                 <div className="flex items-center gap-2 text-income text-[12.5px] font-medium mb-[14px]">
                   <Icon name="check" size={15} />{paypalNotice}
                 </div>
               )}
-              {!paypalSyncing && paypalError && (
+              {paypalError && (
                 <div className="flex items-start gap-2 text-danger text-[12.5px] font-medium mb-[14px]">
                   <Icon name="alert" size={15} className="shrink-0 mt-px" />{paypalError}
                 </div>

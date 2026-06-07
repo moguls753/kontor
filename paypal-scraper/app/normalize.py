@@ -134,6 +134,25 @@ def parse_currency(amount_text: str) -> str | None:
     return None
 
 
+def parse_balance(balance_text: str) -> dict | None:
+    """Parse a PayPal-Guthaben card fragment into the /sync balance contract.
+
+    Reuses parse_amount + parse_currency (the same U+2212/U+00A0 + German-locale
+    -> signed Decimal and symbol/ISO-token -> ISO-4217 logic the activity amounts
+    use), so the card's "0,00 €" / "1.234,56 €" / "−5,00 $ USD" parse identically.
+
+    Returns ``{"amount": "<decimal string>", "currency": "<ISO>"}`` (amount is the
+    2dp Decimal string, e.g. "0.00"), or None if no amount/currency can be found
+    in the fragment. Caller swallows a None (the balance is non-critical)."""
+    if not balance_text:
+        return None
+    amount = parse_amount(balance_text)
+    currency = parse_currency(balance_text)
+    if amount is None or currency is None:
+        return None
+    return {"amount": str(amount), "currency": currency}
+
+
 def split_description(description_text: str) -> tuple[str, str]:
     """Split the fused 'date . type' string on ' . ' (space-dot-space), NOT the
     abbreviation dot in 'Apr.'/'Dez.' (§10.1). Returns (date_part, type_part).

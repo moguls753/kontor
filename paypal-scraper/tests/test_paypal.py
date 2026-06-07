@@ -108,6 +108,54 @@ def _header_el(text):
     return _El(cls="listBucketHeader_completed", text=text)
 
 
+# --- read_balance: parses the PayPal-Guthaben card, None when absent ---------
+class _BalanceAnchor:
+    """Fake page.get_by_text(...).first whose ancestor xpath locators yield the
+    card's inner_text. .locator(xpath) returns an _Inner-like with inner_text."""
+    def __init__(self, card_text):
+        self._card_text = card_text
+        self.first = self
+
+    def count(self):
+        return 1
+
+    def locator(self, xpath):
+        # Only the widened ancestor scopes carry the full card text; the heading
+        # element itself ("xpath=.") has just the label, no amount.
+        text = self._card_text if xpath != "xpath=." else "PayPal-Guthaben"
+        return _Inner(text)
+
+
+class _BalancePage:
+    def __init__(self, card_text=None):
+        self._card_text = card_text
+
+    def locator(self, selector):
+        # Real card exposes the amount at data-test-id="available-balance" (the
+        # primary, verified hook). Model it from the card text; parse_balance
+        # extracts the amount from whatever text it is given. Other selectors / no
+        # card -> count() == 0 so read_balance falls through to the heading walk.
+        if "available-balance" in selector and self._card_text is not None:
+            return _Inner(self._card_text)
+        return _Inner(None)
+
+    def get_by_text(self, needle, exact=False):
+        if self._card_text is None:
+            return _Loc([])  # no card -> count() == 0
+        return _BalanceAnchor(self._card_text)
+
+
+def test_read_balance_parses_guthaben_card():
+    # The card fragment: heading, then the amount (U+00A0 nbsp), then "Verfügbar".
+    page = _BalancePage("PayPal-Guthaben\n0,00 €\nVerfügbar")
+    assert paypal.read_balance(page) == {"amount": "0.00", "currency": "EUR"}
+
+
+def test_read_balance_returns_none_when_card_absent():
+    # No PayPal-Guthaben card -> None, and it must NOT raise (non-critical).
+    assert paypal.read_balance(_BalancePage(card_text=None)) is None
+
+
 def test_scrape_rows_emits_headers_interleaved_and_feeds_year_carry():
     from datetime import date
     from app import normalize

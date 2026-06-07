@@ -74,6 +74,27 @@ RSpec.describe Paypal::Ingest do
       expect(account.transaction_records.first.transaction_id).to eq("3AB12345CD678901E")
     end
 
+    it "sets the account's available balance from the PayPal-Guthaben card" do
+      freeze_time do
+        account = described_class.call(bank_connection, paypal_sync_response)
+
+        expect(account.balance_amount).to eq(BigDecimal("0.00"))
+        expect(account.currency).to eq("EUR")
+        expect(account.balance_type).to eq("available")
+        expect(account.balance_updated_at).to eq(Time.current)
+      end
+    end
+
+    it "leaves the stored balance untouched when the sidecar balance is nil" do
+      account = described_class.call(bank_connection, paypal_sync_response(balance: { "amount" => "12.34", "currency" => "EUR" }))
+      expect(account.balance_amount).to eq(BigDecimal("12.34"))
+
+      # A later sync that couldn't read the card must NOT zero/blank the balance.
+      described_class.call(bank_connection, paypal_sync_response(balance: nil))
+      expect(account.reload.balance_amount).to eq(BigDecimal("12.34"))
+      expect(account.balance_type).to eq("available")
+    end
+
     it "stamps last_synced_at on the account" do
       account = described_class.call(bank_connection, paypal_sync_response)
       expect(account.last_synced_at).to be_present

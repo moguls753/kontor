@@ -9,6 +9,12 @@ is present and approves on their phone), then DOM-scrape the activity list. Ther
 is nothing to type (the push is out-of-band), so — unlike the easybank sidecar —
 there is no /login + /mtan split and no paused-context registry. Manual sync only.
 
+The 200 body is {status: "ok", transactions: [...], balance: {amount, currency}
+| null, date_from, date_to}. `balance` is the dashboard "PayPal-Guthaben" card
+read best-effort post-login; it is null whenever the card is absent/unparseable
+(non-critical — it never fails the sync). `amount` is a signed 2dp Decimal string,
+`currency` an ISO-4217 code.
+
 HTTP-status taxonomy (the Rails Paypal::ScraperClient depends on these; mirrors
 the easybank sidecar's mapping):
   200  ok

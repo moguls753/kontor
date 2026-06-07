@@ -78,8 +78,38 @@ RSpec.describe "PayPal connect + manual sync", type: :request do
       expect(bc.reload.status).to eq("authorized")
       account = bc.accounts.find_by(account_uid: "paypal")
       expect(account.transaction_records.count).to eq(3)
+      # The dashboard "PayPal-Guthaben" balance from the /sync response is stored.
+      expect(account.balance_amount).to eq(BigDecimal("0.00"))
+      expect(account.balance_type).to eq("available")
+      expect(account.balance_updated_at).to be_present
       expect(bc.last_login_attempt_at).to be_present
       expect(bc.consecutive_failures).to eq(0)
+    end
+
+    it "allows a sync once the ~10-min interval has elapsed but blocks within it" do
+      allow(paypal_client).to receive(:sync).and_return(paypal_sync_response)
+
+      # Just outside the 10-min window: allowed.
+      bc.update!(last_login_attempt_at: 11.minutes.ago)
+      post sync_paypal_api_v1_bank_connection_path(bc), as: :json
+      expect(response).to have_http_status(:ok)
+
+      # Inside the 10-min window (and far inside the old 1h/1-day windows): blocked.
+      bc.update!(last_login_attempt_at: 5.minutes.ago)
+      post sync_paypal_api_v1_bank_connection_path(bc), as: :json
+      expect(response).to have_http_status(:too_many_requests)
+      expect(response.parsed_body["error"]).to eq("rate_limited")
+    end
+
+    it "scrapes a 365-day window (passes date_from = 365.days.ago)" do
+      freeze_time do
+        expect(paypal_client).to receive(:sync).with(
+          hash_including(date_from: 365.days.ago.to_date.iso8601)
+        ).and_return(paypal_sync_response)
+
+        post sync_paypal_api_v1_bank_connection_path(bc), as: :json
+        expect(response).to have_http_status(:ok)
+      end
     end
 
     it "rejects a second sync within the rate-limit window with 429 rate_limited" do

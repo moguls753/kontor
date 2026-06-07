@@ -157,7 +157,7 @@ module Api
       # the scraped activity and returns the result.
       #
       # Rate limit: stamp last_login_attempt_at at the START; reject a second sync
-      # within MIN_SYNC_INTERVAL (~1/day) with 429 rate_limited so we never burst
+      # within MIN_SYNC_INTERVAL (~10 min) with 429 rate_limited so we never burst
       # logins against PayPal's velocity scoring. Circuit breaker: after N
       # consecutive captcha/push-timeout failures the connection is forced to
       # "error" (re-pair); a success resets the counter.
@@ -203,9 +203,9 @@ module Api
         render json: connection_json(bc.reload)
       rescue Paypal::SidecarUnavailableError, Paypal::ApiError, Paypal::InvalidRequestError => e
         # No PayPal LOGIN actually occurred (the sidecar was down / rejected the
-        # request before driving the browser), so this must NOT consume the ~1/day
+        # request before driving the browser), so this must NOT consume the ~10-min
         # rate-limit budget — otherwise a mere sidecar restart locks the user out
-        # for ~20h. Roll back the stamp we optimistically claimed above. These are
+        # for ~10 min. Roll back the stamp we optimistically claimed above. These are
         # transient/contract faults: don't expire the connection or trip the breaker.
         bc.update_columns(last_login_attempt_at: prior_login_attempt_at) if bc
         message = e.is_a?(Paypal::InvalidRequestError) ? "invalid_request" : "scraper_unavailable"
@@ -473,7 +473,7 @@ module Api
         when Paypal::PushTimeout
           # DEFERRED-by-design: a push_timeout DID submit credentials + fire a
           # device push (a real velocity event), so it legitimately consumes the
-          # ~1/day rate-limit budget — we do NOT roll back the last_login_attempt_at
+          # ~10-min rate-limit budget — we do NOT roll back the last_login_attempt_at
           # stamp here (unlike the no-login SidecarUnavailable path). Kept on purpose.
           bump_paypal_breaker(bc)
           render json: { error: "push_timeout", message: error.message }, status: :conflict
