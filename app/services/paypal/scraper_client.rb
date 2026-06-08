@@ -66,8 +66,15 @@ module Paypal
       ) { |http| http.request(request) }
 
       handle_response(response)
-    rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH, SocketError, Net::OpenTimeout, Net::ReadTimeout, EOFError => e
+    rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH, SocketError, Net::OpenTimeout => e
+      # Connection never established / sidecar unreachable => NO PayPal login could
+      # have fired. Safe for the caller to roll back the rate-limit stamp.
       raise SidecarUnavailableError.new("paypal scraper is unavailable (#{e.class})")
+    rescue Net::ReadTimeout, EOFError => e
+      # Request was accepted and the socket then timed out / dropped mid-response:
+      # the sidecar was already driving the browser, so a login almost certainly
+      # fired. Distinct error so the caller does NOT roll back the rate-limit stamp.
+      raise SyncTimeoutError.new("paypal scraper timed out (#{e.class})")
     end
 
     def handle_response(response)

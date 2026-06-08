@@ -101,7 +101,12 @@ RSpec.describe "PayPal connect + manual sync", type: :request do
       expect(response.parsed_body["error"]).to eq("rate_limited")
     end
 
-    it "backfills a 365-day window on first connect (no stored transactions yet)" do
+    it "always scrapes the full 365-day window (passes date_from = 365.days.ago), even with stored history" do
+      # Full window every sync — never a high-water-mark window — so PayPal's
+      # back-dated / late-settling rows can't fall permanently out of range.
+      account = create(:account, bank_connection: bc, account_uid: "paypal")
+      create(:transaction_record, account: account, booking_date: Date.new(2026, 5, 1))
+
       freeze_time do
         expect(paypal_client).to receive(:sync).with(
           hash_including(date_from: 365.days.ago.to_date.iso8601)
@@ -110,19 +115,6 @@ RSpec.describe "PayPal connect + manual sync", type: :request do
         post sync_paypal_api_v1_bank_connection_path(bc), as: :json
         expect(response).to have_http_status(:ok)
       end
-    end
-
-    it "syncs incrementally from the most recent stored transaction (minus overlap)" do
-      account = create(:account, bank_connection: bc, account_uid: "paypal")
-      create(:transaction_record, account: account, booking_date: Date.new(2026, 5, 1))
-      create(:transaction_record, account: account, booking_date: Date.new(2026, 4, 10))
-
-      expect(paypal_client).to receive(:sync).with(
-        hash_including(date_from: (Date.new(2026, 5, 1) - 3).iso8601)
-      ).and_return(paypal_sync_response)
-
-      post sync_paypal_api_v1_bank_connection_path(bc), as: :json
-      expect(response).to have_http_status(:ok)
     end
 
     it "rejects a second sync within the rate-limit window with 429 rate_limited" do
@@ -238,6 +230,25 @@ RSpec.describe "PayPal connect + manual sync", type: :request do
       expect(response).to have_http_status(:bad_gateway)
       expect(response.parsed_body["error"]).to eq("invalid_request")
       expect(bc.reload.last_login_attempt_at).to be_nil
+    end
+
+    it "KEEPS the rate-limit budget on a read timeout (a login likely fired) so the user can't immediately re-burst" do
+      # Unlike SidecarUnavailable (no login), a read timeout means the sidecar was
+      # already driving the browser — a real PayPal login almost certainly fired.
+      # The optimistic stamp must therefore be PRESERVED, not rolled back, so the
+      # ~10-min velocity gate still holds.
+      bc.update!(last_login_attempt_at: nil)
+      allow(paypal_client).to receive(:sync)
+        .and_raise(Paypal::SyncTimeoutError.new("timed out"))
+
+      post sync_paypal_api_v1_bank_connection_path(bc), as: :json
+
+      expect(response).to have_http_status(:gateway_timeout)
+      expect(response.parsed_body["error"]).to eq("sync_timeout")
+      bc.reload
+      expect(bc.last_login_attempt_at).to be_present # stamp kept => velocity gate holds
+      expect(bc.consecutive_failures).to eq(0)       # transient, not a breaker failure
+      expect(bc.status).to eq("authorized")
     end
   end
 end
