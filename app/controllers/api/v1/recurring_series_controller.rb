@@ -10,12 +10,14 @@ module Api
 
         scope = scope.where(direction: params[:direction]) if params[:direction].present?
 
-        # B1′ — NULL-safe transfer scope: SQLite `merchant_type != 'transfer'` drops
-        # NULL rows (NULL comparison → false), which would hide nearly every series.
-        # Use an explicit OR so NULL-merchant_type series ARE shown by default.
-        unless params[:include_transfers] == "true"
-          scope = scope.where.not(merchant_type: "transfer").or(scope.where(merchant_type: nil))
-        end
+        # Consumption-type merchants (supermarkets/shops/transport) are NOT contracts and
+        # are always hidden from this page. Transfers are hidden too unless explicitly
+        # requested. B1′ — NULL-safe predicate: a plain `merchant_type NOT IN (...)` drops
+        # NULL rows in SQLite (NULL NOT IN → NULL → excluded), which would hide nearly every
+        # series. NULL is the common case and MUST stay visible, so guard it explicitly.
+        hidden_types = RecurringSeries::CONSUMPTION_TYPES.dup
+        hidden_types << "transfer" unless params[:include_transfers] == "true"
+        scope = scope.where("merchant_type IS NULL OR merchant_type NOT IN (?)", hidden_types)
 
         scope = scope.order(Arel.sql("CASE WHEN status = 'active' THEN 0 ELSE 1 END"))
                      .order(Arel.sql("next_expected_on IS NULL, next_expected_on ASC"))

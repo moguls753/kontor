@@ -49,6 +49,11 @@ class RecurringSeries < ApplicationRecord
   CADENCES   = %w[weekly biweekly monthly quarterly yearly irregular].freeze
   STATUSES   = %w[active ended dismissed].freeze
 
+  # Consumption-type merchants (supermarkets, shops, transport tickets) coincidentally
+  # look recurring but are NOT contracts/subscriptions. They are hidden from the
+  # "Wiederkehrend" page by default (kept in the DB for a future Statistics module).
+  CONSUMPTION_TYPES = %w[shopping groceries transport].freeze
+
   validates :canonical_name, :currency, :fingerprint, presence: true
   validates :direction, inclusion: { in: DIRECTIONS }
   validates :cadence,   inclusion: { in: CADENCES }

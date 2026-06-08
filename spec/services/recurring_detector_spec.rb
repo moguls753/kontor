@@ -428,6 +428,18 @@ RSpec.describe RecurringDetector do
 
       expect(series.reload.status).to eq("ended")
     end
+
+    it "ends a still-active 'irregular' leftover even when not stale (Lever A cleanup), but keeps a confirmed one" do
+      leftover = create(:recurring_series, user: user, status: "active", cadence: "irregular",
+        canonical_name: "Old Irregular", last_seen_on: Date.current - 10, cadence_days: 20)
+      confirmed = create(:recurring_series, user: user, status: "active", cadence: "irregular",
+        canonical_name: "Kept Irregular", last_seen_on: Date.current - 10, cadence_days: 20, user_confirmed: true)
+
+      described_class.new(user).detect
+
+      expect(leftover.reload.status).to eq("ended")     # pre-Lever-A artifact swept
+      expect(confirmed.reload.status).to eq("active")   # user_confirmed protected
+    end
   end
 
   describe "canonical upgrade reconciliation" do

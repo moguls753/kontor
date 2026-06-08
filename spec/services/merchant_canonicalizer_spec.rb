@@ -18,6 +18,15 @@ RSpec.describe MerchantCanonicalizer do
     http
   end
 
+  it "offers groceries and transport among the allowed types in the prompt" do
+    prompt = subject.send(:system_prompt)
+
+    expect(prompt).to include("groceries")
+    expect(prompt).to include("transport")
+    # the originally-cataloged types must still be present
+    expect(prompt).to include("subscription", "shopping", "transfer", "other")
+  end
+
   context "with an LLM credential" do
     let!(:credential) { create(:llm_credential, user: user) }
 

@@ -31,6 +31,33 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       expect(response.parsed_body["series"].map { |x| x["id"] }).to include(s.id)
     end
 
+    it "hides consumption-type series (groceries/shopping/transport) by default" do
+      hidden = RecurringSeries::CONSUMPTION_TYPES.map do |type|
+        create(:recurring_series, user: user, merchant_type: type, canonical_name: type.titleize)
+      end
+
+      get api_v1_recurring_index_path, as: :json
+
+      ids = response.parsed_body["series"].map { |x| x["id"] }
+      hidden.each { |s| expect(ids).not_to include(s.id) }
+    end
+
+    it "keeps a subscription series visible (consumption filter only hides shopping/groceries/transport)" do
+      sub = create(:recurring_series, user: user, merchant_type: "subscription", canonical_name: "Crowdfarming")
+
+      get api_v1_recurring_index_path, as: :json
+
+      expect(response.parsed_body["series"].map { |x| x["id"] }).to include(sub.id)
+    end
+
+    it "keeps consumption-type series hidden even with include_transfers=true" do
+      groceries = create(:recurring_series, user: user, merchant_type: "groceries", canonical_name: "Penny")
+
+      get api_v1_recurring_index_path, params: { include_transfers: "true" }, as: :json
+
+      expect(response.parsed_body["series"].map { |x| x["id"] }).not_to include(groceries.id)
+    end
+
     it "hides transfer-tagged series unless include_transfers=true" do
       transfer = create(:recurring_series, user: user, merchant_type: "transfer", canonical_name: "Own Transfer")
 

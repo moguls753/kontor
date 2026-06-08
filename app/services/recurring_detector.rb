@@ -453,6 +453,16 @@ class RecurringDetector
     today = Date.current
     @user.recurring_series.active.find_each do |s|
       next if detected_series_ids.include?(s.id)
+
+      # Lever A cleanup: any still-active "irregular" series is a pre-Lever-A artifact
+      # (the detector no longer produces irregular ones) → end it regardless of staleness,
+      # unless the user confirmed it. Otherwise such leftovers linger when not yet stale.
+      if s.cadence == "irregular" && !s.user_confirmed
+        s.update!(status: "ended")
+        ended += 1
+        next
+      end
+
       next if s.last_seen_on.nil?
 
       interval = (s.cadence_days || CADENCE_DAYS[s.cadence] || 30).to_i
