@@ -25,6 +25,8 @@ class User < ApplicationRecord
   has_many :accounts, through: :bank_connections
   has_many :transaction_records, through: :accounts
   has_many :categories, dependent: :destroy
+  has_many :recurring_series, dependent: :destroy
+  has_many :merchant_aliases, dependent: :destroy
 
   generates_token_for :password_reset, expires_in: 15.minutes do
     password_salt&.last(10)

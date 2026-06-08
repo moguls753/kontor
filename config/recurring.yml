@@ -21,3 +21,9 @@ production:
     # Once a day at 04:00 Berlin time. Explicit TZ via Fugit cron zone suffix so
     # it doesn't drift with the app's default timezone.
     schedule: "0 4 * * * Europe/Berlin"
+  detect_recurring:
+    class: DetectAllRecurringSeriesJob
+    queue: default
+    # Daily 04:30 Berlin — after the scraped-balance sync, keeps next_expected_on
+    # fresh and (phase 2) powers missed-payment alerts.
+    schedule: "30 4 * * * Europe/Berlin"

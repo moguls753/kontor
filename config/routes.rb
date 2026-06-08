@@ -38,6 +38,12 @@ Rails.application.routes.draw do
       resources :transactions, only: %i[ index ] do
         post :categorize, on: :collection
       end
+      # B1: declare the resource as `:recurring` (NOT `:recurring_series`) so the
+      # singular doesn't collide with the collection path; explicit controller keeps
+      # clean helpers AND the /api/v1/recurring URLs the frontend wants.
+      resources :recurring, controller: "recurring_series", only: %i[ index show update destroy ] do
+        post :detect, on: :collection
+      end
       resource :dashboard, only: %i[ show ]
     end
   end

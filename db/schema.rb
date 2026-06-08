@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_06_06_120100) do
+ActiveRecord::Schema[8.1].define(version: 2026_06_08_120200) do
   create_table "accounts", force: :cascade do |t|
     t.string "account_type"
     t.string "account_uid", null: false
@@ -106,6 +106,19 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_06_120100) do
     t.index ["user_id"], name: "index_llm_credentials_on_user_id", unique: true
   end
 
+  create_table "merchant_aliases", force: :cascade do |t|
+    t.string "canonical_name", null: false
+    t.datetime "created_at", null: false
+    t.string "merchant_type"
+    t.string "raw_key", null: false
+    t.string "source", default: "llm", null: false
+    t.datetime "updated_at", null: false
+    t.integer "user_id", null: false
+    t.index ["canonical_name"], name: "index_merchant_aliases_on_canonical_name"
+    t.index ["user_id", "raw_key"], name: "index_merchant_aliases_on_user_id_and_raw_key", unique: true
+    t.index ["user_id"], name: "index_merchant_aliases_on_user_id"
+  end
+
   create_table "paypal_credentials", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.text "password"
@@ -113,6 +126,35 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_06_120100) do
     t.integer "user_id", null: false
     t.text "username"
     t.index ["user_id"], name: "index_paypal_credentials_on_user_id", unique: true
+  end
+
+  create_table "recurring_series", force: :cascade do |t|
+    t.decimal "amount_max", precision: 15, scale: 2
+    t.decimal "amount_min", precision: 15, scale: 2
+    t.boolean "amount_variable", default: false, null: false
+    t.string "cadence", null: false
+    t.integer "cadence_days"
+    t.string "canonical_name", null: false
+    t.integer "category_id"
+    t.decimal "confidence", precision: 4, scale: 3, default: "0.0", null: false
+    t.datetime "created_at", null: false
+    t.string "currency", limit: 3, null: false
+    t.string "direction", null: false
+    t.decimal "expected_amount", precision: 15, scale: 2
+    t.string "fingerprint", null: false
+    t.date "first_seen_on"
+    t.date "last_seen_on"
+    t.string "merchant_type"
+    t.date "next_expected_on"
+    t.integer "occurrences_count", default: 0, null: false
+    t.string "status", default: "active", null: false
+    t.datetime "updated_at", null: false
+    t.boolean "user_confirmed", default: false, null: false
+    t.integer "user_id", null: false
+    t.index ["category_id"], name: "index_recurring_series_on_category_id"
+    t.index ["user_id", "fingerprint"], name: "index_recurring_series_on_user_id_and_fingerprint"
+    t.index ["user_id", "status"], name: "index_recurring_series_on_user_id_and_status"
+    t.index ["user_id"], name: "index_recurring_series_on_user_id"
   end
 
   create_table "sessions", force: :cascade do |t|
@@ -152,6 +194,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_06_120100) do
     t.string "mcc"
     t.decimal "original_amount", precision: 15, scale: 2
     t.string "original_currency", limit: 3
+    t.integer "recurring_series_id"
     t.text "remittance"
     t.string "status", default: "booked"
     t.string "transaction_id", null: false
@@ -161,6 +204,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_06_120100) do
     t.index ["account_id"], name: "index_transaction_records_on_account_id"
     t.index ["booking_date"], name: "index_transaction_records_on_booking_date"
     t.index ["category_id"], name: "index_transaction_records_on_category_id"
+    t.index ["recurring_series_id"], name: "index_transaction_records_on_recurring_series_id"
   end
 
   create_table "users", force: :cascade do |t|
@@ -178,9 +222,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_06_120100) do
   add_foreign_key "enable_banking_credentials", "users"
   add_foreign_key "go_cardless_credentials", "users"
   add_foreign_key "llm_credentials", "users"
+  add_foreign_key "merchant_aliases", "users"
   add_foreign_key "paypal_credentials", "users"
+  add_foreign_key "recurring_series", "categories"
+  add_foreign_key "recurring_series", "users"
   add_foreign_key "sessions", "users"
   add_foreign_key "trade_republic_credentials", "users"
   add_foreign_key "transaction_records", "accounts"
   add_foreign_key "transaction_records", "categories"
+  add_foreign_key "transaction_records", "recurring_series", on_delete: :nullify
 end

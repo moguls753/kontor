@@ -55,6 +55,29 @@ export interface Transaction {
   account_name: string
 }
 
+export interface RecurringSeries {
+  id: number
+  canonical_name: string
+  merchant_type: string | null
+  direction: 'inflow' | 'outflow'
+  cadence: string
+  cadence_days: number | null
+  expected_amount: string | null
+  amount_variable: boolean
+  amount_min: string | null
+  amount_max: string | null
+  currency: string
+  confidence: string
+  confidence_band: 'high' | 'medium' | 'low'
+  status: 'active' | 'ended' | 'dismissed'
+  user_confirmed: boolean
+  occurrences_count: number
+  first_seen_on: string | null
+  last_seen_on: string | null
+  next_expected_on: string | null
+  category: Category | null
+}
+
 export interface PaginationMeta {
   page: number
   per: number
