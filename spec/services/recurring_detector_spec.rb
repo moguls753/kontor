@@ -86,6 +86,47 @@ RSpec.describe RecurringDetector do
 
       expect(result[:detected]).to eq(0)
     end
+
+    it "does not detect an irregular series even with a fixed amount and ≥4 occurrences (Lever A)" do
+      # median delta ~20d → no cadence bucket → irregular. Fixed amount, 5 occurrences:
+      # the OLD edge-allowance would have kept this (false positive like train tickets);
+      # Lever A drops all irregular series.
+      [ 5, 25, 45, 105, 125 ].each { |ago| charge(name: "DB Vertrieb", amount: -3.40, date: Date.current - ago) }
+
+      result = subject.detect
+
+      expect(result[:detected]).to eq(0)
+      expect(user.recurring_series.where(canonical_name: "Db Vertrieb")).to be_empty
+    end
+  end
+
+  describe "bidirectional counterparty = transfer (Lever B)" do
+    it "flags a counterparty recurring in BOTH directions as transfer, leaving one-way merchants alone" do
+      # Eike Rackwitz: money shuffled back and forth (out AND in) → own/family transfer
+      monthly_dates(3).each { |d| charge(name: "Eike Rackwitz", amount: -70.00, date: d) }
+      monthly_dates(3).each { |d| credit(name: "Eike Rackwitz", amount: 70.00, date: d) }
+      # one-directional control: a genuine subscription must stay a normal contract
+      monthly_dates(3).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
+
+      subject.detect
+
+      eike = user.recurring_series.where(canonical_name: "Eike Rackwitz")
+      expect(eike.pluck(:direction).uniq).to match_array(%w[inflow outflow])
+      expect(eike.pluck(:merchant_type).uniq).to eq([ "transfer" ]) # both flagged
+      expect(user.recurring_series.find_by(canonical_name: "Spotify").merchant_type).not_to eq("transfer")
+    end
+
+    it "does not override a user-confirmed series" do
+      monthly_dates(3).each { |d| charge(name: "Eike Rackwitz", amount: -70.00, date: d) }
+      monthly_dates(3).each { |d| credit(name: "Eike Rackwitz", amount: 70.00, date: d) }
+      subject.detect
+      confirmed = user.recurring_series.where(canonical_name: "Eike Rackwitz").first
+      confirmed.update!(user_confirmed: true, merchant_type: nil)
+
+      described_class.new(user).detect
+
+      expect(confirmed.reload.merchant_type).to be_nil # user_confirmed not clobbered
+    end
   end
 
   describe "idempotency & stability" do

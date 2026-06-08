@@ -1,13 +1,26 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { formatDate } from '../lib/format'
+import { formatDate, formatAmount } from '../lib/format'
 import type { RecurringSeries, Transaction, Category } from '../lib/types'
 import RecurringScanModal from '../components/RecurringScanModal'
 import Icon from '../components/Icon'
 import { Amount, Btn, CategoryChip, CpAvatar, Empty, Eyebrow, Select } from '../components/ui'
 
 const CADENCE_KEYS = ['weekly', 'biweekly', 'monthly', 'quarterly', 'yearly', 'irregular']
+
+// Cadence → monthly multiplier, so each topf shows an honest "≈ X/Monat" subtotal
+// (a normalised sum of the list you're looking at — not a statistics module).
+const MONTHLY_FACTOR: Record<string, number> = {
+  weekly: 52 / 12,
+  biweekly: 26 / 12,
+  monthly: 1,
+  quarterly: 1 / 3,
+  yearly: 1 / 12,
+}
+const monthlyEquivalent = (s: RecurringSeries) =>
+  (Math.abs(parseFloat(s.expected_amount ?? '0')) || 0) * (MONTHLY_FACTOR[s.cadence] ?? 1)
+const sectionMonthly = (list: RecurringSeries[]) => list.reduce((sum, s) => sum + monthlyEquivalent(s), 0)
 
 export default function RecurringPage() {
   const { t } = useTranslation()
@@ -29,7 +42,7 @@ export default function RecurringPage() {
     const controller = new AbortController()
     setIsLoading(true)
     setError(false)
-    fetch('/api/v1/recurring', {
+    fetch('/api/v1/recurring?include_transfers=true', {
       headers: { 'Accept': 'application/json' },
       signal: controller.signal,
     })
@@ -67,8 +80,23 @@ export default function RecurringPage() {
     }
   }
 
-  const outflows = series.filter(s => s.direction === 'outflow')
-  const inflows = series.filter(s => s.direction === 'inflow')
+  // Three töpfe by *type*, not just direction:
+  //  • Verträge & Abos  = outgoing commitments (the "don't forget / fixed costs" set)
+  //  • Einnahmen        = incoming, external
+  //  • Sparen & Transfers = money between your own accounts (transfer-tagged) — secondary
+  const isTransfer = (s: RecurringSeries) => s.merchant_type === 'transfer'
+  const contracts = series.filter(s => !isTransfer(s) && s.direction === 'outflow')
+  const income = series.filter(s => !isTransfer(s) && s.direction === 'inflow')
+  const transfers = series.filter(isTransfer)
+
+  const handlers = {
+    categories,
+    expandedId,
+    onToggle: (id: number) => setExpandedId(o => (o === id ? null : id)),
+    onConfirm: (id: number) => patchSeries(id, { user_confirmed: true }),
+    onDismiss: dismissSeries,
+    onCategory: (id: number, cat: string) => patchSeries(id, { category_id: cat }),
+  }
 
   return (
     <div className="page">
@@ -98,29 +126,18 @@ export default function RecurringPage() {
         </div>
       ) : (
         <>
-          {outflows.length > 0 && (
-            <Section
-              title={t('recurring.section_outflows')}
-              series={outflows}
-              categories={categories}
-              expandedId={expandedId}
-              onToggle={(id) => setExpandedId(o => (o === id ? null : id))}
-              onConfirm={(id) => patchSeries(id, { user_confirmed: true })}
-              onDismiss={dismissSeries}
-              onCategory={(id, cat) => patchSeries(id, { category_id: cat })}
-            />
+          {contracts.length > 0 && (
+            <Section title={t('recurring.section_contracts')} series={contracts}
+              monthly={sectionMonthly(contracts)} delay="delay-1" {...handlers} />
           )}
-          {inflows.length > 0 && (
-            <Section
-              title={t('recurring.section_inflows')}
-              series={inflows}
-              categories={categories}
-              expandedId={expandedId}
-              onToggle={(id) => setExpandedId(o => (o === id ? null : id))}
-              onConfirm={(id) => patchSeries(id, { user_confirmed: true })}
-              onDismiss={dismissSeries}
-              onCategory={(id, cat) => patchSeries(id, { category_id: cat })}
-            />
+          {income.length > 0 && (
+            <Section title={t('recurring.section_inflows')} series={income}
+              monthly={sectionMonthly(income)} delay="delay-2" {...handlers} />
+          )}
+          {transfers.length > 0 && (
+            <Section title={t('recurring.section_savings')} series={transfers}
+              monthly={sectionMonthly(transfers)} hint={t('recurring.savings_hint')}
+              secondary delay="delay-3" {...handlers} />
           )}
         </>
       )}
@@ -138,32 +155,74 @@ export default function RecurringPage() {
 interface SectionProps {
   title: string
   series: RecurringSeries[]
+  monthly: number
   categories: Category[]
   expandedId: number | null
+  hint?: string
+  secondary?: boolean
+  delay?: string
   onToggle: (id: number) => void
   onConfirm: (id: number) => void
   onDismiss: (id: number) => void
   onCategory: (id: number, categoryId: string) => void
 }
 
-function Section({ title, series, categories, expandedId, onToggle, onConfirm, onDismiss, onCategory }: SectionProps) {
+function Section({ title, series, monthly, categories, expandedId, hint, secondary, delay,
+  onToggle, onConfirm, onDismiss, onCategory }: SectionProps) {
+  const { t } = useTranslation()
+  // primary sections are always open; the secondary (Sparen & Transfers) collapses, default closed
+  const [sectionOpen, setSectionOpen] = useState(!secondary)
+  const currency = series[0]?.currency ?? 'EUR'
+
+  const sum = monthly > 0 && (
+    <span className="mono tabular-nums text-ink-muted text-[12px] shrink-0">
+      {t('recurring.monthly_sum', { amount: formatAmount(monthly, currency) })}
+    </span>
+  )
+
+  const head = (
+    <div className="flex items-baseline justify-between gap-3 w-full">
+      <span className="flex items-baseline gap-2 min-w-0">
+        {secondary && (
+          <Icon name={sectionOpen ? 'chevronDown' : 'chevronRight'} size={13}
+            className="text-ink-faint shrink-0 self-center" />
+        )}
+        <Eyebrow>{title}</Eyebrow>
+        {secondary && (
+          <span className="chip shrink-0">{t('recurring.count_entries', { count: series.length })}</span>
+        )}
+        {hint && <span className="text-ink-faint text-[11px] truncate hidden sm:inline">{hint}</span>}
+      </span>
+      {sum}
+    </div>
+  )
+
   return (
-    <section className="mb-6">
-      <Eyebrow className="mb-2">{title}</Eyebrow>
-      <div className="panel overflow-hidden">
-        {series.map(s => (
-          <SeriesRow
-            key={s.id}
-            s={s}
-            categories={categories}
-            open={expandedId === s.id}
-            onToggle={() => onToggle(s.id)}
-            onConfirm={() => onConfirm(s.id)}
-            onDismiss={() => onDismiss(s.id)}
-            onCategory={(cat) => onCategory(s.id, cat)}
-          />
-        ))}
-      </div>
+    <section className={'mb-6 animate-in ' + (delay ?? '')}>
+      {secondary ? (
+        <button type="button" onClick={() => setSectionOpen(o => !o)}
+          className="w-full mb-2 focus-inset text-left opacity-75 hover:opacity-100 transition-opacity">
+          {head}
+        </button>
+      ) : (
+        <div className="mb-2">{head}</div>
+      )}
+      {sectionOpen && (
+        <div className={'panel overflow-hidden' + (secondary ? ' opacity-[0.82]' : '')}>
+          {series.map(s => (
+            <SeriesRow
+              key={s.id}
+              s={s}
+              categories={categories}
+              open={expandedId === s.id}
+              onToggle={() => onToggle(s.id)}
+              onConfirm={() => onConfirm(s.id)}
+              onDismiss={() => onDismiss(s.id)}
+              onCategory={(cat) => onCategory(s.id, cat)}
+            />
+          ))}
+        </div>
+      )}
     </section>
   )
 }

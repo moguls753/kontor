@@ -85,6 +85,11 @@ class RecurringDetector
         end
       end
 
+      # Lever B — a counterparty that recurs as BOTH an inflow AND an outflow is an
+      # own-/family transfer (money shuffled back and forth), not a contract → mark it
+      # "transfer" so the index hides it by default (reversible via ?include_transfers).
+      flag_bidirectional_transfers
+
       # §5.6 step 5 — reconcile vanished active series → ended (end-grace)
       ended_count = reconcile_vanished(detected_series_ids)
     end
@@ -209,12 +214,11 @@ class RecurringDetector
     span  = expected_amount.abs.zero? ? 0.0 : (max_a - min_a).abs / expected_amount.abs
     amount_variable = span > AMOUNT_TOLERANCE
 
-    # keep-rule (§5.1): bucket != irregular && regular && med >= MIN_CADENCE_DAYS
+    # keep-rule (§5.1): bucket != irregular && regular && med >= MIN_CADENCE_DAYS.
+    # Lever A — irregular series are NEVER kept (a Vertrag is by definition regelmäßig;
+    # the prior "amount-stable + occ>=4" edge-allowance let one-off-ish chains like
+    # train tickets / supermarket runs slip through as false positives).
     keep = cadence != "irregular" && regular && med >= MIN_CADENCE_DAYS
-    # edge allowance: keep irregular if amount fixed within tolerance AND occ >= 4
-    # — #2: still enforce med >= MIN_CADENCE_DAYS so fixed-price sub-weekly chains
-    # (e.g. daily coffee at a flat price) are NOT kept.
-    keep ||= (cadence == "irregular" && !amount_variable && members.size >= 4 && med >= MIN_CADENCE_DAYS)
     return nil unless keep
 
     iban_consistent = begin
@@ -431,6 +435,19 @@ class RecurringDetector
   # ── §5.6 step 5 — reconcile vanished active series → ended (end-grace) ────────
   # #3 — key on SERIES ID, not fingerprint (fingerprints are non-unique; a cancelled
   # sibling under a shared fingerprint must still be allowed to end).
+  # Lever B — flag canonical names that recur in BOTH directions as "transfer".
+  # Operates on freshly-persisted active series; never overrides a user-confirmed one.
+  def flag_bidirectional_transfers
+    @user.recurring_series.active.group_by(&:canonical_name).each_value do |group|
+      next if group.map(&:direction).uniq.size < 2 # needs both inflow AND outflow
+
+      group.each do |s|
+        next if s.user_confirmed || s.merchant_type == "transfer"
+        s.update!(merchant_type: "transfer")
+      end
+    end
+  end
+
   def reconcile_vanished(detected_series_ids)
     ended = 0
     today = Date.current
