@@ -89,6 +89,15 @@ export default function RecurringPage() {
   const income = series.filter(s => !isTransfer(s) && s.direction === 'inflow')
   const transfers = series.filter(isTransfer)
 
+  // Overview totals for the summary strip. Transfers are own-account movements
+  // (net-zero), so they stay OUT of the "what you keep each month" maths.
+  const fixedMonthly = sectionMonthly(contracts)
+  const incomeMonthly = sectionMonthly(income)
+  const summaryCurrency = (contracts[0] ?? income[0])?.currency ?? 'EUR'
+  // Summing across currencies would print a meaningless total under one symbol —
+  // detect it so the Net hero withholds the false figure instead of faking it.
+  const summaryMixed = new Set([...contracts, ...income].map(s => s.currency)).size > 1
+
   const handlers = {
     categories,
     expandedId,
@@ -126,6 +135,10 @@ export default function RecurringPage() {
         </div>
       ) : (
         <>
+          {(contracts.length > 0 || income.length > 0) && (
+            <SummaryStrip fixed={fixedMonthly} income={incomeMonthly}
+              currency={summaryCurrency} mixed={summaryMixed} />
+          )}
           {contracts.length > 0 && (
             <Section title={t('recurring.section_contracts')} series={contracts}
               monthly={sectionMonthly(contracts)} delay="delay-1" {...handlers} />
@@ -148,6 +161,55 @@ export default function RecurringPage() {
           if (didDetect) refetch()
         }} />
       )}
+    </div>
+  )
+}
+
+// At-a-glance overview, read as one piece of arithmetic: income − fixed = what
+// you keep. The operands stay quiet; Net is the dominant, sign-coloured result
+// (green when you're keeping money, red when you're underwater). All per month,
+// all visible at once — the reason this page stays stacked, not tabbed.
+function SummaryStrip({ fixed, income, currency, mixed }: { fixed: number; income: number; currency: string; mixed: boolean }) {
+  const { t } = useTranslation()
+  // Clamp float residue from the cadence factors (52/12 etc.) so a true break-even
+  // doesn't print a misleading + €0,00 / − €0,00.
+  const net = Math.abs(income - fixed) < 0.005 ? 0 : income - fixed
+
+  // operand cell: quiet 18/21px figure; first cell flush, the rest separated by a
+  // hairline (top when stacked on mobile, left on the desktop row).
+  const operand = (label: string, value: number, first?: boolean) => (
+    <div className={'px-4 py-3.5 sm:px-5 sm:py-4' + (first ? '' : ' border-t border-line sm:border-t-0 sm:border-l')}>
+      <Eyebrow>{label}</Eyebrow>
+      <div className="mt-1.5">
+        <Amount value={value} currency={currency} className="text-[18px] sm:text-[21px]" />
+      </div>
+    </div>
+  )
+
+  return (
+    <div role="group" aria-label={t('recurring.summary_title')}
+      className="panel mb-8 grid grid-cols-1 sm:grid-cols-[1fr_1fr_1.35fr] animate-in">
+      {operand(t('recurring.summary_fixed'), -fixed, true)}
+      {operand(t('recurring.summary_income'), income)}
+      {/* Net — the resolved total: a leading mono "=", a heavier 2px rule, and the
+          page's single largest figure, coloured red only when negative. */}
+      <div className="px-4 py-3.5 sm:px-5 sm:py-4 border-t border-line sm:border-t-0 sm:border-l-2">
+        <Eyebrow>{t('recurring.summary_net')}</Eyebrow>
+        <div className="mt-1.5 flex items-baseline gap-2 flex-wrap">
+          <span className="mono text-ink-faint text-[18px] sm:text-[22px]" aria-hidden="true">=</span>
+          {mixed ? (
+            <Amount value={null} currency={currency} className="text-[24px] sm:text-[28px]" />
+          ) : (
+            // text-danger (utilities layer) overrides Amount's .amt-neg ink
+            // (components layer) by Tailwind layer order — no !important needed.
+            <Amount value={net} currency={currency}
+              className={'text-[24px] sm:text-[28px]' + (net < 0 ? ' text-danger' : '')} />
+          )}
+          <span className="text-ink-muted text-[11px]">
+            {mixed ? t('recurring.summary_mixed') : t('recurring.summary_per_month')}
+          </span>
+        </div>
+      </div>
     </div>
   )
 }
