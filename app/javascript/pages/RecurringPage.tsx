@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { formatDate, formatAmount } from '../lib/format'
+import { formatDate } from '../lib/format'
 import type { RecurringSeries, Transaction, Category } from '../lib/types'
 import RecurringScanModal from '../components/RecurringScanModal'
 import Icon from '../components/Icon'
@@ -31,6 +31,7 @@ export default function RecurringPage() {
   const [retryKey, setRetryKey] = useState(0)
   const [showScan, setShowScan] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [activeTab, setActiveTab] = useState<string | null>(null)
 
   // Load categories once (for assignment)
   useEffect(() => {
@@ -80,31 +81,47 @@ export default function RecurringPage() {
     }
   }
 
-  // Three töpfe by *type*, not just direction:
-  //  • Verträge & Abos  = outgoing commitments (the "don't forget / fixed costs" set)
-  //  • Einnahmen        = incoming, external
-  //  • Sparen & Transfers = money between your own accounts (transfer-tagged) — secondary
+  // Three töpfe by *type*, not just direction → one TAB each:
+  //  • Verträge & Abos    = outgoing commitments (the "don't forget / fixed costs" set)
+  //  • Einnahmen          = incoming, external
+  //  • Sparen & Transfers = money between your own accounts (transfer-tagged)
   const isTransfer = (s: RecurringSeries) => s.merchant_type === 'transfer'
   const contracts = series.filter(s => !isTransfer(s) && s.direction === 'outflow')
   const income = series.filter(s => !isTransfer(s) && s.direction === 'inflow')
   const transfers = series.filter(isTransfer)
 
-  // Overview totals for the summary strip. Transfers are own-account movements
-  // (net-zero), so they stay OUT of the "what you keep each month" maths.
-  const fixedMonthly = sectionMonthly(contracts)
-  const incomeMonthly = sectionMonthly(income)
-  const summaryCurrency = (contracts[0] ?? income[0])?.currency ?? 'EUR'
-  // Summing across currencies would print a meaningless total under one symbol —
-  // detect it so the Net hero withholds the false figure instead of faking it.
-  const summaryMixed = new Set([...contracts, ...income].map(s => s.currency)).size > 1
+  // One tab per non-empty topf — each carries its OWN monthly figure (no global net/saldo).
+  // sign: outflow −, inflow +, transfers 0 (net-zero own-account moves → neutral, no euro).
+  // mixed: a tab spanning >1 currency can't be summed under one symbol → show a note instead.
+  const meta = (key: string, label: string, list: RecurringSeries[], sign: number, hint?: string) => ({
+    key, label, list, sign, hint,
+    monthly: sectionMonthly(list),
+    currency: list[0]?.currency ?? 'EUR',
+    mixed: new Set(list.map(s => s.currency)).size > 1,
+  })
+  const tabs = [
+    meta('contracts', t('recurring.section_contracts'), contracts, -1),
+    meta('income', t('recurring.section_inflows'), income, 1),
+    meta('transfers', t('recurring.section_savings'), transfers, 0, t('recurring.savings_hint')),
+  ].filter(tab => tab.list.length > 0)
+  const activeKey = tabs.some(tb => tb.key === activeTab) ? activeTab : tabs[0]?.key
+  const active = tabs.find(tb => tb.key === activeKey)
+  const colsClass = ['', 'sm:grid-cols-1', 'sm:grid-cols-2', 'sm:grid-cols-3'][tabs.length] ?? 'sm:grid-cols-3'
 
-  const handlers = {
-    categories,
-    expandedId,
-    onToggle: (id: number) => setExpandedId(o => (o === id ? null : id)),
-    onConfirm: (id: number) => patchSeries(id, { user_confirmed: true }),
-    onDismiss: dismissSeries,
-    onCategory: (id: number, cat: string) => patchSeries(id, { category_id: cat }),
+  // WAI-ARIA tabs: Arrow/Home/End move selection and focus the new tab.
+  const onTabKey = (e: { key: string; preventDefault: () => void }) => {
+    const i = tabs.findIndex(tb => tb.key === activeKey)
+    if (i < 0) return
+    let j = i
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') j = (i + 1) % tabs.length
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') j = (i - 1 + tabs.length) % tabs.length
+    else if (e.key === 'Home') j = 0
+    else if (e.key === 'End') j = tabs.length - 1
+    else return
+    e.preventDefault()
+    const key = tabs[j].key
+    setActiveTab(key)
+    document.getElementById(`rec-tab-${key}`)?.focus()
   }
 
   return (
@@ -135,22 +152,55 @@ export default function RecurringPage() {
         </div>
       ) : (
         <>
-          {(contracts.length > 0 || income.length > 0) && (
-            <SummaryStrip fixed={fixedMonthly} income={incomeMonthly}
-              currency={summaryCurrency} mixed={summaryMixed} />
-          )}
-          {contracts.length > 0 && (
-            <Section title={t('recurring.section_contracts')} series={contracts}
-              monthly={sectionMonthly(contracts)} delay="delay-1" {...handlers} />
-          )}
-          {income.length > 0 && (
-            <Section title={t('recurring.section_inflows')} series={income}
-              monthly={sectionMonthly(income)} delay="delay-2" {...handlers} />
-          )}
-          {transfers.length > 0 && (
-            <Section title={t('recurring.section_savings')} series={transfers}
-              monthly={sectionMonthly(transfers)} hint={t('recurring.savings_hint')}
-              secondary delay="delay-3" {...handlers} />
+          {/* Tabs: one equal-width card per topf, each showing its own monthly figure.
+              The card IS the tab — clicking switches the list below. */}
+          <div role="tablist" aria-label={t('recurring.title')} onKeyDown={onTabKey}
+            className={`grid gap-3 mb-7 grid-cols-1 ${colsClass} animate-in`}>
+            {tabs.map(tab => {
+              const on = tab.key === activeKey
+              return (
+                <button key={tab.key} id={`rec-tab-${tab.key}`} type="button"
+                  role="tab" aria-selected={on} aria-controls="rec-tabpanel" tabIndex={on ? 0 : -1}
+                  onClick={() => setActiveTab(tab.key)}
+                  className={'text-left border-2 rounded-md px-4 py-3 transition-colors focus-inset ' +
+                    (on ? 'border-brass bg-brass-soft' : 'border-line hover:border-ink-faint')}>
+                  <div className="flex items-center justify-between gap-2">
+                    <Eyebrow>{tab.label}</Eyebrow>
+                    <span className="chip shrink-0">{tab.list.length}</span>
+                  </div>
+                  <div className="mt-2 flex items-baseline gap-1.5 flex-wrap min-h-[1.7em]">
+                    {tab.mixed ? (
+                      <span className="text-ink-muted text-[13px]">{t('recurring.summary_mixed')}</span>
+                    ) : tab.sign === 0 ? (
+                      // net-zero own-account moves: no euro subtotal (the abs sum would mislead)
+                      <span className="text-ink-muted text-[13px]">{t('recurring.savings_neutral')}</span>
+                    ) : (
+                      <>
+                        <Amount value={tab.sign * tab.monthly} currency={tab.currency} className="text-[19px]" />
+                        <span className="text-ink-faint text-[11px]">{t('recurring.summary_per_month')}</span>
+                      </>
+                    )}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {active && (
+            <div role="tabpanel" id="rec-tabpanel" aria-labelledby={`rec-tab-${activeKey}`}
+              tabIndex={0} key={activeKey} className="animate-in delay-1 focus-inset">
+              {active.hint && <p className="text-ink-faint text-[12px] mb-2">{active.hint}</p>}
+              <div className="panel overflow-hidden">
+                {active.list.map(s => (
+                  <SeriesRow key={s.id} s={s} categories={categories}
+                    open={expandedId === s.id}
+                    onToggle={() => setExpandedId(o => (o === s.id ? null : s.id))}
+                    onConfirm={() => patchSeries(s.id, { user_confirmed: true })}
+                    onDismiss={() => dismissSeries(s.id)}
+                    onCategory={(cat) => patchSeries(s.id, { category_id: cat })} />
+                ))}
+              </div>
+            </div>
           )}
         </>
       )}
@@ -162,130 +212,6 @@ export default function RecurringPage() {
         }} />
       )}
     </div>
-  )
-}
-
-// At-a-glance overview, read as one piece of arithmetic: income − fixed = what
-// you keep. The operands stay quiet; Net is the dominant, sign-coloured result
-// (green when you're keeping money, red when you're underwater). All per month,
-// all visible at once — the reason this page stays stacked, not tabbed.
-function SummaryStrip({ fixed, income, currency, mixed }: { fixed: number; income: number; currency: string; mixed: boolean }) {
-  const { t } = useTranslation()
-  // Clamp float residue from the cadence factors (52/12 etc.) so a true break-even
-  // doesn't print a misleading + €0,00 / − €0,00.
-  const net = Math.abs(income - fixed) < 0.005 ? 0 : income - fixed
-
-  // operand cell: quiet 18/21px figure; first cell flush, the rest separated by a
-  // hairline (top when stacked on mobile, left on the desktop row).
-  const operand = (label: string, value: number, first?: boolean) => (
-    <div className={'px-4 py-3.5 sm:px-5 sm:py-4' + (first ? '' : ' border-t border-line sm:border-t-0 sm:border-l')}>
-      <Eyebrow>{label}</Eyebrow>
-      <div className="mt-1.5">
-        <Amount value={value} currency={currency} className="text-[18px] sm:text-[21px]" />
-      </div>
-    </div>
-  )
-
-  return (
-    <div role="group" aria-label={t('recurring.summary_title')}
-      className="panel mb-8 grid grid-cols-1 sm:grid-cols-[1fr_1fr_1.35fr] animate-in">
-      {operand(t('recurring.summary_fixed'), -fixed, true)}
-      {operand(t('recurring.summary_income'), income)}
-      {/* Net — the resolved total: a leading mono "=", a heavier 2px rule, and the
-          page's single largest figure, coloured red only when negative. */}
-      <div className="px-4 py-3.5 sm:px-5 sm:py-4 border-t border-line sm:border-t-0 sm:border-l-2">
-        <Eyebrow>{t('recurring.summary_net')}</Eyebrow>
-        <div className="mt-1.5 flex items-baseline gap-2 flex-wrap">
-          <span className="mono text-ink-faint text-[18px] sm:text-[22px]" aria-hidden="true">=</span>
-          {mixed ? (
-            <Amount value={null} currency={currency} className="text-[24px] sm:text-[28px]" />
-          ) : (
-            // text-danger (utilities layer) overrides Amount's .amt-neg ink
-            // (components layer) by Tailwind layer order — no !important needed.
-            <Amount value={net} currency={currency}
-              className={'text-[24px] sm:text-[28px]' + (net < 0 ? ' text-danger' : '')} />
-          )}
-          <span className="text-ink-muted text-[11px]">
-            {mixed ? t('recurring.summary_mixed') : t('recurring.summary_per_month')}
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-interface SectionProps {
-  title: string
-  series: RecurringSeries[]
-  monthly: number
-  categories: Category[]
-  expandedId: number | null
-  hint?: string
-  secondary?: boolean
-  delay?: string
-  onToggle: (id: number) => void
-  onConfirm: (id: number) => void
-  onDismiss: (id: number) => void
-  onCategory: (id: number, categoryId: string) => void
-}
-
-function Section({ title, series, monthly, categories, expandedId, hint, secondary, delay,
-  onToggle, onConfirm, onDismiss, onCategory }: SectionProps) {
-  const { t } = useTranslation()
-  // primary sections are always open; the secondary (Sparen & Transfers) collapses, default closed
-  const [sectionOpen, setSectionOpen] = useState(!secondary)
-  const currency = series[0]?.currency ?? 'EUR'
-
-  const sum = monthly > 0 && (
-    <span className="mono tabular-nums text-ink-muted text-[12px] shrink-0">
-      {t('recurring.monthly_sum', { amount: formatAmount(monthly, currency) })}
-    </span>
-  )
-
-  const head = (
-    <div className="flex items-baseline justify-between gap-3 w-full">
-      <span className="flex items-baseline gap-2 min-w-0">
-        {secondary && (
-          <Icon name={sectionOpen ? 'chevronDown' : 'chevronRight'} size={13}
-            className="text-ink-faint shrink-0 self-center" />
-        )}
-        <Eyebrow>{title}</Eyebrow>
-        {secondary && (
-          <span className="chip shrink-0">{t('recurring.count_entries', { count: series.length })}</span>
-        )}
-        {hint && <span className="text-ink-faint text-[11px] truncate hidden sm:inline">{hint}</span>}
-      </span>
-      {sum}
-    </div>
-  )
-
-  return (
-    <section className={'mb-6 animate-in ' + (delay ?? '')}>
-      {secondary ? (
-        <button type="button" onClick={() => setSectionOpen(o => !o)}
-          className="w-full mb-2 focus-inset text-left opacity-75 hover:opacity-100 transition-opacity">
-          {head}
-        </button>
-      ) : (
-        <div className="mb-2">{head}</div>
-      )}
-      {sectionOpen && (
-        <div className={'panel overflow-hidden' + (secondary ? ' opacity-[0.82]' : '')}>
-          {series.map(s => (
-            <SeriesRow
-              key={s.id}
-              s={s}
-              categories={categories}
-              open={expandedId === s.id}
-              onToggle={() => onToggle(s.id)}
-              onConfirm={() => onConfirm(s.id)}
-              onDismiss={() => onDismiss(s.id)}
-              onCategory={(cat) => onCategory(s.id, cat)}
-            />
-          ))}
-        </div>
-      )}
-    </section>
   )
 }
 
