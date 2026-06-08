@@ -4,9 +4,11 @@ module Api
       def index
         scope = Current.user.recurring_series.includes(:category)
 
-        # default: hide dismissed
+        # default: show only ACTIVE series. "ended" (the pattern stopped) and "dismissed"
+        # are hidden from this page — it's a live overview of running contracts, not a
+        # history. Opt in to a specific status (e.g. ?status=ended) to see them.
         scope = scope.where(status: params[:status]) if params[:status].present?
-        scope = scope.where.not(status: "dismissed") if params[:status].blank?
+        scope = scope.where(status: "active") if params[:status].blank?
 
         scope = scope.where(direction: params[:direction]) if params[:direction].present?
 
@@ -18,6 +20,11 @@ module Api
         hidden_types = RecurringSeries::CONSUMPTION_TYPES.dup
         hidden_types << "transfer" unless params[:include_transfers] == "true"
         scope = scope.where("merchant_type IS NULL OR merchant_type NOT IN (?)", hidden_types)
+
+        # NOTE: irregular series are NOT filtered here on purpose — that's the detector's
+        # job. It drops irregular at detection (Lever A) and ends any old irregular leftover
+        # (reconcile_vanished → status: "ended"), which the active-only default above already
+        # hides. One source of truth: the detector decides validity, the index shows active.
 
         scope = scope.order(Arel.sql("CASE WHEN status = 'active' THEN 0 ELSE 1 END"))
                      .order(Arel.sql("next_expected_on IS NULL, next_expected_on ASC"))

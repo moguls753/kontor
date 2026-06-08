@@ -74,6 +74,17 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       get api_v1_recurring_index_path, as: :json
       expect(response.parsed_body["series"].map { |x| x["id"] }).not_to include(dismissed.id)
     end
+
+    it "hides ended series by default but shows them with ?status=ended" do
+      ended = create(:recurring_series, :monthly, user: user, status: "ended", canonical_name: "Cancelled Sub")
+
+      get api_v1_recurring_index_path, as: :json
+      expect(response.parsed_body["series"].map { |x| x["id"] }).not_to include(ended.id)
+
+      get api_v1_recurring_index_path, params: { status: "ended" }, as: :json
+      expect(response.parsed_body["series"].map { |x| x["id"] }).to include(ended.id)
+    end
+
   end
 
   describe "POST /api/v1/recurring/detect" do

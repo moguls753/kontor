@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { formatDate } from '../lib/format'
+import { formatDate, formatAmount } from '../lib/format'
 import type { RecurringSeries, Transaction, Category } from '../lib/types'
 import RecurringScanModal from '../components/RecurringScanModal'
 import Icon from '../components/Icon'
@@ -21,6 +21,43 @@ const MONTHLY_FACTOR: Record<string, number> = {
 const monthlyEquivalent = (s: RecurringSeries) =>
   (Math.abs(parseFloat(s.expected_amount ?? '0')) || 0) * (MONTHLY_FACTOR[s.cadence] ?? 1)
 const sectionMonthly = (list: RecurringSeries[]) => list.reduce((sum, s) => sum + monthlyEquivalent(s), 0)
+
+// A transfer between your own accounts is detected as TWO series — the +X leg and the
+// −X leg of the same movement. Merge those mirror legs (same name + same |amount|) into
+// one neutral row so the list shows the movement once, not twice.
+interface TransferGroup {
+  key: string
+  canonical_name: string
+  currency: string
+  cadence: string
+  amount: number // absolute
+  confidence_band: 'high' | 'medium' | 'low'
+  next_expected_on: string | null
+  user_confirmed: boolean
+  legs: RecurringSeries[]
+}
+const groupTransfers = (list: RecurringSeries[]): TransferGroup[] => {
+  const map = new Map<string, RecurringSeries[]>()
+  for (const s of list) {
+    const amt = (Math.abs(parseFloat(s.expected_amount ?? '0')) || 0).toFixed(2)
+    const k = `${s.canonical_name}::${amt}`
+    ;(map.get(k) ?? map.set(k, []).get(k)!).push(s)
+  }
+  return [...map.entries()].map(([key, legs]) => {
+    const rep = legs[0]
+    return {
+      key,
+      canonical_name: rep.canonical_name,
+      currency: rep.currency,
+      cadence: rep.cadence,
+      amount: Math.abs(parseFloat(rep.expected_amount ?? '0')) || 0,
+      confidence_band: rep.confidence_band,
+      next_expected_on: legs.map(l => l.next_expected_on).filter(Boolean).sort()[0] ?? null,
+      user_confirmed: legs.every(l => l.user_confirmed),
+      legs,
+    }
+  })
+}
 
 export default function RecurringPage() {
   const { t } = useTranslation()
@@ -166,7 +203,9 @@ export default function RecurringPage() {
                     (on ? 'border-brass bg-brass-soft' : 'border-line hover:border-ink-faint')}>
                   <div className="flex items-center justify-between gap-2">
                     <Eyebrow>{tab.label}</Eyebrow>
-                    <span className="chip shrink-0">{tab.list.length}</span>
+                    <span className="chip shrink-0">
+                      {tab.key === 'transfers' ? groupTransfers(tab.list).length : tab.list.length}
+                    </span>
                   </div>
                   <div className="mt-2 flex items-baseline gap-1.5 flex-wrap min-h-[1.7em]">
                     {tab.mixed ? (
@@ -191,14 +230,24 @@ export default function RecurringPage() {
               tabIndex={0} key={activeKey} className="animate-in delay-1 focus-inset">
               {active.hint && <p className="text-ink-faint text-[12px] mb-2">{active.hint}</p>}
               <div className="panel overflow-hidden">
-                {active.list.map(s => (
-                  <SeriesRow key={s.id} s={s} categories={categories}
-                    open={expandedId === s.id}
-                    onToggle={() => setExpandedId(o => (o === s.id ? null : s.id))}
-                    onConfirm={() => patchSeries(s.id, { user_confirmed: true })}
-                    onDismiss={() => dismissSeries(s.id)}
-                    onCategory={(cat) => patchSeries(s.id, { category_id: cat })} />
-                ))}
+                {active.key === 'transfers' ? (
+                  groupTransfers(active.list).map(g => (
+                    <TransferRow key={g.key} g={g}
+                      open={expandedId === g.legs[0].id}
+                      onToggle={() => setExpandedId(o => (o === g.legs[0].id ? null : g.legs[0].id))}
+                      onConfirm={() => g.legs.forEach(l => patchSeries(l.id, { user_confirmed: true }))}
+                      onDismiss={() => g.legs.forEach(l => dismissSeries(l.id))} />
+                  ))
+                ) : (
+                  active.list.map(s => (
+                    <SeriesRow key={s.id} s={s} categories={categories}
+                      open={expandedId === s.id}
+                      onToggle={() => setExpandedId(o => (o === s.id ? null : s.id))}
+                      onConfirm={() => patchSeries(s.id, { user_confirmed: true })}
+                      onDismiss={() => dismissSeries(s.id)}
+                      onCategory={(cat) => patchSeries(s.id, { category_id: cat })} />
+                  ))
+                )}
               </div>
             </div>
           )}
@@ -322,6 +371,76 @@ function SeriesRow({ s, categories, open, onToggle, onConfirm, onDismiss, onCate
 function ConfidenceDot({ band }: { band: 'high' | 'medium' | 'low' }) {
   const cls = band === 'high' ? 'bg-income' : band === 'medium' ? 'bg-brass' : 'bg-ink-faint'
   return <span className={'w-[7px] h-[7px] rounded-full ' + cls} />
+}
+
+// One row per own-account movement (mirror +X/−X legs merged). Neutral amount (it nets to
+// zero), expand shows the individual legs; confirm/dismiss fan out to all legs of the pair.
+function TransferRow({ g, open, onToggle, onConfirm, onDismiss }: {
+  g: TransferGroup
+  open: boolean
+  onToggle: () => void
+  onConfirm: () => void
+  onDismiss: () => void
+}) {
+  const { t } = useTranslation()
+  const cadenceLabel = CADENCE_KEYS.includes(g.cadence) ? t(`recurring.cadence_${g.cadence}`) : g.cadence
+  const confidenceLabel = t(`recurring.confidence_${g.confidence_band}`)
+
+  return (
+    <div className="ledger-row-wrap">
+      <button className={'ledger-row focus-inset' + (open ? ' open' : '')}
+        onClick={onToggle} aria-expanded={open}>
+        <div className="ledger-cp">
+          <CpAvatar name={g.canonical_name} sign={0} />
+          <div className="min-w-0">
+            <div className="cp-name flex items-center gap-2">
+              {g.canonical_name}
+              {g.legs.length > 1 && (
+                <span className="chip" title={t('recurring.transfer_pair')} aria-label={t('recurring.transfer_pair')}>↔</span>
+              )}
+              {g.user_confirmed && (
+                <span className="badge badge-ok"><span className="dot" />{t('recurring.confirmed')}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-wrap mt-0.5">
+              <span className="chip">{cadenceLabel}</span>
+              <span className="flex items-center gap-1.5 text-ink-faint text-[11.5px]" title={confidenceLabel}>
+                <ConfidenceDot band={g.confidence_band} />
+                {confidenceLabel}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-0.5 shrink-0">
+          {/* own-account movement nets to zero → show the absolute amount, muted/neutral */}
+          <span className="amt amt-null mono text-[14.5px]">{formatAmount(g.amount, g.currency)}</span>
+          {g.next_expected_on && (
+            <span className="text-ink-faint text-[11.5px]">
+              {t('recurring.next_charge')}: <span className="mono">{formatDate(g.next_expected_on)}</span>
+            </span>
+          )}
+        </div>
+        <span className="ledger-expand"><Icon name="chevronRight" size={16} className="chev" /></span>
+      </button>
+
+      {open && (
+        <div className="ledger-detail">
+          {g.legs.map(leg => (
+            <div className="detail-field" key={leg.id}>
+              <Eyebrow>{leg.direction === 'inflow' ? t('recurring.transfer_in') : t('recurring.transfer_out')}</Eyebrow>
+              <div className="val"><Amount value={leg.expected_amount} currency={leg.currency} /></div>
+            </div>
+          ))}
+          <div className="detail-field md:col-span-2 flex-row items-center gap-2 mt-1">
+            {!g.user_confirmed && (
+              <Btn variant="secondary" size="sm" icon="check" onClick={onConfirm}>{t('recurring.confirm')}</Btn>
+            )}
+            <Btn variant="ghost" size="sm" icon="trash" onClick={onDismiss}>{t('recurring.dismiss')}</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function SeriesMembers({ seriesId, open }: { seriesId: number; open: boolean }) {
