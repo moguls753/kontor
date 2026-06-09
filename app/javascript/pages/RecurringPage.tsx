@@ -3,10 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useScope, withScope } from '../lib/scope'
 import { formatDate, formatAmount } from '../lib/format'
-import type { RecurringSeries, Transaction, Category } from '../lib/types'
+import type { RecurringSeries, Transaction } from '../lib/types'
 import RecalculateButton from '../components/RecalculateButton'
 import Icon from '../components/Icon'
-import { Amount, Btn, CategoryChip, CpAvatar, Empty, Eyebrow, Select } from '../components/ui'
+import { Amount, Btn, CategoryChip, CpAvatar, Empty, Eyebrow } from '../components/ui'
 
 const CADENCE_KEYS = ['weekly', 'biweekly', 'monthly', 'quarterly', 'yearly', 'irregular']
 
@@ -64,17 +64,11 @@ export default function RecurringPage() {
   const { t } = useTranslation()
   const { scope } = useScope()
   const [series, setSeries] = useState<RecurringSeries[]>([])
-  const [categories, setCategories] = useState<Category[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<string | null>(null)
-
-  // Load categories once (for assignment)
-  useEffect(() => {
-    api('/api/v1/categories').then(r => r.ok ? r.json() : []).then(setCategories).catch(() => {})
-  }, [])
 
   // Fetch series
   useEffect(() => {
@@ -242,12 +236,11 @@ export default function RecurringPage() {
                   ))
                 ) : (
                   active.list.map(s => (
-                    <SeriesRow key={s.id} s={s} categories={categories}
+                    <SeriesRow key={s.id} s={s}
                       open={expandedId === s.id}
                       onToggle={() => setExpandedId(o => (o === s.id ? null : s.id))}
                       onConfirm={() => patchSeries(s.id, { user_confirmed: true })}
-                      onDismiss={() => dismissSeries(s.id)}
-                      onCategory={(cat) => patchSeries(s.id, { category_id: cat })} />
+                      onDismiss={() => dismissSeries(s.id)} />
                   ))
                 )}
               </div>
@@ -261,15 +254,13 @@ export default function RecurringPage() {
 
 interface SeriesRowProps {
   s: RecurringSeries
-  categories: Category[]
   open: boolean
   onToggle: () => void
   onConfirm: () => void
   onDismiss: () => void
-  onCategory: (categoryId: string) => void
 }
 
-function SeriesRow({ s, categories, open, onToggle, onConfirm, onDismiss, onCategory }: SeriesRowProps) {
+function SeriesRow({ s, open, onToggle, onConfirm, onDismiss }: SeriesRowProps) {
   const { t } = useTranslation()
   const sign = s.direction === 'outflow' ? -1 : 1
   const cadenceLabel = CADENCE_KEYS.includes(s.cadence)
@@ -342,15 +333,9 @@ function SeriesRow({ s, categories, open, onToggle, onConfirm, onDismiss, onCate
               <div className="val mono">{formatDate(s.next_expected_on)}</div>
             </div>
           )}
-          <div className="detail-field md:col-span-2">
-            <Eyebrow>{t('recurring.assign_category')}</Eyebrow>
-            <div className="val">
-              <Select value={s.category?.id ? String(s.category.id) : ''} onChange={(e) => onCategory(e.target.value)} ariaLabel={t('recurring.assign_category')} className="max-w-[260px]">
-                <option value="">{t('recurring.no_category')}</option>
-                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </Select>
-            </div>
-          </div>
+          {/* Category is read-only here — it belongs to the underlying transactions
+              (set on the Transactions page); editing it on the series would only diverge
+              the label from the actual rows and changes nothing else. */}
           <div className="detail-field md:col-span-2 flex-row items-center gap-2 mt-1">
             {!s.user_confirmed && (
               <Btn variant="secondary" size="sm" icon="check" onClick={onConfirm}>{t('recurring.confirm')}</Btn>

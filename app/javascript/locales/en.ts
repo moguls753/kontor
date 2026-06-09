@@ -234,7 +234,6 @@ export default {
     confirm: 'Confirm',
     confirmed: 'Confirmed',
     dismiss: 'Dismiss',
-    assign_category: 'Set category',
     no_category: 'No category',
     members_title: 'Member transactions',
     members_loading: 'Loading transactions…',
