@@ -74,6 +74,14 @@ class RecurringDetector
           clusters = amount_subcluster(group_rows)
           clusters.each do |cluster|
             series = build_series(cluster, direction:, currency:, canonical:)
+            # Outlier rescue: a cluster can fail regularity because a ONE-OFF payment to the
+            # same payee fell within §5.3's amount-tolerance band of a recurring fixed amount
+            # (e.g. a single Nebenkosten-Nachzahlung next to the monthly rent). Retry on the
+            # dominant exact-amount sub-group so the genuine fixed-amount series is still found;
+            # the one-off stays unmatched (it is NOT folded into the series).
+            if series.nil? && (mode = dominant_amount_subgroup(cluster))
+              series = build_series(mode, direction:, currency:, canonical:)
+            end
             next unless series
 
             persisted = persist_series(series, direction:, currency:, canonical:)
@@ -186,6 +194,19 @@ class RecurringDetector
     end
     clusters << current unless current.empty?
     clusters
+  end
+
+  # Outlier rescue (used only when a cluster failed to yield a regular series): the rows of
+  # the single most-frequent EXACT amount, IF it recurs often enough to stand alone. Lets a
+  # fixed-amount recurring payment (rent) survive a one-off payment to the same payee that
+  # landed within §5.3's amount-tolerance band. Returns nil for a single-amount cluster
+  # (retry would be identical) or when no amount reaches MIN_OCCURRENCES.
+  def dominant_amount_subgroup(cluster)
+    by_amount = cluster.group_by { |r| r[:amount] }
+    return nil if by_amount.size < 2
+
+    _amount, mode_rows = by_amount.max_by { |_amt, rs| rs.size }
+    mode_rows if mode_rows.size >= MIN_OCCURRENCES
   end
 
   # ── build candidate series from a cluster (§5.1, §5.2, §5.4, §5.5) ────────────

@@ -76,6 +76,25 @@ RSpec.describe RecurringDetector do
     end
   end
 
+  describe "outlier rescue (one-off within a recurring amount band)" do
+    it "still detects the recurring fixed amount and excludes a one-off to the same payee" do
+      # monthly rent at a fixed amount …
+      monthly_dates(3).each { |d| charge(name: "Eike Rackwitz", amount: -445.00, date: d) }
+      # … plus a single one-off to the SAME payee, within 15% of the rent (≈12% over 445)
+      charge(name: "Eike Rackwitz", amount: -498.76, date: Date.current - 5)
+
+      subject.detect
+
+      expect(user.recurring_series.outflows.count).to eq(1)
+      rent = user.recurring_series.outflows.first
+      expect(rent.cadence).to eq("monthly")
+      expect(rent.expected_amount).to eq(-445.00)
+      expect(rent.occurrences_count).to eq(3)
+      # the one-off is NOT folded into the series
+      expect(TransactionRecord.where(recurring_series_id: rent.id).count).to eq(3)
+    end
+  end
+
   describe "rejection rules" do
     it "does not detect a 2-occurrence series (≥3 floor)" do
       monthly_dates(2).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
