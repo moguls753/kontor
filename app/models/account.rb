@@ -53,8 +53,6 @@ class Account < ApplicationRecord
   # fully persisted before we read the provider.
   after_commit :infer_role, on: %i[create update]
 
-  def saving_destination? = %w[sparkonto investment].include?(role)
-
   def display_name
     name.presence || iban.presence || "Account #{id}"
   end

@@ -20,7 +20,7 @@ module Api
           else
             # ids of series that have ≥1 member booked on an in-scope account. Keyed
             # on account membership ONLY (not the §4a in_scope exclusion): a personal→
-            # personal savings transfer has BOTH legs in scope, so the §4a net-zero
+            # personal transfer has BOTH legs in scope, so the §4a net-zero
             # exclusion would leave it zero in-scope members and wrongly hide the whole
             # series in "privat". A series booked on an in-scope account stays visible.
             in_scope_series = TransactionRecord.where(account_id: ids)
@@ -65,10 +65,9 @@ module Api
                      .order(Arel.sql("next_expected_on IS NULL, next_expected_on ASC"))
                      .order(confidence: :desc)
 
-        # §5a/§5c — derive each series' Topf (flow_bucket) from preloaded members. Transfers
-        # (pure liquidity moves) stay hidden by default like before; but a "savings" series
-        # is ALWAYS surfaced — even when it is a matched transfer into a saving destination —
-        # so the Sparen-Topf is never empty just because it rides on transfer_group_id.
+        # Derive each series' Topf (flow_bucket: expense / income / transfer) from preloaded
+        # members. Transfers (pure net-zero moves between own accounts) stay hidden unless
+        # ?include_transfers=true (the Transfers tab opts in).
         buckets = scope.to_a.to_h { |s| [ s, s.flow_bucket(members: s.transaction_records.to_a) ] }
         unless params[:include_transfers] == "true"
           buckets.reject! { |_s, b| b == "transfer" }

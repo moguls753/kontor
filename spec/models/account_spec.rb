@@ -66,12 +66,6 @@ RSpec.describe Account, type: :model do
     expect(Account.personal).not_to include(shared)
   end
 
-  it "knows saving destinations" do
-    expect(build(:account, role: "sparkonto").saving_destination?).to be(true)
-    expect(build(:account, role: "investment").saving_destination?).to be(true)
-    expect(build(:account, role: "giro").saving_destination?).to be(false)
-  end
-
   it "infers a role on create from the provider" do
     bc = create(:bank_connection, :trade_republic)
     account = create(:account, bank_connection: bc)

@@ -110,51 +110,37 @@ RSpec.describe RecurringDetector do
     end
   end
 
-  # §5b — Lever B (the bidirectional name-heuristic) is GONE. A series is a "transfer" iff
-  # its members are matched internal transfers (transfer_group_id, set by the TransferMatcher).
-  describe "matched-transfer series = transfer (§5b)" do
+  # A series is a "transfer" iff its members are matched internal transfers
+  # (transfer_group_id, set by the TransferMatcher). flow_bucket derives this LIVE — no
+  # sticky column. Lever B (the old bidirectional name-heuristic) is GONE.
+  describe "matched-transfer series → transfer bucket" do
     let(:counterpart) { create(:account, bank_connection: bc, role: "giro", role_locked: true) }
 
-    it "flags a series whose members are matched internal transfers, leaving merchants alone" do
+    it "buckets a matched internal transfer as transfer, leaving merchants as expense" do
       # money moved to an own account: members carry transfer_group_id (matcher already ran)
       monthly_dates(3).each.with_index do |d, i|
         charge(name: "Umbuchung", amount: -500.00, date: d,
           transfer_group_id: "g#{i}", transfer_counterpart_account: counterpart)
       end
-      # control: a genuine subscription (no transfer_group_id) stays a normal contract
+      # control: a genuine subscription (no transfer_group_id) stays a normal expense
       monthly_dates(3).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
 
       subject.detect
 
-      transfer = user.recurring_series.find_by(canonical_name: "Umbuchung")
-      expect(transfer.merchant_type).to eq("transfer")
-      expect(user.recurring_series.find_by(canonical_name: "Spotify").merchant_type).not_to eq("transfer")
+      expect(user.recurring_series.find_by(canonical_name: "Umbuchung").flow_bucket).to eq("transfer")
+      expect(user.recurring_series.find_by(canonical_name: "Spotify").flow_bucket).to eq("expense")
     end
 
-    it "does not flag a bidirectional name pair when the members are NOT matched transfers" do
-      # same counterparty out AND in, but no transfer_group_id → the old Lever B would have
-      # flagged this; the new rule must NOT (it is not a corroborated internal transfer).
+    it "keeps a bidirectional name pair as directional flows when the members are NOT matched" do
+      # same counterparty out AND in, but no transfer_group_id → NOT a corroborated internal
+      # transfer, so each leg stays a real directional flow (expense / income), not a transfer.
       monthly_dates(3).each { |d| charge(name: "Eike Rackwitz", amount: -70.00, date: d) }
       monthly_dates(3).each { |d| credit(name: "Eike Rackwitz", amount: 70.00, date: d) }
 
       subject.detect
 
-      eike = user.recurring_series.where(canonical_name: "Eike Rackwitz")
-      expect(eike.pluck(:merchant_type).uniq).to eq([ nil ]) # not flagged transfer
-    end
-
-    it "does not override a user-confirmed series" do
-      monthly_dates(3).each.with_index do |d, i|
-        charge(name: "Umbuchung", amount: -500.00, date: d,
-          transfer_group_id: "g#{i}", transfer_counterpart_account: counterpart)
-      end
-      subject.detect
-      confirmed = user.recurring_series.find_by(canonical_name: "Umbuchung")
-      confirmed.update!(user_confirmed: true, merchant_type: nil)
-
-      described_class.new(user).detect
-
-      expect(confirmed.reload.merchant_type).to be_nil # user_confirmed not clobbered
+      buckets = user.recurring_series.where(canonical_name: "Eike Rackwitz").map(&:flow_bucket).uniq.sort
+      expect(buckets).to eq(%w[expense income])
     end
   end
 
@@ -411,8 +397,8 @@ RSpec.describe RecurringDetector do
     # Regression (prod 2026-06-09): once the account IBANs are populated, own_ibans is
     # non-empty and S3 fires. A MATCHED internal transfer (transfer_group_id set by the
     # matcher) has its counterparty IBAN ∈ own_ibans — but it must STILL be detected so
-    # §5b/flow_bucket can place it in the Sparen/Transfer Topf. Only the transfer_group_id
-    # IS NULL guard keeps it alive; without it the Sparen-Topf silently empties.
+    # flow_bucket can place it in the Transfers tab. Only the transfer_group_id IS NULL
+    # guard keeps it alive; without it the matched transfers silently vanish from detection.
     it "keeps a MATCHED own-account transfer (transfer_group_id set) so flow_bucket can place it" do
       own = create(:account, bank_connection: bc, iban: "DE89370400440532013000")
       monthly_dates(4).each.with_index do |d, i|
@@ -426,7 +412,7 @@ RSpec.describe RecurringDetector do
       series = user.recurring_series.find_by(canonical_name: "Ansparen")
       expect(series).to be_present
       expect(series.occurrences_count).to eq(4)
-      expect(series.merchant_type).to eq("transfer") # §5b flags it
+      expect(series.flow_bucket).to eq("transfer")
     end
   end
 

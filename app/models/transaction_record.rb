@@ -64,7 +64,6 @@ class TransactionRecord < ApplicationRecord
   scope :in_period, ->(from, to) { where(booking_date: from..to) }
   scope :uncategorized, -> { where(category_id: nil) }
   scope :unassigned_to_series, -> { where(recurring_series_id: nil) }
-  scope :matched_transfers, -> { where.not(transfer_group_id: nil) }
 
   def internal_transfer? = transfer_group_id.present?
 end

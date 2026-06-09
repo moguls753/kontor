@@ -85,13 +85,6 @@ class RecurringDetector
         end
       end
 
-      # §5b — a series is a "transfer" iff its members are matched internal transfers
-      # (transfer_group_id, written by the TransferMatcher which ran before this, §3a).
-      # This replaces the old Lever B name-heuristic. Tagging merchant_type="transfer"
-      # keeps the index hide-filter working (hidden by default, ?include_transfers shows it);
-      # the Sparen-vs-Transfer split happens downstream via RecurringSeries#flow_bucket (§5a).
-      flag_matched_transfer_series
-
       # §5.6 step 5 — reconcile vanished active series → ended (end-grace)
       ended_count = reconcile_vanished(detected_series_ids)
     end
@@ -124,9 +117,9 @@ class RecurringDetector
     #
     # transfer_group_id IS NULL guard: a MATCHED internal transfer (paired by the
     # TransferMatcher, which ran before this in the pipeline) must NOT be dropped — it
-    # has to reach detection so §5b/flow_bucket can place it in the Sparen-Topf (savings)
-    # or the hidden Transfer-Topf. Without this guard, fixing the account IBANs (which
-    # makes own_ibans non-empty) would silently swallow every recurring savings transfer.
+    # has to reach detection so flow_bucket can place it in the Transfers tab. Without this
+    # guard, fixing the account IBANs (which makes own_ibans non-empty) would silently
+    # swallow every recurring internal transfer.
     # Only UNMATCHED own-account transfers are still dropped here (anti-clutter, as before).
     if own_ibans.any?
       scope = scope.where(
@@ -441,24 +434,6 @@ class RecurringDetector
           old_series.update!(fingerprint: new_fp, canonical_name: new_canonical)
         end
       end
-    end
-  end
-
-  # §5b — flag a series "transfer" iff its members are matched internal transfers
-  # (transfer_group_id set by the TransferMatcher, §3a). Replaces the old bidirectional
-  # name-heuristic. Operates on freshly-persisted active series; never overrides a
-  # user-confirmed one. The Sparen-vs-Transfer split is derived later (#flow_bucket).
-  def flag_matched_transfer_series
-    matched_series_ids = TransactionRecord
-                         .where(recurring_series_id: @user.recurring_series.active.ids)
-                         .matched_transfers
-                         .distinct
-                         .pluck(:recurring_series_id)
-    return if matched_series_ids.empty?
-
-    @user.recurring_series.active.where(id: matched_series_ids).find_each do |s|
-      next if s.user_confirmed || s.merchant_type == "transfer"
-      s.update!(merchant_type: "transfer")
     end
   end
 

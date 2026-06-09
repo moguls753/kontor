@@ -54,12 +54,7 @@ class RecurringSeries < ApplicationRecord
   # "Wiederkehrend" page by default (kept in the DB for a future Statistics module).
   CONSUMPTION_TYPES = %w[shopping groceries transport].freeze
 
-  # §5a — category name that flags a *savings* contribution. Counts as "Sparen" ONLY in
-  # combination with a saving-destination/shared account (the Mila-fix); the name alone
-  # never moves a series into the savings bucket.
-  SAVINGS_CATEGORY_NAME = "Sparen".freeze
-
-  FLOW_BUCKETS = %w[contract income savings transfer].freeze
+  FLOW_BUCKETS = %w[expense income transfer].freeze
 
   validates :canonical_name, :currency, :fingerprint, presence: true
   validates :direction, inclusion: { in: DIRECTIONS }
@@ -81,70 +76,31 @@ class RecurringSeries < ApplicationRecord
     Digest::SHA256.hexdigest("#{direction}|#{currency}|#{canonical_name.to_s.downcase.strip}")[0, 16]
   end
 
-  # §5a — derive which of the four recurring "Töpfe" a series belongs to, from existing
-  # signals only (no guessing). The order matters: "Sparen" wins over a plain transfer,
-  # and the category "Sparen" ALONE never qualifies — it only counts IN COMBINATION with a
-  # saving-destination/shared account (the Mila-fix). Returns one of FLOW_BUCKETS.
+  # Derive which of the three recurring "Töpfe" a series belongs to, from UNAMBIGUOUS
+  # signals only — direction and whether it moves between the user's OWN accounts. No
+  # "is this savings?" guessing (that classification was fuzzy: Scalable, Mila and own
+  # Ansparen all defied a clean rule, so it was dropped). Returns one of FLOW_BUCKETS:
+  #   • transfer — ANY member is a matched internal transfer (live transfer_group_id), i.e.
+  #     a net-zero move between own accounts. Derived from the LIVE link, never a sticky
+  #     merchant_type, so an unmatched series falls back to a real flow.
+  #   • income   — money coming in (inflow).
+  #   • expense  — money going out (everything else: contracts, subscriptions, savings plans).
   #
-  # `members` may be supplied (preloaded, with :account & :transfer_counterpart_account) to
-  # avoid an N+1 in the index; otherwise it falls back to the association.
+  # `members` may be supplied (preloaded, with :transfer_counterpart_account) to avoid an
+  # N+1 in the index; otherwise it falls back to the association.
   def flow_bucket(members: nil)
-    members ||= transaction_records.includes(:account, :transfer_counterpart_account).to_a
+    members ||= transaction_records.to_a
 
-    if savings?(members)
-      "savings"
-    elsif members.any?(&:internal_transfer?)
-      # "transfer" is derived from the members' LIVE transfer_group_id — never from a
-      # sticky merchant_type == "transfer". A series first matched as a transfer and
-      # later unmatched (legs lose their transfer_group_id) becomes a real flow again,
-      # so a sticky column must not hide it as a transfer forever.
+    if members.any?(&:internal_transfer?)
       "transfer"
     elsif direction == "inflow"
       "income"
     else
-      "contract"
+      "expense"
     end
   end
 
-  # §5a step 1 — a series is "Sparen" when ANY of:
-  #   • a member is a matched internal transfer into a saving_destination? account, OR
-  #   • merchant_type == "investment" (external broker, e.g. Scalable — best-effort/LLM), OR
-  #   • a member flows INTO a shared/saving_destination? account AND the category is "Sparen".
-  # The third leg requires BOTH the destination AND the category → Mila (external person,
-  # category "Sparen", no saving destination) stays OUT.
-  def savings?(members = nil)
-    return true if merchant_type == "investment"
-
-    members ||= transaction_records.includes(:account, :transfer_counterpart_account).to_a
-    return true if members.any? { |m| m.transfer_counterpart_account&.saving_destination? }
-
-    savings_category? && members.any? { |m| flows_into_savings_destination?(m) }
-  end
-
   private
-
-  def savings_category?
-    category&.name.to_s.casecmp?(SAVINGS_CATEGORY_NAME)
-  end
-
-  # A member lands in a saving/shared destination: either it is sent to one (counterpart),
-  # or it is a credit booked on such an account (an EXTERNAL "Ansparen" into the Gemeinschaft,
-  # e.g. Katja / Benedikt Weidner).
-  #
-  # The credit-into-shared branch is restricted to NON-matched (external) inflows. For a
-  # matched INTERNAL transfer (Eike's Privat→Gemeinschaft) both legs exist as separate
-  # series; the OUTFLOW leg already qualifies via the counterpart branch, so counting the
-  # INFLOW mirror too would double-book the same saving in the Familie scope. The mirror is
-  # identified by its own transfer_group_id (internal_transfer?), not by its counterpart —
-  # which lets the genuine external credit (no transfer_group_id) still pass.
-  def flows_into_savings_destination?(member)
-    cp = member.transfer_counterpart_account
-    return true if cp&.saving_destination? || cp&.shared?
-
-    acct = member.account
-    member.amount.to_d.positive? && !member.internal_transfer? &&
-      (acct&.saving_destination? || acct&.shared?)
-  end
 
   # #9 — auto-recompute fingerprint whenever the identifying fields are present, so a
   # controller renaming canonical_name (or a canonical upgrade) can't leave fingerprint

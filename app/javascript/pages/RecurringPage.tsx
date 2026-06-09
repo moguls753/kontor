@@ -120,18 +120,18 @@ export default function RecurringPage() {
     }
   }
 
-  // Four töpfe by *flow_bucket* (derived server-side, §5a) → one TAB each:
-  //  • Verträge & Abos = outgoing commitments (the "don't forget / fixed costs" set)
-  //  • Einnahmen       = incoming, external
-  //  • Sparen          = into a saving destination / investment / Ansparen (the savings set)
-  //  • Transfers       = pure liquidity moves between your own accounts (net-zero)
-  const contracts = series.filter(s => s.flow_bucket === 'contract')
+  // Three töpfe by *flow_bucket* (derived server-side), split on UNAMBIGUOUS signals only —
+  // direction + own-account membership. No "is this savings?" guessing (dropped: it forced
+  // awkward calls on Scalable / Mila / Ansparen). One TAB each:
+  //  • Ausgaben  = everything recurring going out (contracts, subscriptions, savings plans)
+  //  • Einnahmen = everything recurring coming in, external
+  //  • Transfers = pure liquidity moves between your OWN accounts (net-zero)
+  const expenses = series.filter(s => s.flow_bucket === 'expense')
   const income = series.filter(s => s.flow_bucket === 'income')
-  const savings = series.filter(s => s.flow_bucket === 'savings')
   const transfers = series.filter(s => s.flow_bucket === 'transfer')
 
   // One tab per non-empty topf — each carries its OWN monthly figure (no global net/saldo).
-  // sign: outflow −, inflow +, savings + (money put aside), transfers 0 (net-zero → neutral).
+  // sign: outflow −, inflow +, transfers 0 (net-zero → neutral).
   // mixed: a tab spanning >1 currency can't be summed under one symbol → show a note instead.
   const meta = (key: string, label: string, list: RecurringSeries[], sign: number, hint?: string) => ({
     key, label, list, sign, hint,
@@ -140,9 +140,8 @@ export default function RecurringPage() {
     mixed: new Set(list.map(s => s.currency)).size > 1,
   })
   const tabs = [
-    meta('contracts', t('recurring.section_contracts'), contracts, -1),
+    meta('expenses', t('recurring.section_expenses'), expenses, -1),
     meta('income', t('recurring.section_inflows'), income, 1),
-    meta('savings', t('recurring.section_sparen'), savings, 1, t('recurring.sparen_hint')),
     meta('transfers', t('recurring.section_transfers'), transfers, 0, t('recurring.transfers_hint')),
   ].filter(tab => tab.list.length > 0)
   const activeKey = tabs.some(tb => tb.key === activeTab) ? activeTab : tabs[0]?.key
@@ -213,7 +212,7 @@ export default function RecurringPage() {
                     {tab.sign === 0 ? (
                       // net-zero own-account moves: no euro subtotal (the abs sum would
                       // mislead) — neutral note wins even across mixed currencies
-                      <span className="text-ink-muted text-[13px]">{t('recurring.savings_neutral')}</span>
+                      <span className="text-ink-muted text-[13px]">{t('recurring.transfers_neutral')}</span>
                     ) : tab.mixed ? (
                       <span className="text-ink-muted text-[13px]">{t('recurring.summary_mixed')}</span>
                     ) : (

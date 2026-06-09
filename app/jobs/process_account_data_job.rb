@@ -7,8 +7,9 @@
 #   ② TransferMatcher — pair the two legs of internal transfers (writes transfer_group_id)
 #   ③ RecurringDetector — detect/refresh series
 #
-# Ordering matters: ① (category "Sparen") and ② (transfer_group_id) BOTH feed ③
-# (the Sparen/Transfer buckets), so both must commit before detection runs.
+# Ordering matters: ② writes transfer_group_id, which ③ reads to place a series in the
+# Transfers bucket (flow_bucket), so ② must commit before detection runs. ① fills in the
+# categories the detected series carry, so it runs first too.
 #
 # Fault isolation: a failure in any one step must NOT block the others — a missing
 # LLM credential or a categorizer error still lets the matcher + detector run, and
@@ -52,7 +53,7 @@ class ProcessAccountDataJob < ApplicationJob
     Rails.logger.error("ProcessAccountDataJob: transfer matching failed for user ##{user.id} (#{e.class}: #{e.message})")
   end
 
-  # ③ Detect recurring series (reads transfer_group_id + category "Sparen").
+  # ③ Detect recurring series (reads transfer_group_id for the Transfers bucket).
   def detect_recurring(user)
     RecurringDetector.new(user).detect
   rescue => e

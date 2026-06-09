@@ -61,7 +61,7 @@ export interface Transaction {
 
 export interface RecurringSeries {
   id: number
-  flow_bucket: 'contract' | 'income' | 'savings' | 'transfer'
+  flow_bucket: 'expense' | 'income' | 'transfer'
   canonical_name: string
   merchant_type: string | null
   direction: 'inflow' | 'outflow'
