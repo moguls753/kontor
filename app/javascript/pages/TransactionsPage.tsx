@@ -1,18 +1,19 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { useScope, withScope } from '../lib/scope'
 import { formatDate, formatDateLong, transactionDisplayName, maskIban } from '../lib/format'
 import type { Transaction, PaginationMeta, Account, Category } from '../lib/types'
-import type { View } from '../components/SidebarNav'
-import CategorizationModal from '../components/CategorizationModal'
+import RecalculateButton from '../components/RecalculateButton'
 import Icon from '../components/Icon'
 import { Amount, Btn, CategoryChip, CpAvatar, Empty, Eyebrow, Select } from '../components/ui'
 
 const LEDGER_COLS = 'minmax(0,1fr) 172px 152px 116px 148px 36px'
 const PER = 50
 
-export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: View) => void }) {
+export default function TransactionsPage() {
   const { t } = useTranslation()
+  const { scope } = useScope()
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [meta, setMeta] = useState<PaginationMeta>({ page: 1, per: PER, total: 0, total_pages: 0 })
   const [isLoading, setIsLoading] = useState(true)
@@ -33,20 +34,13 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
   const [accounts, setAccounts] = useState<Account[]>([])
   const [categories, setCategories] = useState<Category[]>([])
 
-  // LLM categorization
-  const [llmConfigured, setLlmConfigured] = useState(false)
-  const [showCategorizeModal, setShowCategorizeModal] = useState(false)
-
   // Expanded row
   const [expandedId, setExpandedId] = useState<number | null>(null)
 
-  // Load dropdown data + LLM status once
+  // Load dropdown data once
   useEffect(() => {
     api('/api/v1/accounts').then(r => r.ok ? r.json() : []).then(setAccounts).catch(() => {})
     api('/api/v1/categories').then(r => r.ok ? r.json() : []).then(setCategories).catch(() => {})
-    api('/api/v1/credentials').then(r => r.ok ? r.json() : null).then(data => {
-      if (data?.llm?.configured) setLlmConfigured(true)
-    }).catch(() => {})
   }, [])
 
   // Debounce search
@@ -56,7 +50,7 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
   }, [search])
 
   // Reset page on filter change
-  useEffect(() => { setPage(1) }, [debouncedSearch, accountId, categoryId, dateFrom, dateTo, uncategorized])
+  useEffect(() => { setPage(1) }, [debouncedSearch, accountId, categoryId, dateFrom, dateTo, uncategorized, scope])
 
   // Fetch transactions
   useEffect(() => {
@@ -68,6 +62,7 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
     if (dateFrom) params.set('from', dateFrom)
     if (dateTo) params.set('to', dateTo)
     if (uncategorized) params.set('uncategorized', 'true')
+    withScope(params, scope)
     params.set('page', String(page))
     params.set('per', String(PER))
 
@@ -92,9 +87,18 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
       .finally(() => setIsLoading(false))
 
     return () => controller.abort()
-  }, [debouncedSearch, accountId, categoryId, dateFrom, dateTo, uncategorized, page, retryKey])
+  }, [debouncedSearch, accountId, categoryId, dateFrom, dateTo, uncategorized, page, retryKey, scope])
 
-  const hasMultipleAccounts = accounts.length > 1
+  // In "privat" the shared (Gemeinschafts-) accounts are out of scope, so listing
+  // them in the filter would only yield empty results — drop them from the options.
+  const visibleAccounts = accounts.filter(a => scope !== 'privat' || !a.shared)
+  const hasMultipleAccounts = visibleAccounts.length > 1
+
+  // If the selected account is hidden by the active scope, clear it so the list
+  // doesn't silently show nothing.
+  useEffect(() => {
+    if (accountId && !visibleAccounts.some(a => String(a.id) === accountId)) setAccountId('')
+  }, [accountId, visibleAccounts])
 
   const humanizeTransactionCode = (code: string | null): string | null => {
     if (!code) return null
@@ -125,11 +129,7 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
     <div className="page">
       <div className="page-head">
         <h1 className="page-title">{t('transactions.title')}</h1>
-        {llmConfigured && (
-          <Btn variant="primary" icon="scan" onClick={() => setShowCategorizeModal(true)}>
-            {t('transactions.categorize')}
-          </Btn>
-        )}
+        <RecalculateButton onStarted={() => setRetryKey(k => k + 1)} />
       </div>
 
       {/* Filter bar */}
@@ -145,7 +145,7 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
         {hasMultipleAccounts && (
           <Select value={accountId} onChange={e => setAccountId(e.target.value)} ariaLabel={t('transactions.filter_account')}>
             <option value="">{t('transactions.filter_account')}</option>
-            {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            {visibleAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </Select>
         )}
         <input type="date" className="field w-auto min-w-[150px]" value={dateFrom} onChange={e => setDateFrom(e.target.value)} title={t('transactions.date_from')} />
@@ -213,12 +213,6 @@ export default function TransactionsPage({ onNavigate }: { onNavigate?: (view: V
         )}
       </div>
 
-      {showCategorizeModal && (
-        <CategorizationModal onNavigate={onNavigate} onClose={(didCategorize) => {
-          setShowCategorizeModal(false)
-          if (didCategorize) setRetryKey(k => k + 1)
-        }} />
-      )}
     </div>
   )
 }

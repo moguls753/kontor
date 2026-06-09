@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { useScope, withScope } from '../lib/scope'
 import { formatDate, formatAmount } from '../lib/format'
 import type { RecurringSeries, Transaction, Category } from '../lib/types'
-import RecurringScanModal from '../components/RecurringScanModal'
+import RecalculateButton from '../components/RecalculateButton'
 import Icon from '../components/Icon'
 import { Amount, Btn, CategoryChip, CpAvatar, Empty, Eyebrow, Select } from '../components/ui'
 
@@ -61,12 +62,12 @@ const groupTransfers = (list: RecurringSeries[]): TransferGroup[] => {
 
 export default function RecurringPage() {
   const { t } = useTranslation()
+  const { scope } = useScope()
   const [series, setSeries] = useState<RecurringSeries[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
-  const [showScan, setShowScan] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<string | null>(null)
 
@@ -80,7 +81,8 @@ export default function RecurringPage() {
     const controller = new AbortController()
     setIsLoading(true)
     setError(false)
-    fetch('/api/v1/recurring?include_transfers=true', {
+    const params = withScope(new URLSearchParams({ include_transfers: 'true' }), scope)
+    fetch(`/api/v1/recurring?${params}`, {
       headers: { 'Accept': 'application/json' },
       signal: controller.signal,
     })
@@ -98,7 +100,7 @@ export default function RecurringPage() {
       .finally(() => setIsLoading(false))
 
     return () => controller.abort()
-  }, [retryKey])
+  }, [retryKey, scope])
 
   const refetch = () => setRetryKey(k => k + 1)
 
@@ -118,17 +120,18 @@ export default function RecurringPage() {
     }
   }
 
-  // Three töpfe by *type*, not just direction → one TAB each:
-  //  • Verträge & Abos    = outgoing commitments (the "don't forget / fixed costs" set)
-  //  • Einnahmen          = incoming, external
-  //  • Sparen & Transfers = money between your own accounts (transfer-tagged)
-  const isTransfer = (s: RecurringSeries) => s.merchant_type === 'transfer'
-  const contracts = series.filter(s => !isTransfer(s) && s.direction === 'outflow')
-  const income = series.filter(s => !isTransfer(s) && s.direction === 'inflow')
-  const transfers = series.filter(isTransfer)
+  // Four töpfe by *flow_bucket* (derived server-side, §5a) → one TAB each:
+  //  • Verträge & Abos = outgoing commitments (the "don't forget / fixed costs" set)
+  //  • Einnahmen       = incoming, external
+  //  • Sparen          = into a saving destination / investment / Ansparen (the savings set)
+  //  • Transfers       = pure liquidity moves between your own accounts (net-zero)
+  const contracts = series.filter(s => s.flow_bucket === 'contract')
+  const income = series.filter(s => s.flow_bucket === 'income')
+  const savings = series.filter(s => s.flow_bucket === 'savings')
+  const transfers = series.filter(s => s.flow_bucket === 'transfer')
 
   // One tab per non-empty topf — each carries its OWN monthly figure (no global net/saldo).
-  // sign: outflow −, inflow +, transfers 0 (net-zero own-account moves → neutral, no euro).
+  // sign: outflow −, inflow +, savings + (money put aside), transfers 0 (net-zero → neutral).
   // mixed: a tab spanning >1 currency can't be summed under one symbol → show a note instead.
   const meta = (key: string, label: string, list: RecurringSeries[], sign: number, hint?: string) => ({
     key, label, list, sign, hint,
@@ -139,11 +142,12 @@ export default function RecurringPage() {
   const tabs = [
     meta('contracts', t('recurring.section_contracts'), contracts, -1),
     meta('income', t('recurring.section_inflows'), income, 1),
-    meta('transfers', t('recurring.section_savings'), transfers, 0, t('recurring.savings_hint')),
+    meta('savings', t('recurring.section_sparen'), savings, 1, t('recurring.sparen_hint')),
+    meta('transfers', t('recurring.section_transfers'), transfers, 0, t('recurring.transfers_hint')),
   ].filter(tab => tab.list.length > 0)
   const activeKey = tabs.some(tb => tb.key === activeTab) ? activeTab : tabs[0]?.key
   const active = tabs.find(tb => tb.key === activeKey)
-  const colsClass = ['', 'sm:grid-cols-1', 'sm:grid-cols-2', 'sm:grid-cols-3'][tabs.length] ?? 'sm:grid-cols-3'
+  const colsClass = ['', 'sm:grid-cols-1', 'sm:grid-cols-2', 'sm:grid-cols-3', 'sm:grid-cols-4'][tabs.length] ?? 'sm:grid-cols-4'
 
   // WAI-ARIA tabs: Arrow/Home/End move selection and focus the new tab.
   const onTabKey = (e: { key: string; preventDefault: () => void }) => {
@@ -165,9 +169,7 @@ export default function RecurringPage() {
     <div className="page">
       <div className="page-head">
         <h1 className="page-title">{t('recurring.title')}</h1>
-        <Btn variant="primary" icon="scan" onClick={() => setShowScan(true)}>
-          {t('recurring.scan')}
-        </Btn>
+        <RecalculateButton onStarted={refetch} />
       </div>
 
       {error ? (
@@ -184,7 +186,7 @@ export default function RecurringPage() {
       ) : series.length === 0 ? (
         <div className="panel">
           <Empty icon="recurring" title={t('recurring.empty_title')} body={t('recurring.empty_description')}>
-            <Btn variant="primary" icon="scan" onClick={() => setShowScan(true)}>{t('recurring.scan')}</Btn>
+            <RecalculateButton onStarted={refetch} />
           </Empty>
         </div>
       ) : (
@@ -208,11 +210,12 @@ export default function RecurringPage() {
                     </span>
                   </div>
                   <div className="mt-2 flex items-baseline gap-1.5 flex-wrap min-h-[1.7em]">
-                    {tab.mixed ? (
-                      <span className="text-ink-muted text-[13px]">{t('recurring.summary_mixed')}</span>
-                    ) : tab.sign === 0 ? (
-                      // net-zero own-account moves: no euro subtotal (the abs sum would mislead)
+                    {tab.sign === 0 ? (
+                      // net-zero own-account moves: no euro subtotal (the abs sum would
+                      // mislead) — neutral note wins even across mixed currencies
                       <span className="text-ink-muted text-[13px]">{t('recurring.savings_neutral')}</span>
+                    ) : tab.mixed ? (
+                      <span className="text-ink-muted text-[13px]">{t('recurring.summary_mixed')}</span>
                     ) : (
                       <>
                         <Amount value={tab.sign * tab.monthly} currency={tab.currency} className="text-[19px]" />
@@ -252,13 +255,6 @@ export default function RecurringPage() {
             </div>
           )}
         </>
-      )}
-
-      {showScan && (
-        <RecurringScanModal onClose={(didDetect) => {
-          setShowScan(false)
-          if (didDetect) refetch()
-        }} />
       )}
     </div>
   )
@@ -301,10 +297,7 @@ function SeriesRow({ s, categories, open, onToggle, onConfirm, onDismiss, onCate
             <div className="flex items-center gap-2 flex-wrap mt-0.5">
               <span className="chip">{cadenceLabel}</span>
               <CategoryChip name={s.category?.name ?? null} uncategorisedLabel={t('recurring.no_category')} />
-              <span className="flex items-center gap-1.5 text-ink-faint text-[11.5px]" title={confidenceLabel}>
-                <ConfidenceDot band={s.confidence_band} />
-                {confidenceLabel}
-              </span>
+              {/* confidence is NOT shown in the collapsed row (kept light); see expand */}
             </div>
           </div>
         </div>
@@ -339,6 +332,10 @@ function SeriesRow({ s, categories, open, onToggle, onConfirm, onDismiss, onCate
           <div className="detail-field">
             <Eyebrow>{t('recurring.occurrences', { count: s.occurrences_count })}</Eyebrow>
             <div className="val mono">{s.occurrences_count}</div>
+          </div>
+          <div className="detail-field">
+            <Eyebrow>{t('recurring.confidence')}</Eyebrow>
+            <div className="val flex items-center gap-1.5"><ConfidenceDot band={s.confidence_band} />{confidenceLabel}</div>
           </div>
           {s.next_expected_on && (
             <div className="detail-field">
@@ -404,10 +401,7 @@ function TransferRow({ g, open, onToggle, onConfirm, onDismiss }: {
             </div>
             <div className="flex items-center gap-2 flex-wrap mt-0.5">
               <span className="chip">{cadenceLabel}</span>
-              <span className="flex items-center gap-1.5 text-ink-faint text-[11.5px]" title={confidenceLabel}>
-                <ConfidenceDot band={g.confidence_band} />
-                {confidenceLabel}
-              </span>
+              {/* confidence shown on expand, not in the collapsed row */}
             </div>
           </div>
         </div>
@@ -431,6 +425,10 @@ function TransferRow({ g, open, onToggle, onConfirm, onDismiss }: {
               <div className="val"><Amount value={leg.expected_amount} currency={leg.currency} /></div>
             </div>
           ))}
+          <div className="detail-field">
+            <Eyebrow>{t('recurring.confidence')}</Eyebrow>
+            <div className="val flex items-center gap-1.5"><ConfidenceDot band={g.confidence_band} />{confidenceLabel}</div>
+          </div>
           <div className="detail-field md:col-span-2 flex-row items-center gap-2 mt-1">
             {!g.user_confirmed && (
               <Btn variant="secondary" size="sm" icon="check" onClick={onConfirm}>{t('recurring.confirm')}</Btn>

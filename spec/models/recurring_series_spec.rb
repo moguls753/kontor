@@ -90,4 +90,82 @@ RSpec.describe RecurringSeries, type: :model do
     series.destroy
     expect(tx.reload.recurring_series_id).to be_nil
   end
+
+  # §5a — Sparen-Klassifizierung. Category "Sparen" alone is NOT enough (Mila-fix); it only
+  # counts IN COMBINATION with a saving destination / shared account.
+  describe "#flow_bucket / #savings?" do
+    let(:bc) { create(:bank_connection) }
+    let(:user) { bc.user }
+    let(:giro)  { create(:account, bank_connection: bc, role: "giro", role_locked: true) }
+    let(:tr)    { create(:account, bank_connection: bc, role: "investment", role_locked: true) }
+    let(:shared) { create(:account, bank_connection: bc, shared: true, role_locked: true) }
+    let(:sparen_cat) { create(:category, user: user, name: "Sparen") }
+
+    it "classifies a matched transfer into an investment account as savings" do
+      series = create(:recurring_series, user: user, direction: "outflow", canonical_name: "TR")
+      create(:transaction_record, account: giro, recurring_series: series, amount: -200,
+        transfer_group_id: "g1", transfer_counterpart_account: tr)
+
+      expect(series.savings?).to be(true)
+      expect(series.flow_bucket).to eq("savings")
+    end
+
+    it "classifies an external investment-merchant series as savings" do
+      series = create(:recurring_series, user: user, direction: "outflow",
+        merchant_type: "investment", canonical_name: "Scalable Capital")
+      create(:transaction_record, account: giro, recurring_series: series, amount: -150)
+
+      expect(series.flow_bucket).to eq("savings")
+    end
+
+    it "classifies category-Sparen into a shared account as savings" do
+      series = create(:recurring_series, user: user, direction: "inflow",
+        canonical_name: "Ansparen", category: sparen_cat)
+      create(:transaction_record, account: shared, recurring_series: series, amount: 300)
+
+      expect(series.flow_bucket).to eq("savings")
+    end
+
+    it "keeps Mila (category Sparen, external person, NO saving destination) out of savings" do
+      series = create(:recurring_series, user: user, direction: "outflow",
+        canonical_name: "Mila", category: sparen_cat)
+      create(:transaction_record, account: giro, recurring_series: series, amount: -50,
+        creditor_name: "Mila Mustermann")
+
+      expect(series.savings?).to be(false)
+      expect(series.flow_bucket).to eq("contract")
+    end
+
+    it "classifies a plain Giro↔Giro matched transfer as a transfer (not savings)" do
+      other_giro = create(:account, bank_connection: bc, role: "giro", role_locked: true)
+      series = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Umbuchung")
+      create(:transaction_record, account: giro, recurring_series: series, amount: -500,
+        transfer_group_id: "g2", transfer_counterpart_account: other_giro)
+
+      expect(series.savings?).to be(false)
+      expect(series.flow_bucket).to eq("transfer")
+    end
+
+    # §5 fix — "transfer" is derived from the members' LIVE transfer_group_id, not a sticky
+    # merchant_type == "transfer". A series whose legs are no longer matched must NOT stay
+    # hidden as a transfer forever.
+    it "does NOT treat a sticky merchant_type=transfer as a transfer once its legs are unmatched" do
+      series = create(:recurring_series, user: user, direction: "outflow",
+        merchant_type: "transfer", canonical_name: "Was a transfer")
+      create(:transaction_record, account: giro, recurring_series: series, amount: -42,
+        transfer_group_id: nil, transfer_counterpart_account: nil)
+
+      expect(series.flow_bucket).to eq("contract")
+    end
+
+    it "classifies an external inflow as income and an external outflow as a contract" do
+      inflow = create(:recurring_series, user: user, direction: "inflow", canonical_name: "Gehalt")
+      create(:transaction_record, account: giro, recurring_series: inflow, amount: 2500)
+      expect(inflow.flow_bucket).to eq("income")
+
+      outflow = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Spotify")
+      create(:transaction_record, account: giro, recurring_series: outflow, amount: -12.99)
+      expect(outflow.flow_bucket).to eq("contract")
+    end
+  end
 end

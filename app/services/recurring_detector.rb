@@ -85,10 +85,12 @@ class RecurringDetector
         end
       end
 
-      # Lever B — a counterparty that recurs as BOTH an inflow AND an outflow is an
-      # own-/family transfer (money shuffled back and forth), not a contract → mark it
-      # "transfer" so the index hides it by default (reversible via ?include_transfers).
-      flag_bidirectional_transfers
+      # §5b — a series is a "transfer" iff its members are matched internal transfers
+      # (transfer_group_id, written by the TransferMatcher which ran before this, §3a).
+      # This replaces the old Lever B name-heuristic. Tagging merchant_type="transfer"
+      # keeps the index hide-filter working (hidden by default, ?include_transfers shows it);
+      # the Sparen-vs-Transfer split happens downstream via RecurringSeries#flow_bucket (§5a).
+      flag_matched_transfer_series
 
       # §5.6 step 5 — reconcile vanished active series → ended (end-grace)
       ended_count = reconcile_vanished(detected_series_ids)
@@ -263,11 +265,13 @@ class RecurringDetector
 
   # ── §5.4 confidence ───────────────────────────────────────────────────────────
   def compute_confidence(occurrences:, cv:, amount_variable:, iban_consistent:)
-    score  = clamp(occurrences / 24.0, 0, 1) * 0.35   # volume (divisor 24)
-    score += (1 - clamp(cv, 0, 1)) * 0.30             # regularity
-    score += amount_variable ? 0.08 : 0.20            # amount stability
-    score += iban_consistent ? 0.10 : 0.0             # counterparty IBAN consistency
-    score += 0.0                                      # glaeubiger_id (phase 2, always 0 in v1)
+    # Recalibrated (Divisor 8): the real signals (regularity, fixed amount, same IBAN) carry the
+    # score so a regular fixed-amount IBAN-consistent series reaches "high" (>=0.66) at ~4 occurrences,
+    # instead of needing ~8 months of history. Volume tops out by ~8 occurrences.
+    score  = clamp(occurrences / 8.0, 0, 1) * 0.20    # volume
+    score += (1 - clamp(cv, 0, 1)) * 0.35             # regularity — the strongest real signal
+    score += amount_variable ? 0.10 : 0.25            # amount stability
+    score += iban_consistent ? 0.20 : 0.0             # same counterparty IBAN
     clamp(score, 0, 1).round(3)
   end
 
@@ -432,19 +436,21 @@ class RecurringDetector
     end
   end
 
-  # ── §5.6 step 5 — reconcile vanished active series → ended (end-grace) ────────
-  # #3 — key on SERIES ID, not fingerprint (fingerprints are non-unique; a cancelled
-  # sibling under a shared fingerprint must still be allowed to end).
-  # Lever B — flag canonical names that recur in BOTH directions as "transfer".
-  # Operates on freshly-persisted active series; never overrides a user-confirmed one.
-  def flag_bidirectional_transfers
-    @user.recurring_series.active.group_by(&:canonical_name).each_value do |group|
-      next if group.map(&:direction).uniq.size < 2 # needs both inflow AND outflow
+  # §5b — flag a series "transfer" iff its members are matched internal transfers
+  # (transfer_group_id set by the TransferMatcher, §3a). Replaces the old bidirectional
+  # name-heuristic. Operates on freshly-persisted active series; never overrides a
+  # user-confirmed one. The Sparen-vs-Transfer split is derived later (#flow_bucket).
+  def flag_matched_transfer_series
+    matched_series_ids = TransactionRecord
+                         .where(recurring_series_id: @user.recurring_series.active.ids)
+                         .matched_transfers
+                         .distinct
+                         .pluck(:recurring_series_id)
+    return if matched_series_ids.empty?
 
-      group.each do |s|
-        next if s.user_confirmed || s.merchant_type == "transfer"
-        s.update!(merchant_type: "transfer")
-      end
+    @user.recurring_series.active.where(id: matched_series_ids).find_each do |s|
+      next if s.user_confirmed || s.merchant_type == "transfer"
+      s.update!(merchant_type: "transfer")
     end
   end
 

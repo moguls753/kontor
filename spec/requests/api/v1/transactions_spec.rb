@@ -15,6 +15,61 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     expect(body["meta"]["total"]).to eq(3)
   end
 
+  it "filters out shared-account transactions in ?scope=privat" do
+    personal_acct = create(:account, bank_connection: bc, shared: false)
+    shared_acct   = create(:account, bank_connection: bc, shared: true)
+    create(:transaction_record, account: personal_acct, remittance: "Privat tx")
+    create(:transaction_record, account: shared_acct, remittance: "Gemeinschaft tx")
+
+    get api_v1_transactions_path, params: { scope: "privat" }, as: :json
+    remittances = response.parsed_body["transactions"].map { |t| t["remittance"] }
+    expect(remittances).to include("Privat tx")
+    expect(remittances).not_to include("Gemeinschaft tx")
+  end
+
+  it "shows a cross-scope transfer leg as a flow in privat but hides it in familie" do
+    personal_acct = create(:account, bank_connection: bc, shared: false)
+    shared_acct   = create(:account, bank_connection: bc, shared: true)
+    group = SecureRandom.uuid
+    create(:transaction_record, account: personal_acct, amount: -70, remittance: "Ansparen",
+                                transfer_group_id: group, transfer_counterpart_account: shared_acct)
+    create(:transaction_record, account: shared_acct, amount: 70, remittance: "Ansparen in",
+                                transfer_group_id: group, transfer_counterpart_account: personal_acct)
+
+    # Familie: both legs in scope → internal transfer → both excluded.
+    get api_v1_transactions_path, params: { scope: "familie" }, as: :json
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).not_to include("Ansparen", "Ansparen in")
+
+    # Privat: shared account out of scope → the personal leg becomes a real flow.
+    get api_v1_transactions_path, params: { scope: "privat" }, as: :json
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Ansparen"])
+  end
+
+  # §4a fix — an orphaned transfer leg (transfer_group_id still set, but the counterpart
+  # account was deleted ⇒ transfer_counterpart_account_id NULL) is a real flow, not a
+  # net-zero internal transfer, and must stay visible. The exclusion keys on the
+  # counterpart id, never on transfer_group_id (NULL NOT IN → NULL → would silently drop it).
+  it "keeps an orphaned transfer leg (counterpart account deleted) visible as a real flow" do
+    create(:transaction_record, account: account, amount: -90, remittance: "Orphaned leg",
+                                transfer_group_id: SecureRandom.uuid, transfer_counterpart_account: nil)
+
+    get api_v1_transactions_path, params: { scope: "familie" }, as: :json
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to include("Orphaned leg")
+  end
+
+  it "still excludes a genuinely-matched in-scope internal transfer (both legs visible)" do
+    other_acct = create(:account, bank_connection: bc)
+    group = SecureRandom.uuid
+    create(:transaction_record, account: account, amount: -90, remittance: "Matched out",
+                                transfer_group_id: group, transfer_counterpart_account: other_acct)
+    create(:transaction_record, account: other_acct, amount: 90, remittance: "Matched in",
+                                transfer_group_id: group, transfer_counterpart_account: account)
+
+    get api_v1_transactions_path, params: { scope: "familie" }, as: :json
+    remittances = response.parsed_body["transactions"].map { |t| t["remittance"] }
+    expect(remittances).not_to include("Matched out", "Matched in")
+  end
+
   it "filters by date range and account" do
     create(:transaction_record, account: account, booking_date: "2026-01-15")
     create(:transaction_record, account: account, booking_date: "2025-12-01")

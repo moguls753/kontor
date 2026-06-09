@@ -13,11 +13,24 @@ module Api
 
       def update
         account = Current.user.accounts.find(params[:id])
-        account.update!(name: params[:name])
+        attrs = account_params.to_h.symbolize_keys
+        # If the user set the role or shared flag by hand, lock it so the
+        # AccountRoleInferrer (§2a) never overrides their choice.
+        classification_changed = attrs.key?(:role) || attrs.key?(:shared)
+        attrs[:role_locked] = true if classification_changed
+        account.update!(attrs)
+        # role/shared are inputs to transfer matching (saving_destination?) and the
+        # scope filter, so re-run the post-sync pipeline when they change (debounced
+        # per user). A pure rename doesn't affect classification → skip it.
+        ProcessAccountDataJob.perform_later(Current.user.id) if classification_changed
         render json: account_json(account)
       end
 
       private
+
+      def account_params
+        params.permit(:name, :role, :shared)
+      end
 
       def account_json(account)
         {
@@ -25,6 +38,8 @@ module Api
           account_uid: account.account_uid,
           iban: account.iban,
           name: account.display_name,
+          role: account.role,
+          shared: account.shared,
           currency: account.currency,
           balance_amount: account.balance_amount,
           balance_type: account.balance_type,

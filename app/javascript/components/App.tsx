@@ -4,6 +4,7 @@ import LoginPage from './LoginPage'
 import SignupPage from './SignupPage'
 import AuthenticatedLayout from './AuthenticatedLayout'
 import { api } from '../lib/api'
+import { ScopeProvider } from '../lib/scope'
 
 type User = { id: number; email_address: string } | null
 
@@ -50,5 +51,9 @@ export default function App() {
       : <SignupPage onSignupSuccess={setUser} onSwitchToLogin={() => setAuthView('login')} />
   }
 
-  return <AuthenticatedLayout user={user} onLogout={() => setUser(null)} />
+  return (
+    <ScopeProvider>
+      <AuthenticatedLayout user={user} onLogout={() => setUser(null)} />
+    </ScopeProvider>
+  )
 }

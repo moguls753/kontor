@@ -3,6 +3,10 @@ export interface Category {
   name: string
 }
 
+export type AccountRole = 'giro' | 'sparkonto' | 'investment' | 'kreditkarte' | 'zahlung' | 'sonstiges'
+
+export const ACCOUNT_ROLES: AccountRole[] = ['giro', 'sparkonto', 'investment', 'kreditkarte', 'zahlung', 'sonstiges']
+
 export interface DashboardTransaction {
   id: number
   amount: string
@@ -57,6 +61,7 @@ export interface Transaction {
 
 export interface RecurringSeries {
   id: number
+  flow_bucket: 'contract' | 'income' | 'savings' | 'transfer'
   canonical_name: string
   merchant_type: string | null
   direction: 'inflow' | 'outflow'
@@ -101,6 +106,8 @@ export interface Account {
   account_uid: string
   iban: string | null
   name: string
+  role: AccountRole | null
+  shared: boolean
   currency: string
   balance_amount: string | null
   balance_type: string | null
@@ -113,6 +120,8 @@ export interface BankConnectionAccount {
   id: number
   iban: string | null
   name: string
+  role: AccountRole | null
+  shared: boolean
   currency: string
   balance_amount: string | null
   last_synced_at: string | null

@@ -1,13 +1,20 @@
 module Api
   module V1
     class DashboardsController < ApplicationController
+      include ScopedAccounts
+
       def show
-        accounts = Current.user.accounts
-        transactions = Current.user.transaction_records.in_period(Date.current.beginning_of_month, Date.current)
+        ids = scoped_account_ids
+        accounts = Current.user.accounts.where(id: ids)
+        period = Current.user.transaction_records.in_period(Date.current.beginning_of_month, Date.current)
+        # §4a: drop matched internal transfers whose counterpart is also in scope.
+        transactions = in_scope(period, ids)
 
         total_balance = accounts.sum(:balance_amount)
-        income = transactions.credits.sum(:amount)
-        expenses = transactions.debits.sum(:amount)
+        # Coerce to BigDecimal: a `.none` relation (empty scope) sums to Integer 0,
+        # which would break the decimal serialization contract ("0.0").
+        income = transactions.credits.sum(:amount).to_d
+        expenses = transactions.debits.sum(:amount).to_d
         net = income + expenses
         previous_balance = total_balance - net
         balance_change_percent = if previous_balance.zero?
@@ -25,7 +32,7 @@ module Api
           transaction_count: transactions.count,
           uncategorized_count: transactions.uncategorized.count,
           accounts: accounts_summary(accounts),
-          recent_transactions: recent_transactions
+          recent_transactions: recent_transactions(ids)
         }
       end
 
@@ -44,8 +51,12 @@ module Api
         end
       end
 
-      def recent_transactions
-        Current.user.transaction_records
+      def recent_transactions(ids)
+        # §4c: recent feed is scoped by account ONLY — it must NOT apply the
+        # internal-transfer exclusion, or money moved to an in-scope account
+        # (e.g. savings) would vanish from the most-recent activity list.
+        scope = ids.empty? ? Current.user.transaction_records.none : Current.user.transaction_records.where(account_id: ids)
+        scope
           .includes(:account, :category)
           .order(booking_date: :desc, id: :desc)
           .limit(5)

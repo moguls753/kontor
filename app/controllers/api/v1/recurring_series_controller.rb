@@ -1,8 +1,42 @@
 module Api
   module V1
     class RecurringSeriesController < ApplicationController
+      include ScopedAccounts
+
       def index
-        scope = Current.user.recurring_series.includes(:category)
+        scope = Current.user.recurring_series
+                       .includes(:category, transaction_records: %i[account transfer_counterpart_account])
+
+        # §4b: scope the series to the active lens. "familie" (all accounts) never
+        # narrows, so only filter in "privat": drop any series whose members are ALL
+        # out of scope (e.g. booked only on a shared/Gemeinschafts-account). A series
+        # with no members is left untouched (nothing to place out of scope). The
+        # §4a in_scope rule means a cross-scope transfer leg still counts as in-scope
+        # here, so a mixed transfer series stays visible in "privat".
+        if params[:scope] == "privat"
+          ids = scoped_account_ids
+          if ids.empty?
+            scope = scope.none
+          else
+            # ids of series that have ≥1 member booked on an in-scope account. Keyed
+            # on account membership ONLY (not the §4a in_scope exclusion): a personal→
+            # personal savings transfer has BOTH legs in scope, so the §4a net-zero
+            # exclusion would leave it zero in-scope members and wrongly hide the whole
+            # series in "privat". A series booked on an in-scope account stays visible.
+            in_scope_series = TransactionRecord.where(account_id: ids)
+                                .where.not(recurring_series_id: nil)
+                                .select(:recurring_series_id)
+            # ids of series that have ANY member at all.
+            any_member = TransactionRecord.where.not(recurring_series_id: nil)
+                                          .select(:recurring_series_id)
+            # keep: series with no members OR with ≥1 in-scope member. Subqueries (not
+            # plucked arrays) so empty results never produce invalid `IN ()` SQL.
+            scope = scope.where(
+              "recurring_series.id IN (#{in_scope_series.to_sql}) " \
+              "OR recurring_series.id NOT IN (#{any_member.to_sql})"
+            )
+          end
+        end
 
         # default: show only ACTIVE series. "ended" (the pattern stopped) and "dismissed"
         # are hidden from this page — it's a live overview of running contracts, not a
@@ -13,13 +47,14 @@ module Api
         scope = scope.where(direction: params[:direction]) if params[:direction].present?
 
         # Consumption-type merchants (supermarkets/shops/transport) are NOT contracts and
-        # are always hidden from this page. Transfers are hidden too unless explicitly
-        # requested. B1′ — NULL-safe predicate: a plain `merchant_type NOT IN (...)` drops
-        # NULL rows in SQLite (NULL NOT IN → NULL → excluded), which would hide nearly every
-        # series. NULL is the common case and MUST stay visible, so guard it explicitly.
-        hidden_types = RecurringSeries::CONSUMPTION_TYPES.dup
-        hidden_types << "transfer" unless params[:include_transfers] == "true"
-        scope = scope.where("merchant_type IS NULL OR merchant_type NOT IN (?)", hidden_types)
+        # are always hidden from this page. B1′ — NULL-safe predicate: a plain
+        # `merchant_type NOT IN (...)` drops NULL rows in SQLite (NULL NOT IN → NULL →
+        # excluded), which would hide nearly every series. NULL is the common case and MUST
+        # stay visible, so guard it explicitly.
+        scope = scope.where(
+          "merchant_type IS NULL OR merchant_type NOT IN (?)",
+          RecurringSeries::CONSUMPTION_TYPES
+        )
 
         # NOTE: irregular series are NOT filtered here on purpose — that's the detector's
         # job. It drops irregular at detection (Lever A) and ends any old irregular leftover
@@ -30,9 +65,18 @@ module Api
                      .order(Arel.sql("next_expected_on IS NULL, next_expected_on ASC"))
                      .order(confidence: :desc)
 
-        series = scope.to_a
+        # §5a/§5c — derive each series' Topf (flow_bucket) from preloaded members. Transfers
+        # (pure liquidity moves) stay hidden by default like before; but a "savings" series
+        # is ALWAYS surfaced — even when it is a matched transfer into a saving destination —
+        # so the Sparen-Topf is never empty just because it rides on transfer_group_id.
+        buckets = scope.to_a.to_h { |s| [ s, s.flow_bucket(members: s.transaction_records.to_a) ] }
+        unless params[:include_transfers] == "true"
+          buckets.reject! { |_s, b| b == "transfer" }
+        end
+        series = buckets.keys
+
         render json: {
-          series: series.map { |s| recurring_series_json(s) },
+          series: series.map { |s| recurring_series_json(s, flow_bucket: buckets[s]) },
           meta: {
             active: series.count { |s| s.status == "active" },
             total: series.size
@@ -50,8 +94,11 @@ module Api
       end
 
       def detect
-        results = DetectRecurringSeriesJob.perform_now(Current.user.id)
-        render json: results
+        # Run the full post-sync pipeline ASYNC (categorize → match transfers →
+        # detect recurring) instead of blocking the request inline (~13s). Debounced
+        # per user via the job's Solid Queue concurrency control.
+        ProcessAccountDataJob.perform_later(Current.user.id)
+        render json: { queued: true }
       end
 
       def update
@@ -84,9 +131,10 @@ module Api
         permitted
       end
 
-      def recurring_series_json(s)
+      def recurring_series_json(s, flow_bucket: nil)
         {
           id: s.id,
+          flow_bucket: flow_bucket || s.flow_bucket,
           canonical_name: s.canonical_name,
           merchant_type: s.merchant_type,
           direction: s.direction,

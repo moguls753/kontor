@@ -12,10 +12,18 @@ class SyncScrapedBalancesJob < ApplicationJob
   MAX_JITTER = 1.hour
 
   def perform
+    enqueued_user_ids = Set.new
+
     BankConnection.active.where(provider: %w[trade_republic easybank]).find_each do |bc|
       next if bc.last_synced_at && bc.last_synced_at > RECENCY_WINDOW.ago
 
       SyncAccountsJob.set(wait: rand(0..MAX_JITTER.to_i).seconds).perform_later(bc.id)
+      enqueued_user_ids << bc.user_id
     end
+
+    # Post-sync pipeline (§3a): categorize → match transfers → detect recurring.
+    # One run per user whose scraped connection was (re)synced, debounced per user
+    # via the job's Solid Queue concurrency control (on_conflict: :discard).
+    enqueued_user_ids.each { |user_id| ProcessAccountDataJob.perform_later(user_id) }
   end
 end

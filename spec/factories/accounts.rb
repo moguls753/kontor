@@ -15,6 +15,9 @@
 #  identification_hash :string
 #  last_synced_at      :datetime
 #  name                :string
+#  role                :string
+#  role_locked         :boolean          default(FALSE), not null
+#  shared              :boolean          default(FALSE), not null
 #  created_at          :datetime         not null
 #  updated_at          :datetime         not null
 #  bank_connection_id  :integer          not null

@@ -2,9 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { formatRelativeTime, maskIban } from '../lib/format'
-import type { BankConnection, BankConnectionAccount } from '../lib/types'
+import type { AccountRole, BankConnection, BankConnectionAccount } from '../lib/types'
+import { ACCOUNT_ROLES } from '../lib/types'
 import type { View } from '../components/SidebarNav'
-import { Amount, Btn, StatusBadge, Empty, initials } from '../components/ui'
+import { Amount, Btn, StatusBadge, Empty, Select, initials } from '../components/ui'
+import { useScope } from '../lib/scope'
 import Icon from '../components/Icon'
 import TradeRepublicPairingModal from '../components/TradeRepublicPairingModal'
 import EasybankPairingModal from '../components/EasybankPairingModal'
@@ -15,6 +17,7 @@ interface AccountsPageProps {
 
 export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   const { t } = useTranslation()
+  const { refreshHasShared } = useScope()
   const [connections, setConnections] = useState<BankConnection[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -195,6 +198,24 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     }
   }
 
+  // Optimistically patch a single account's role/shared, then PATCH the server.
+  // On failure we re-fetch to undo the optimistic update.
+  const updateAccount = async (acctId: number, attrs: { role?: AccountRole; shared?: boolean }) => {
+    setConnections(prev => prev.map(bc => ({
+      ...bc,
+      accounts: bc.accounts.map(a => (a.id === acctId ? { ...a, ...attrs } : a)),
+    })))
+    try {
+      const r = await api(`/api/v1/accounts/${acctId}`, { method: 'PATCH', body: attrs })
+      if (!r.ok) fetchConnections()
+      // Toggling the shared flag can flip whether the Familie/Privat switch is
+      // meaningful — re-detect so the scope switch appears/hides immediately.
+      else if ('shared' in attrs) refreshHasShared()
+    } catch {
+      fetchConnections()
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="page">
@@ -251,6 +272,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
               startRename={startRename}
               saveRename={saveRename}
               cancelRename={cancelRename}
+              updateAccount={updateAccount}
             />
           ))}
         </div>
@@ -292,9 +314,10 @@ interface ConnectionCardProps {
   startRename: (id: number, name: string) => void
   saveRename: () => void
   cancelRename: () => void
+  updateAccount: (id: number, attrs: { role?: AccountRole; shared?: boolean }) => void
 }
 
-function ConnectionCard({ bc, t, syncing, notice, onSync, onReconnect, onDelete, editingId, editValue, editRef, setEditValue, startRename, saveRename, cancelRename }: ConnectionCardProps) {
+function ConnectionCard({ bc, t, syncing, notice, onSync, onReconnect, onDelete, editingId, editValue, editRef, setEditValue, startRename, saveRename, cancelRename, updateAccount }: ConnectionCardProps) {
   const instName = bc.institution_name || bc.institution_id
   const count = bc.accounts.length
 
@@ -366,6 +389,7 @@ function ConnectionCard({ bc, t, syncing, notice, onSync, onReconnect, onDelete,
           startRename={startRename}
           saveRename={saveRename}
           cancelRename={cancelRename}
+          updateAccount={updateAccount}
         />
       ))}
     </div>
@@ -382,38 +406,67 @@ interface AccountRowProps {
   startRename: (id: number, name: string) => void
   saveRename: () => void
   cancelRename: () => void
+  updateAccount: (id: number, attrs: { role?: AccountRole; shared?: boolean }) => void
 }
 
-function AccountRow({ acct, t, editing, editValue, editRef, setEditValue, startRename, saveRename, cancelRename }: AccountRowProps) {
+function AccountRow({ acct, t, editing, editValue, editRef, setEditValue, startRename, saveRename, cancelRename, updateAccount }: AccountRowProps) {
   const negative = acct.balance_amount != null && parseFloat(acct.balance_amount) < 0
   return (
-    <div className="grid grid-cols-[1fr_auto] gap-[14px] items-center px-[18px] py-[13px] border-t border-line">
-      <div className="min-w-0">
-        {editing ? (
-          <input
-            ref={editRef}
-            className="field h-8 max-w-[260px]"
-            value={editValue}
-            onChange={e => setEditValue(e.target.value)}
-            onBlur={saveRename}
-            onKeyDown={e => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') cancelRename() }}
-            placeholder={t('accounts.rename_placeholder')}
-          />
-        ) : (
-          <button onClick={() => startRename(acct.id, acct.name || '')}
-            className="focus-inset inline-flex items-center gap-[7px] font-semibold text-sm rounded-[4px] px-1 py-px -mx-1 -my-px text-left"
-            title={t('accounts.rename')}>
-            {acct.name || 'Account'}<Icon name="edit" size={13} className="text-ink-faint" />
-          </button>
-        )}
-        <div className="text-ink-faint mono text-[11.5px] mt-0.5">{maskIban(acct.iban)}</div>
-      </div>
-      <div className="text-right">
-        <Amount value={acct.balance_amount} currency={acct.currency} signed={false} className="text-base" forceNegative={negative} />
-        <div className="flex items-center justify-end gap-1.5 text-ink-faint text-[11px] mt-1">
-          <Icon name={acct.last_synced_at ? 'clock' : 'link'} size={11} />
-          {acct.last_synced_at ? t('accounts.account_synced', { time: formatRelativeTime(acct.last_synced_at) }) : t('accounts.awaiting_sync')}
+    <div className="border-t border-line px-[18px] py-[13px]">
+      <div className="grid grid-cols-[1fr_auto] gap-[14px] items-center">
+        <div className="min-w-0">
+          {editing ? (
+            <input
+              ref={editRef}
+              className="field h-8 max-w-[260px]"
+              value={editValue}
+              onChange={e => setEditValue(e.target.value)}
+              onBlur={saveRename}
+              onKeyDown={e => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') cancelRename() }}
+              placeholder={t('accounts.rename_placeholder')}
+            />
+          ) : (
+            <button onClick={() => startRename(acct.id, acct.name || '')}
+              className="focus-inset inline-flex items-center gap-[7px] font-semibold text-sm rounded-[4px] px-1 py-px -mx-1 -my-px text-left"
+              title={t('accounts.rename')}>
+              {acct.name || 'Account'}<Icon name="edit" size={13} className="text-ink-faint" />
+            </button>
+          )}
+          <div className="text-ink-faint mono text-[11.5px] mt-0.5">{maskIban(acct.iban)}</div>
         </div>
+        <div className="text-right">
+          <Amount value={acct.balance_amount} currency={acct.currency} signed={false} className="text-base" forceNegative={negative} />
+          <div className="flex items-center justify-end gap-1.5 text-ink-faint text-[11px] mt-1">
+            <Icon name={acct.last_synced_at ? 'clock' : 'link'} size={11} />
+            {acct.last_synced_at ? t('accounts.account_synced', { time: formatRelativeTime(acct.last_synced_at) }) : t('accounts.awaiting_sync')}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-3">
+        <label className="inline-flex items-center gap-2 text-[11.5px] text-ink-muted">
+          <span className="label">{t('accounts.role')}</span>
+          <Select
+            value={acct.role ?? ''}
+            onChange={e => updateAccount(acct.id, { role: e.target.value as AccountRole })}
+            ariaLabel={t('accounts.role')}
+            className="min-w-[150px]"
+          >
+            {acct.role == null && <option value="" disabled>—</option>}
+            {ACCOUNT_ROLES.map(role => (
+              <option key={role} value={role}>{t(`accounts.role_${role}`)}</option>
+            ))}
+          </Select>
+        </label>
+        <label className="inline-flex items-center gap-2 text-[12.5px] text-ink-muted cursor-pointer">
+          <input
+            type="checkbox"
+            className="w-4 h-4 accent-[var(--brass)] rounded-none border-2 border-line cursor-pointer"
+            checked={acct.shared}
+            onChange={e => updateAccount(acct.id, { shared: e.target.checked })}
+          />
+          {t('accounts.shared')}
+        </label>
       </div>
     </div>
   )

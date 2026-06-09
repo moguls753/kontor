@@ -102,8 +102,8 @@ class MerchantCanonicalizer
 
       <rules>
       - For each raw string, return its canonical merchant brand (e.g. "PAYPAL *SPOTIFY" → "Spotify")
-      - Pick type from: subscription, utility, rent, salary, insurance, loan, groceries, transport, shopping, transfer, other
-      - Classify by what the MERCHANT is, not by category: a supermarket like "Penny" or "Aldi" is groceries; a transport provider like "Deutsche Bahn" or a transit ticket is transport; a streaming/membership service is subscription
+      - Pick type from: subscription, utility, rent, salary, insurance, loan, groceries, transport, shopping, transfer, investment, other
+      - Classify by what the MERCHANT is, not by category: a supermarket like "Penny" or "Aldi" is groceries; a transport provider like "Deutsche Bahn" or a transit ticket is transport; a streaming/membership service is subscription; an investment broker like "Scalable Capital" or "Trade Republic" is investment
       - If you cannot confidently identify a brand, use a clean Title-Cased version of the raw string
       - Use null for type when unsure
       - Respond with ONLY a JSON array, no prose

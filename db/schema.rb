@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_06_08_120200) do
+ActiveRecord::Schema[8.1].define(version: 2026_06_08_120400) do
   create_table "accounts", force: :cascade do |t|
     t.string "account_type"
     t.string "account_uid", null: false
@@ -26,6 +26,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_08_120200) do
     t.string "identification_hash"
     t.datetime "last_synced_at"
     t.string "name"
+    t.string "role"
+    t.boolean "role_locked", default: false, null: false
+    t.boolean "shared", default: false, null: false
     t.datetime "updated_at", null: false
     t.index ["account_uid"], name: "index_accounts_on_account_uid"
     t.index ["bank_connection_id"], name: "index_accounts_on_bank_connection_id"
@@ -198,6 +201,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_08_120200) do
     t.text "remittance"
     t.string "status", default: "booked"
     t.string "transaction_id", null: false
+    t.integer "transfer_counterpart_account_id"
+    t.string "transfer_group_id"
     t.datetime "updated_at", null: false
     t.date "value_date"
     t.index ["account_id", "transaction_id"], name: "index_transaction_records_on_account_id_and_transaction_id", unique: true
@@ -205,6 +210,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_08_120200) do
     t.index ["booking_date"], name: "index_transaction_records_on_booking_date"
     t.index ["category_id"], name: "index_transaction_records_on_category_id"
     t.index ["recurring_series_id"], name: "index_transaction_records_on_recurring_series_id"
+    t.index ["transfer_counterpart_account_id"], name: "index_transaction_records_on_transfer_counterpart_account_id"
+    t.index ["transfer_group_id"], name: "index_transaction_records_on_transfer_group_id"
   end
 
   create_table "users", force: :cascade do |t|
@@ -229,6 +236,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_08_120200) do
   add_foreign_key "sessions", "users"
   add_foreign_key "trade_republic_credentials", "users"
   add_foreign_key "transaction_records", "accounts"
+  add_foreign_key "transaction_records", "accounts", column: "transfer_counterpart_account_id", on_delete: :nullify
   add_foreign_key "transaction_records", "categories"
   add_foreign_key "transaction_records", "recurring_series", on_delete: :nullify
 end

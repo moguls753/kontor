@@ -1,8 +1,13 @@
 module Api
   module V1
     class TransactionsController < ApplicationController
+      include ScopedAccounts
+
       def index
-        scope = Current.user.transaction_records.includes(:account, :category)
+        # §4b: restrict to the in-scope accounts and apply the §4a internal-transfer
+        # exclusion (matched transfer whose counterpart is also in scope ⇒ net zero ⇒
+        # hidden; counterpart out of scope ⇒ real flow ⇒ stays).
+        scope = in_scope(Current.user.transaction_records.includes(:account, :category))
 
         scope = scope.where(account_id: params[:account_id]) if params[:account_id].present?
         scope = scope.where(category_id: params[:category_id]) if params[:category_id].present?

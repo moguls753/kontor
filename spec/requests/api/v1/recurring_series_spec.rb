@@ -42,6 +42,43 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       hidden.each { |s| expect(ids).not_to include(s.id) }
     end
 
+    it "filters out a shared-account-only series in ?scope=privat" do
+      personal_acct = create(:account, bank_connection: bc, shared: false)
+      shared_acct   = create(:account, bank_connection: bc, shared: true)
+
+      mine = create(:recurring_series, user: user, canonical_name: "Spotify Privat")
+      create(:transaction_record, account: personal_acct, recurring_series: mine, amount: -12.99)
+
+      gemein = create(:recurring_series, user: user, canonical_name: "Netflix Familie",
+                                         fingerprint: "scopegemein00001")
+      create(:transaction_record, account: shared_acct, recurring_series: gemein, amount: -15.99)
+
+      get api_v1_recurring_index_path, params: { scope: "privat" }, as: :json
+      ids = response.parsed_body["series"].map { |x| x["id"] }
+      expect(ids).to include(mine.id)
+      expect(ids).not_to include(gemein.id)
+
+      get api_v1_recurring_index_path, params: { scope: "familie" }, as: :json
+      ids = response.parsed_body["series"].map { |x| x["id"] }
+      expect(ids).to include(mine.id, gemein.id)
+    end
+
+    # §4 fix — a personal→personal savings transfer has BOTH legs in scope, so the §4a
+    # net-zero exclusion would leave zero in-scope members. The "privat" lens must key on
+    # account membership only, so this savings series stays visible in ?scope=privat.
+    it "keeps a personal Giro→Sparkonto savings series visible in ?scope=privat" do
+      giro     = create(:account, bank_connection: bc, shared: false, role: "giro", role_locked: true)
+      sparkonto = create(:account, bank_connection: bc, shared: false, role: "sparkonto", role_locked: true)
+
+      savings = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Sparplan Privat")
+      create(:transaction_record, account: giro, recurring_series: savings, amount: -250,
+        transfer_group_id: "tg-priv-save", transfer_counterpart_account: sparkonto)
+
+      get api_v1_recurring_index_path, params: { scope: "privat" }, as: :json
+      ids = response.parsed_body["series"].map { |x| x["id"] }
+      expect(ids).to include(savings.id)
+    end
+
     it "keeps a subscription series visible (consumption filter only hides shopping/groceries/transport)" do
       sub = create(:recurring_series, user: user, merchant_type: "subscription", canonical_name: "Crowdfarming")
 
@@ -58,14 +95,66 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       expect(response.parsed_body["series"].map { |x| x["id"] }).not_to include(groceries.id)
     end
 
-    it "hides transfer-tagged series unless include_transfers=true" do
-      transfer = create(:recurring_series, user: user, merchant_type: "transfer", canonical_name: "Own Transfer")
+    it "hides a matched-transfer series unless include_transfers=true (live transfer_group_id, not a sticky column)" do
+      other = create(:account, bank_connection: bc, role: "giro", role_locked: true)
+      transfer = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Own Transfer")
+      create(:transaction_record, account: account, recurring_series: transfer, amount: -500,
+        transfer_group_id: "tg-own", transfer_counterpart_account: other)
 
       get api_v1_recurring_index_path, as: :json
       expect(response.parsed_body["series"].map { |x| x["id"] }).not_to include(transfer.id)
 
       get api_v1_recurring_index_path, params: { include_transfers: "true" }, as: :json
       expect(response.parsed_body["series"].map { |x| x["id"] }).to include(transfer.id)
+    end
+
+    # §5a/§5c — the four flow buckets are derived server-side and surfaced as flow_bucket.
+    it "tags a matched internal transfer series as transfer via transfer_group_id (not a name heuristic)" do
+      other = create(:account, bank_connection: bc, role: "giro", role_locked: true)
+      transfer = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Umbuchung")
+      create(:transaction_record, account: account, recurring_series: transfer, amount: -500,
+        transfer_group_id: "tg1", transfer_counterpart_account: other)
+
+      # hidden by default (transfer), surfaced with include_transfers
+      get api_v1_recurring_index_path, as: :json
+      expect(response.parsed_body["series"].map { |x| x["id"] }).not_to include(transfer.id)
+
+      get api_v1_recurring_index_path, params: { include_transfers: "true" }, as: :json
+      row = response.parsed_body["series"].find { |x| x["id"] == transfer.id }
+      expect(row["flow_bucket"]).to eq("transfer")
+    end
+
+    it "surfaces a savings series (matched transfer into an investment account) even without include_transfers" do
+      tr = create(:account, bank_connection: bc, role: "investment", role_locked: true)
+      savings = create(:recurring_series, user: user, direction: "outflow", canonical_name: "TR Sparplan")
+      create(:transaction_record, account: account, recurring_series: savings, amount: -200,
+        transfer_group_id: "tg2", transfer_counterpart_account: tr)
+
+      get api_v1_recurring_index_path, as: :json
+      row = response.parsed_body["series"].find { |x| x["id"] == savings.id }
+      expect(row).to be_present
+      expect(row["flow_bucket"]).to eq("savings")
+    end
+
+    it "puts a category-Sparen-into-shared series in the savings bucket" do
+      shared = create(:account, bank_connection: bc, shared: true, role_locked: true)
+      sparen_cat = create(:category, user: user, name: "Sparen")
+      series = create(:recurring_series, :inflow, user: user, canonical_name: "Ansparen", category: sparen_cat)
+      create(:transaction_record, account: shared, recurring_series: series, amount: 300)
+
+      get api_v1_recurring_index_path, as: :json
+      row = response.parsed_body["series"].find { |x| x["id"] == series.id }
+      expect(row["flow_bucket"]).to eq("savings")
+    end
+
+    it "keeps Mila (category Sparen, external person, no saving destination) out of savings" do
+      sparen_cat = create(:category, user: user, name: "Sparen")
+      mila = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Mila", category: sparen_cat)
+      create(:transaction_record, account: account, recurring_series: mila, amount: -50, creditor_name: "Mila")
+
+      get api_v1_recurring_index_path, as: :json
+      row = response.parsed_body["series"].find { |x| x["id"] == mila.id }
+      expect(row["flow_bucket"]).to eq("contract")
     end
 
     it "hides dismissed series by default" do
@@ -88,9 +177,19 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
   end
 
   describe "POST /api/v1/recurring/detect" do
+    include ActiveJob::TestHelper
     before { login }
 
-    it "creates series from seeded transactions" do
+    it "enqueues the pipeline async (no inline blocking) and returns queued" do
+      expect {
+        post detect_api_v1_recurring_index_path, as: :json
+      }.to have_enqueued_job(ProcessAccountDataJob).with(user.id)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body).to eq("queued" => true)
+    end
+
+    it "creates series from seeded transactions once the pipeline runs" do
       4.times do |i|
         create(:transaction_record, account: account, amount: -12.99,
           creditor_name: "Spotify", creditor_iban: nil,
@@ -98,11 +197,8 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       end
 
       expect {
-        post detect_api_v1_recurring_index_path, as: :json
+        perform_enqueued_jobs { post detect_api_v1_recurring_index_path, as: :json }
       }.to change { user.recurring_series.count }.from(0).to(1)
-
-      expect(response).to have_http_status(:ok)
-      expect(response.parsed_body["detected"]).to eq(1)
     end
   end
 

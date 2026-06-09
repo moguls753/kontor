@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { useScope, withScope } from '../lib/scope'
 import { formatAmount, formatDate, formatRelativeTime, transactionDisplayName, maskIban } from '../lib/format'
 import type { DashboardData, DashboardAccount } from '../lib/types'
 import type { View } from '../components/SidebarNav'
@@ -15,6 +16,7 @@ const MAX_VISIBLE_ACCOUNTS = 6
 
 export default function DashboardPage({ onNavigate }: DashboardPageProps) {
   const { t } = useTranslation()
+  const { scope } = useScope()
   const [data, setData] = useState<DashboardData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -23,7 +25,8 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
     setIsLoading(true)
     setError(false)
     try {
-      const response = await api('/api/v1/dashboard')
+      const qs = withScope(new URLSearchParams(), scope).toString()
+      const response = await api(`/api/v1/dashboard${qs ? `?${qs}` : ''}`)
       if (response.ok) setData(await response.json())
       else setError(true)
     } catch {
@@ -33,7 +36,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
     }
   }
 
-  useEffect(() => { fetchDashboard() }, [])
+  useEffect(() => { fetchDashboard() }, [scope]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (isLoading) {
     return (

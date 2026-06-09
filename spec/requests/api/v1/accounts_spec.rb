@@ -29,5 +29,21 @@ RSpec.describe "Api::V1::Accounts", type: :request do
     expect(response).to have_http_status(:ok)
     expect(response.parsed_body["name"]).to eq("My Checking")
     expect(account.reload.name).to eq("My Checking")
+    expect(account.role_locked).to be(false)
+  end
+
+  it "updates role and shared and locks the role" do
+    bc = create(:bank_connection, user: user)
+    account = create(:account, bank_connection: bc)
+
+    patch api_v1_account_path(account), params: { role: "sparkonto", shared: true }, as: :json
+    expect(response).to have_http_status(:ok)
+    expect(response.parsed_body["role"]).to eq("sparkonto")
+    expect(response.parsed_body["shared"]).to be(true)
+
+    account.reload
+    expect(account.role).to eq("sparkonto")
+    expect(account.shared).to be(true)
+    expect(account.role_locked).to be(true)
   end
 end

@@ -64,6 +64,16 @@ RSpec.describe RecurringDetector do
       expect(series.expected_amount).to be > 0   # inflow amount sign is positive
       expect(series.occurrences_count).to eq(4)
     end
+
+    it "rates a regular fixed-amount IBAN-consistent series (>=4 occ) as HIGH confidence (recalibrated)" do
+      monthly_dates(4).each { |d| charge(name: "EVH", amount: -53.00, date: d, creditor_iban: "DE55000000000000000002") }
+
+      subject.detect
+
+      # recalibrated scoring (divisor 8) → such a series should clear the 0.66 "high" band,
+      # not get stuck at "medium" just because there are only 4 months of history.
+      expect(user.recurring_series.first.confidence).to be >= 0.66
+    end
   end
 
   describe "rejection rules" do
@@ -100,27 +110,46 @@ RSpec.describe RecurringDetector do
     end
   end
 
-  describe "bidirectional counterparty = transfer (Lever B)" do
-    it "flags a counterparty recurring in BOTH directions as transfer, leaving one-way merchants alone" do
-      # Eike Rackwitz: money shuffled back and forth (out AND in) → own/family transfer
-      monthly_dates(3).each { |d| charge(name: "Eike Rackwitz", amount: -70.00, date: d) }
-      monthly_dates(3).each { |d| credit(name: "Eike Rackwitz", amount: 70.00, date: d) }
-      # one-directional control: a genuine subscription must stay a normal contract
+  # §5b — Lever B (the bidirectional name-heuristic) is GONE. A series is a "transfer" iff
+  # its members are matched internal transfers (transfer_group_id, set by the TransferMatcher).
+  describe "matched-transfer series = transfer (§5b)" do
+    let(:counterpart) { create(:account, bank_connection: bc, role: "giro", role_locked: true) }
+
+    it "flags a series whose members are matched internal transfers, leaving merchants alone" do
+      # money moved to an own account: members carry transfer_group_id (matcher already ran)
+      monthly_dates(3).each.with_index do |d, i|
+        charge(name: "Umbuchung", amount: -500.00, date: d,
+          transfer_group_id: "g#{i}", transfer_counterpart_account: counterpart)
+      end
+      # control: a genuine subscription (no transfer_group_id) stays a normal contract
       monthly_dates(3).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
 
       subject.detect
 
-      eike = user.recurring_series.where(canonical_name: "Eike Rackwitz")
-      expect(eike.pluck(:direction).uniq).to match_array(%w[inflow outflow])
-      expect(eike.pluck(:merchant_type).uniq).to eq([ "transfer" ]) # both flagged
+      transfer = user.recurring_series.find_by(canonical_name: "Umbuchung")
+      expect(transfer.merchant_type).to eq("transfer")
       expect(user.recurring_series.find_by(canonical_name: "Spotify").merchant_type).not_to eq("transfer")
     end
 
-    it "does not override a user-confirmed series" do
+    it "does not flag a bidirectional name pair when the members are NOT matched transfers" do
+      # same counterparty out AND in, but no transfer_group_id → the old Lever B would have
+      # flagged this; the new rule must NOT (it is not a corroborated internal transfer).
       monthly_dates(3).each { |d| charge(name: "Eike Rackwitz", amount: -70.00, date: d) }
       monthly_dates(3).each { |d| credit(name: "Eike Rackwitz", amount: 70.00, date: d) }
+
       subject.detect
-      confirmed = user.recurring_series.where(canonical_name: "Eike Rackwitz").first
+
+      eike = user.recurring_series.where(canonical_name: "Eike Rackwitz")
+      expect(eike.pluck(:merchant_type).uniq).to eq([ nil ]) # not flagged transfer
+    end
+
+    it "does not override a user-confirmed series" do
+      monthly_dates(3).each.with_index do |d, i|
+        charge(name: "Umbuchung", amount: -500.00, date: d,
+          transfer_group_id: "g#{i}", transfer_counterpart_account: counterpart)
+      end
+      subject.detect
+      confirmed = user.recurring_series.find_by(canonical_name: "Umbuchung")
       confirmed.update!(user_confirmed: true, merchant_type: nil)
 
       described_class.new(user).detect

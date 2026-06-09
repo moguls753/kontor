@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import Icon from './Icon'
+import ScopeSwitch from './ScopeSwitch'
 
 interface TopBarProps {
   email: string
@@ -32,6 +33,9 @@ export default function TopBar({ email, onLogout, onMenuToggle, pageTitle, theme
       </button>
       <div className="page-title desktop-only text-base">{pageTitle}</div>
       <div className="flex-1" />
+
+      <ScopeSwitch />
+      <div className="hairline-v desktop-only h-[26px] mx-1" />
 
       {/* theme */}
       <button className="ibtn" onClick={onToggleTheme} aria-label={t('shell.toggle_theme')} title={t('shell.toggle_theme')}>

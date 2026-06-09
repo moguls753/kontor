@@ -82,6 +82,11 @@ module Api
         end
 
         bc.destroy!
+        # Deleting a connection nullifies transfer_counterpart_account_id on any leg
+        # that pointed at one of its accounts (FK on_delete: :nullify). Re-run the
+        # pipeline so the matcher un-matches those orphaned legs and the detector
+        # refreshes — otherwise a surviving leg stays a stale "transfer" forever (S2).
+        ProcessAccountDataJob.perform_later(Current.user.id)
         head :no_content
       end
 
@@ -98,6 +103,10 @@ module Api
           }, status: :unprocessable_content
         end
         SyncAccountsJob.perform_later(bc.id)
+        # Post-sync pipeline (§3a): categorize → match transfers → detect recurring.
+        # Debounced per user (on_conflict: :discard), so a manual sync collapses with
+        # any pipeline run the scheduled fan-out already kicked off.
+        ProcessAccountDataJob.perform_later(Current.user.id)
         render json: { queued: true }
       end
 
@@ -205,6 +214,11 @@ module Api
         Paypal::Ingest.call(bc, result)
         # Success resets the breaker and clears any prior error.
         bc.update!(status: "authorized", error_message: nil, consecutive_failures: 0)
+        # Post-sync pipeline (§3a): PayPal is manual-sync-only and excluded from the
+        # scheduled fan-outs, so its new legs would otherwise wait for the next
+        # open-banking cycle to be categorized/paired/detected. Run the full pipeline
+        # (categorize → match transfers → detect recurring) here, debounced per user.
+        ProcessAccountDataJob.perform_later(Current.user.id)
 
         render json: connection_json(bc.reload)
       rescue Paypal::SidecarUnavailableError, Paypal::ApiError, Paypal::InvalidRequestError => e
@@ -235,6 +249,9 @@ module Api
         end
         bc.update!(status: "authorized", error_message: nil)
         SyncAccountsJob.perform_later(bc.id)
+        # First Trade Republic sync after pairing is an ingest path: enqueue the
+        # debounced post-sync pipeline (see callback_enable_banking).
+        ProcessAccountDataJob.perform_later(Current.user.id)
 
         render json: connection_json(bc.reload)
       end
@@ -254,6 +271,10 @@ module Api
         EasyBank::Ingest.call(bc, result)
         bc.update!(status: "authorized", error_message: nil)
         credential.update!(last_paired_at: Time.current)
+        # Ingest path: enqueue the debounced post-sync pipeline so the backfilled
+        # rows get categorized, transfer-matched and detected (see
+        # callback_enable_banking).
+        ProcessAccountDataJob.perform_later(Current.user.id)
 
         render json: connection_json(bc.reload)
       end
@@ -398,6 +419,9 @@ module Api
         EasyBank::Ingest.call(bc, result)
         bc.update!(status: "authorized", error_message: nil)
         credential.update!(last_paired_at: Time.current)
+        # Ingest path: enqueue the debounced post-sync pipeline (see
+        # callback_enable_banking).
+        ProcessAccountDataJob.perform_later(Current.user.id)
         render json: connection_json(bc.reload)
       rescue EasyBank::MtanRequired => e
         render json: {
@@ -553,6 +577,12 @@ module Api
         end
 
         SyncAccountsJob.perform_later(bc.id)
+        # First sync after a new connection is authorized is an ingest path too:
+        # enqueue the post-sync pipeline so the freshly synced rows get categorized,
+        # transfer-matched and detected without waiting for the next 6h fan-out.
+        # Debounced per user (on_conflict: :discard), so it collapses with the
+        # fan-out's run if they overlap.
+        ProcessAccountDataJob.perform_later(Current.user.id)
         redirect_to "/?bank_connection_success=#{bc.id}"
       end
 
@@ -580,6 +610,9 @@ module Api
         end
 
         SyncAccountsJob.perform_later(bc.id)
+        # First sync after a new connection is authorized is an ingest path too —
+        # see callback_enable_banking. Enqueue the debounced post-sync pipeline.
+        ProcessAccountDataJob.perform_later(Current.user.id)
         redirect_to "/?bank_connection_success=#{bc.id}"
       end
 
@@ -595,7 +628,7 @@ module Api
           last_synced_at: bc.last_synced_at,
           error_message: bc.error_message,
           accounts: bc.accounts.map { |a|
-            { id: a.id, iban: a.iban, name: a.display_name, currency: a.currency, balance_amount: a.balance_amount, last_synced_at: a.last_synced_at }
+            { id: a.id, iban: a.iban, name: a.display_name, role: a.role, shared: a.shared, currency: a.currency, balance_amount: a.balance_amount, last_synced_at: a.last_synced_at }
           }
         }
       end
