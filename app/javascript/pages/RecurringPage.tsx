@@ -169,7 +169,7 @@ export default function RecurringPage() {
     <div className="page">
       <div className="page-head">
         <h1 className="page-title">{t('recurring.title')}</h1>
-        <RecalculateButton onStarted={refetch} />
+        <RecalculateButton label={t('common.recalculate_analyze')} onStarted={refetch} />
       </div>
 
       {error ? (
@@ -186,7 +186,7 @@ export default function RecurringPage() {
       ) : series.length === 0 ? (
         <div className="panel">
           <Empty icon="recurring" title={t('recurring.empty_title')} body={t('recurring.empty_description')}>
-            <RecalculateButton onStarted={refetch} />
+            <RecalculateButton label={t('common.recalculate_analyze')} onStarted={refetch} />
           </Empty>
         </div>
       ) : (

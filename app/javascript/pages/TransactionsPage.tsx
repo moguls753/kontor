@@ -129,7 +129,7 @@ export default function TransactionsPage() {
     <div className="page">
       <div className="page-head">
         <h1 className="page-title">{t('transactions.title')}</h1>
-        <RecalculateButton onStarted={() => setRetryKey(k => k + 1)} />
+        <RecalculateButton label={t('common.recalculate_classify')} onStarted={() => setRetryKey(k => k + 1)} />
       </div>
 
       {/* Filter bar */}

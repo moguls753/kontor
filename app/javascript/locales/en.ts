@@ -15,8 +15,11 @@ export default {
     load_error: 'Could not load data. Please try again.',
     retry: 'Retry',
     recalculate: 'Recalculate',
-    recalculate_started: 'Recalculating — categories, transfers and recurring will refresh shortly.',
-    recalculate_error: "Couldn't start the recalculation. Please try again.",
+    recalculate_classify: 'Classify',
+    recalculate_analyze: 'Analyze',
+    recalculate_hint: 'Categorizes new transactions, pairs internal transfers and detects recurring payments.',
+    recalculate_started: 'Running — categories, transfers and recurring will refresh shortly.',
+    recalculate_error: "Couldn't start it. Please try again.",
   },
   app: {
     name: 'Kontor',

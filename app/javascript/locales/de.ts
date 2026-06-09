@@ -15,8 +15,11 @@ export default {
     load_error: 'Daten konnten nicht geladen werden. Bitte versuche es erneut.',
     retry: 'Erneut versuchen',
     recalculate: 'Neu berechnen',
-    recalculate_started: 'Wird neu berechnet — Kategorien, Umbuchungen und Wiederkehrendes aktualisieren sich gleich.',
-    recalculate_error: 'Die Neuberechnung konnte nicht gestartet werden. Bitte versuche es erneut.',
+    recalculate_classify: 'Klassifizieren',
+    recalculate_analyze: 'Analysieren',
+    recalculate_hint: 'Kategorisiert neue Transaktionen, paart interne Umbuchungen und erkennt Wiederkehrendes.',
+    recalculate_started: 'Läuft — Kategorien, Umbuchungen und Wiederkehrendes aktualisieren sich gleich.',
+    recalculate_error: 'Konnte nicht gestartet werden. Bitte versuche es erneut.',
   },
   app: {
     name: 'Kontor',

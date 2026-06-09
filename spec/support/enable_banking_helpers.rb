@@ -15,12 +15,19 @@ module EnableBankingHelpers
     }
   end
 
+  # EB nests the IBAN inside each account resource (account_id.iban), NOT at the
+  # top level. Account 1 exercises the primary path; account 2 leaves account_id.iban
+  # blank so it must fall back to all_account_ids (scheme_name == "IBAN").
   def eb_session_response
     {
       session_id: "session-uuid-5678",
       accounts: [
-        { uid: "account-uid-1", identification_hash: "hash1", iban: "DE89370400440532013000" },
-        { uid: "account-uid-2", identification_hash: "hash2", iban: "DE27100777770209299700" }
+        { uid: "account-uid-1", identification_hash: "hash1",
+          account_id: { iban: "DE89370400440532013000", other: nil },
+          all_account_ids: [ { identification: "DE89370400440532013000", scheme_name: "IBAN", issuer: nil } ] },
+        { uid: "account-uid-2", identification_hash: "hash2",
+          account_id: { iban: nil, other: nil },
+          all_account_ids: [ { identification: "DE27100777770209299700", scheme_name: "IBAN", issuer: nil } ] }
       ],
       access: { valid_until: "2026-08-01T00:00:00Z" }
     }

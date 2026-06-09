@@ -8,13 +8,17 @@ interface Props {
   // called after a successful enqueue so the page can refetch once the pipeline
   // has had a moment to run
   onStarted?: () => void
+  // page-contextual label (e.g. "Klassifizieren" on Transactions, "Analysieren"
+  // on Recurring). The action is identical everywhere — only the wording fits
+  // the page's relevant outcome. Defaults to the generic "Neu berechnen".
+  label?: string
 }
 
 // Understated single action replacing the old "Scannen" / "Kategorisieren"
 // buttons. POSTs to the recurring detect endpoint, which now enqueues the FULL
 // post-sync pipeline (categorize → match transfers → detect recurring) async.
 // Surfaces a lightweight toast instead of a modal with synchronous counts.
-export default function RecalculateButton({ onStarted }: Props) {
+export default function RecalculateButton({ onStarted, label }: Props) {
   const { t } = useTranslation()
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
@@ -49,8 +53,8 @@ export default function RecalculateButton({ onStarted }: Props) {
   return (
     <>
       <Btn variant="ghost" size="sm" icon="sync" onClick={handleClick} disabled={busy}
-        title={t('common.recalculate')}>
-        {t('common.recalculate')}
+        title={t('common.recalculate_hint')}>
+        {label ?? t('common.recalculate')}
       </Btn>
       {toast && (
         <div className="toast-wrap" role="status" aria-live="polite">

@@ -52,6 +52,10 @@ RSpec.describe "Api::V1::BankConnections", type: :request do
       bc.reload
       expect(bc.status).to eq("authorized")
       expect(bc.accounts.count).to eq(2)
+      # IBAN must be extracted from the nested EB resource — account_id.iban for
+      # the first account, all_account_ids fallback for the second.
+      expect(bc.accounts.find_by(account_uid: "account-uid-1").iban).to eq("DE89370400440532013000")
+      expect(bc.accounts.find_by(account_uid: "account-uid-2").iban).to eq("DE27100777770209299700")
     end
 
     # Blocker 1: the FIRST sync after a new connection is authorized is an ingest
