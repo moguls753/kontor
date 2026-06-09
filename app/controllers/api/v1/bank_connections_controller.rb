@@ -571,7 +571,11 @@ module Api
         session_data[:accounts].each do |acct|
           bc.accounts.find_or_create_by!(account_uid: acct[:uid]) do |a|
             a.identification_hash = acct[:identification_hash]
-            a.iban = acct[:iban]
+            # EB nests the IBAN inside the account resource (account_id.iban),
+            # not at the top level. all_account_ids is the fallback for ASPSPs
+            # that only populate the scheme list.
+            a.iban = acct.dig(:account_id, :iban) ||
+                     acct[:all_account_ids]&.find { |id| id[:scheme_name] == "IBAN" }&.dig(:identification)
             a.name = bc.institution_name
           end
         end
