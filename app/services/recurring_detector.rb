@@ -121,10 +121,18 @@ class RecurringDetector
     # The self side (e.g. debtor_iban on an outflow) is the user's OWN account IBAN on
     # real Enable-Banking data, so a both-sides check would wrongly exclude every booked
     # outflow. IS NOT NULL keeps the predicate NULL-safe. Windowed load is inherent.
+    #
+    # transfer_group_id IS NULL guard: a MATCHED internal transfer (paired by the
+    # TransferMatcher, which ran before this in the pipeline) must NOT be dropped — it
+    # has to reach detection so §5b/flow_bucket can place it in the Sparen-Topf (savings)
+    # or the hidden Transfer-Topf. Without this guard, fixing the account IBANs (which
+    # makes own_ibans non-empty) would silently swallow every recurring savings transfer.
+    # Only UNMATCHED own-account transfers are still dropped here (anti-clutter, as before).
     if own_ibans.any?
       scope = scope.where(
-        "NOT ( (amount < 0 AND creditor_iban IS NOT NULL AND LOWER(creditor_iban) IN (:i)) " \
-        "OR (amount >= 0 AND debtor_iban IS NOT NULL AND LOWER(debtor_iban) IN (:i)) )",
+        "NOT ( transfer_group_id IS NULL AND ( " \
+        "(amount < 0 AND creditor_iban IS NOT NULL AND LOWER(creditor_iban) IN (:i)) " \
+        "OR (amount >= 0 AND debtor_iban IS NOT NULL AND LOWER(debtor_iban) IN (:i)) ) )",
         i: own_ibans
       )
     end

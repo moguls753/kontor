@@ -126,6 +126,18 @@ RSpec.describe RecurringSeries, type: :model do
       expect(series.flow_bucket).to eq("savings")
     end
 
+    it "treats the matched-transfer INFLOW mirror leg as NOT savings (no double-book; outflow leg represents it)" do
+      # Eike's Privat→Gemeinschaft "Ansparen": the +X credit booked on the shared account is
+      # a MATCHED internal transfer (transfer_group_id). Its outflow mirror already counts as
+      # savings via the counterpart branch, so this leg must NOT independently count.
+      series = create(:recurring_series, user: user, direction: "inflow",
+        canonical_name: "Ansparen (mirror)", category: sparen_cat)
+      create(:transaction_record, account: shared, recurring_series: series, amount: 70,
+        transfer_group_id: "mir1", transfer_counterpart_account: giro)
+
+      expect(series.savings?).to be(false)
+    end
+
     it "keeps Mila (category Sparen, external person, NO saving destination) out of savings" do
       series = create(:recurring_series, user: user, direction: "outflow",
         canonical_name: "Mila", category: sparen_cat)

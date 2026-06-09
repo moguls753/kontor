@@ -127,14 +127,23 @@ class RecurringSeries < ApplicationRecord
     category&.name.to_s.casecmp?(SAVINGS_CATEGORY_NAME)
   end
 
-  # A member lands in a saving/shared destination: either it is a credit booked on such an
-  # account (Katja's "Ansparen" into the Gemeinschaft), or it is sent to one (counterpart).
+  # A member lands in a saving/shared destination: either it is sent to one (counterpart),
+  # or it is a credit booked on such an account (an EXTERNAL "Ansparen" into the Gemeinschaft,
+  # e.g. Katja / Benedikt Weidner).
+  #
+  # The credit-into-shared branch is restricted to NON-matched (external) inflows. For a
+  # matched INTERNAL transfer (Eike's Privat→Gemeinschaft) both legs exist as separate
+  # series; the OUTFLOW leg already qualifies via the counterpart branch, so counting the
+  # INFLOW mirror too would double-book the same saving in the Familie scope. The mirror is
+  # identified by its own transfer_group_id (internal_transfer?), not by its counterpart —
+  # which lets the genuine external credit (no transfer_group_id) still pass.
   def flows_into_savings_destination?(member)
     cp = member.transfer_counterpart_account
     return true if cp&.saving_destination? || cp&.shared?
 
     acct = member.account
-    member.amount.to_d.positive? && (acct&.saving_destination? || acct&.shared?)
+    member.amount.to_d.positive? && !member.internal_transfer? &&
+      (acct&.saving_destination? || acct&.shared?)
   end
 
   # #9 — auto-recompute fingerprint whenever the identifying fields are present, so a

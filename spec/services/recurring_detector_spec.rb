@@ -407,6 +407,27 @@ RSpec.describe RecurringDetector do
       expect(user.recurring_series.first.canonical_name).to eq("Spotify")
       expect(user.recurring_series.first.occurrences_count).to eq(4)
     end
+
+    # Regression (prod 2026-06-09): once the account IBANs are populated, own_ibans is
+    # non-empty and S3 fires. A MATCHED internal transfer (transfer_group_id set by the
+    # matcher) has its counterparty IBAN ∈ own_ibans — but it must STILL be detected so
+    # §5b/flow_bucket can place it in the Sparen/Transfer Topf. Only the transfer_group_id
+    # IS NULL guard keeps it alive; without it the Sparen-Topf silently empties.
+    it "keeps a MATCHED own-account transfer (transfer_group_id set) so flow_bucket can place it" do
+      own = create(:account, bank_connection: bc, iban: "DE89370400440532013000")
+      monthly_dates(4).each.with_index do |d, i|
+        create(:transaction_record, account: account, creditor_name: "Ansparen",
+          creditor_iban: own.iban, amount: -70.00, booking_date: d, currency: "EUR",
+          transfer_group_id: "grp-#{i}", transfer_counterpart_account: own)
+      end
+
+      subject.detect
+
+      series = user.recurring_series.find_by(canonical_name: "Ansparen")
+      expect(series).to be_present
+      expect(series.occurrences_count).to eq(4)
+      expect(series.merchant_type).to eq("transfer") # §5b flags it
+    end
   end
 
   describe "user-state preservation" do
