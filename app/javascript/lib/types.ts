@@ -148,3 +148,59 @@ export interface CredentialsStatus {
   paypal: { configured: boolean; username_masked?: string }
   llm: { configured: boolean; base_url?: string; llm_model?: string }
 }
+
+export interface StatRange {
+  from: string
+  to: string
+  months: number
+  clamped: boolean
+}
+
+export interface StatKpis {
+  income: string
+  expenses: string
+  net: string
+  savings_rate: number | null
+  avg_monthly_expenses: string
+  fixed_monthly: string
+  recurring_payment_count: number
+  top_category: { name: string | null; amount: string } | null
+  savings_rate_prev: number | null
+  avg_monthly_expenses_prev: string
+}
+
+export interface StatCashflowPoint {
+  month: string
+  income: string
+  expenses: string
+  net: string
+}
+
+export interface StatFixedVariablePoint {
+  month: string
+  fixed: string
+  variable: string
+}
+
+export interface StatCategoryItem {
+  id: number | null
+  name: string | null
+  amount: string
+  count: number
+  share: number | null
+}
+
+export interface StatCategories {
+  spending: StatCategoryItem[]
+  transfers: StatCategoryItem[]
+  total_spent: string
+}
+
+export interface StatisticsData {
+  range: StatRange
+  transaction_count: number
+  kpis: StatKpis
+  cashflow: StatCashflowPoint[]
+  fixed_variable: StatFixedVariablePoint[]
+  categories: StatCategories
+}

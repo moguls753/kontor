@@ -1,6 +1,6 @@
 # Resolves the set of in-scope account ids for the current user and applies the
-# §4a internal-transfer exclusion rule. Scope-param plumbing (?scope=privat) is
-# Phase 4 — for now scoped_account_ids defaults to ALL of the user's accounts.
+# §4a internal-transfer exclusion rule. `?scope=privat` narrows to the user's
+# personal (non-shared) accounts; the default (familie) is ALL of their accounts.
 module ScopedAccounts
   extend ActiveSupport::Concern
 

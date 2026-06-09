@@ -37,6 +37,7 @@ class Account < ApplicationRecord
 
   belongs_to :bank_connection
   has_many :transaction_records, dependent: :destroy
+  has_many :balance_snapshots, dependent: :destroy
   has_one :user, through: :bank_connection
 
   validates :account_uid, presence: true

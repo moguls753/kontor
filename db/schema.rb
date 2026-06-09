@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_06_08_120400) do
+ActiveRecord::Schema[8.1].define(version: 2026_06_09_090000) do
   create_table "accounts", force: :cascade do |t|
     t.string "account_type"
     t.string "account_uid", null: false
@@ -33,6 +33,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_08_120400) do
     t.index ["account_uid"], name: "index_accounts_on_account_uid"
     t.index ["bank_connection_id"], name: "index_accounts_on_bank_connection_id"
     t.index ["identification_hash"], name: "index_accounts_on_identification_hash"
+  end
+
+  create_table "balance_snapshots", force: :cascade do |t|
+    t.integer "account_id", null: false
+    t.decimal "balance_amount", precision: 15, scale: 2
+    t.datetime "created_at", null: false
+    t.string "currency", limit: 3, default: "EUR"
+    t.date "snapshot_on", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id", "snapshot_on"], name: "index_balance_snapshots_on_account_id_and_snapshot_on", unique: true
   end
 
   create_table "bank_connections", force: :cascade do |t|
@@ -223,6 +233,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_08_120400) do
   end
 
   add_foreign_key "accounts", "bank_connections"
+  add_foreign_key "balance_snapshots", "accounts"
   add_foreign_key "bank_connections", "users"
   add_foreign_key "categories", "users"
   add_foreign_key "easybank_credentials", "users"

@@ -32,6 +32,7 @@ class ProcessAccountDataJob < ApplicationJob
     categorize(user)
     match_transfers(user)
     detect_recurring(user)
+    snapshot_balances(user)
   end
 
   private
@@ -58,5 +59,14 @@ class ProcessAccountDataJob < ApplicationJob
     RecurringDetector.new(user).detect
   rescue => e
     Rails.logger.error("ProcessAccountDataJob: recurring detection failed for user ##{user.id} (#{e.class}: #{e.message})")
+  end
+
+  # ④ Snapshot today's balances so the net-worth series gets a fresh point right
+  # after a manual sync, not only at the nightly job. Idempotent upsert; isolated
+  # so a snapshot failure never blocks (and is never blocked by) the rest.
+  def snapshot_balances(user)
+    BalanceSnapshot.capture_all!(accounts: user.accounts)
+  rescue => e
+    Rails.logger.error("ProcessAccountDataJob: balance snapshot failed for user ##{user.id} (#{e.class}: #{e.message})")
   end
 end

@@ -41,5 +41,9 @@ FactoryBot.define do
     currency { "EUR" }
     balance_amount { 1234.56 }
     balance_type { "CLBD" }
+
+    trait :shared do
+      shared { true }
+    end
   end
 end

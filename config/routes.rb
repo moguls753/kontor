@@ -45,6 +45,7 @@ Rails.application.routes.draw do
         post :detect, on: :collection
       end
       resource :dashboard, only: %i[ show ]
+      resource :statistics, only: %i[ show ]
     end
   end
 

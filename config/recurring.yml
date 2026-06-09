@@ -27,3 +27,9 @@ production:
     # Daily 04:30 Berlin — after the scraped-balance sync, keeps next_expected_on
     # fresh and (phase 2) powers missed-payment alerts.
     schedule: "30 4 * * * Europe/Berlin"
+  snapshot_balances:
+    class: SnapshotBalancesJob
+    # Daily 04:50 Berlin — after the scraped sync (04:00) and detect (04:30) so each
+    # day's row reflects the freshest balances. Date.current resolves in the app TZ
+    # (UTC); same calendar day at this hour, fine for a once-daily series.
+    schedule: "50 4 * * * Europe/Berlin"
