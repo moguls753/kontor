@@ -282,6 +282,7 @@ export default {
       top_category: 'Top-Kategorie',
       recurring_count: '{{n}} Zahlungen',
       vs_prev: 'ggü. Vorperiode',
+      pp: '%-Pkt.',
     },
     chart: {
       cashflow: 'Cashflow',

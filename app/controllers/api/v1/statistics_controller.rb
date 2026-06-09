@@ -37,7 +37,13 @@ module Api
 
         income_by_month  = window.credits.group(MONTH).sum(:amount)
         expense_by_month = window.debits.group(MONTH).sum(:amount)
-        fixed_scope      = window.debits.where.not(recurring_series_id: nil).where(transfer_group_id: nil)
+        # "Fixed" = recurring-linked REAL spending. Exclude only the transfer/savings
+        # categories (Sparen/Überweisungen), NOT all matched transfers: a recurring
+        # cost-share paid into a joint account (rent, utilities) IS a fixed cost from the
+        # Privat view and must count — it survives `in_scope` there as a real outflow.
+        transfer_cat_ids = Current.user.categories.where(name: TRANSFER_CATEGORY_NAMES).pluck(:id)
+        fixed_scope      = window.debits.where.not(recurring_series_id: nil)
+        fixed_scope      = fixed_scope.where("category_id IS NULL OR category_id NOT IN (?)", transfer_cat_ids) if transfer_cat_ids.any?
         fixed_by_month   = fixed_scope.group(MONTH).sum(:amount)
 
         income      = window.credits.sum(:amount).to_d
@@ -45,7 +51,10 @@ module Api
         total_fixed = fixed_scope.sum(:amount).to_d
         cats        = category_items(window)
         top         = cats[:spending].first
-        prev        = previous_window_kpis(ids, clamped_from, months)
+        # Earliest in-scope tx overall (not just in-window) — used to suppress the
+        # prior-period delta when the previous window predates the user's data.
+        earliest_overall = in_scope(Current.user.transaction_records, ids).minimum(:booking_date)
+        prev        = previous_window_kpis(ids, clamped_from, months, earliest_overall)
 
         render json: {
           range: { from: clamped_from, to: to, months: months, clamped: clamped_from != from },
@@ -143,9 +152,13 @@ module Api
       end
 
       # Same-length window immediately before the current one, for the KPI deltas.
-      def previous_window_kpis(ids, clamped_from, months)
-        prev_to = clamped_from - 1
+      def previous_window_kpis(ids, clamped_from, months, earliest_overall)
         prev_from = clamped_from.advance(months: -months)
+        # Suppress the comparison when the prior window predates the user's data — a
+        # near-empty prior window otherwise yields a meaningless +1000 % delta.
+        return { savings_rate: nil, avg_monthly_expenses: nil } if earliest_overall.nil? || prev_from < earliest_overall
+
+        prev_to = clamped_from - 1
         prev = in_scope(Current.user.transaction_records.in_period(prev_from, prev_to), ids)
         income = prev.credits.sum(:amount).to_d
         expenses = prev.debits.sum(:amount).to_d

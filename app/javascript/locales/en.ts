@@ -281,7 +281,8 @@ export default {
       fixed_costs: 'Fixed costs / mo',
       top_category: 'Top category',
       recurring_count: '{{n}} payments',
-      vs_prev: 'vs. previous',
+      vs_prev: 'vs. previous period',
+      pp: 'pp',
     },
     chart: {
       cashflow: 'Cashflow',

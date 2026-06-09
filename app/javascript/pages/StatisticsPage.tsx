@@ -90,7 +90,7 @@ export default function StatisticsPage() {
   const rate = kpis.savings_rate
   const rateDelta = rate != null && kpis.savings_rate_prev != null ? rate - kpis.savings_rate_prev : null
   const curSpend = Math.abs(parseFloat(kpis.avg_monthly_expenses))
-  const prevSpend = Math.abs(parseFloat(kpis.avg_monthly_expenses_prev))
+  const prevSpend = kpis.avg_monthly_expenses_prev != null ? Math.abs(parseFloat(kpis.avg_monthly_expenses_prev)) : 0
   const spendDelta = prevSpend > 0 ? ((curSpend - prevSpend) / prevSpend) * 100 : null
 
   // ---- chart data ----
@@ -154,20 +154,19 @@ export default function StatisticsPage() {
       <div className="panel stat-kpis mb-5">
         <div className="stat-kpi">
           <Eyebrow>{t('statistics.kpi.savings_rate')}</Eyebrow>
-          <div className="stat-kpi-val">
-            <span>{rate == null ? '—' : `${nf1.format(rate)} %`}</span>
-            {rateDelta != null && <DeltaTag delta={rateDelta} goodWhenUp suffix=" pp" />}
-          </div>
+          <div className="stat-kpi-val"><span>{rate == null ? '—' : `${nf1.format(rate)} %`}</span></div>
           {rate != null && <KpiMeter value={rate} />}
+          {rateDelta != null && (
+            <div className="stat-kpi-sub"><DeltaTag delta={rateDelta} goodWhenUp suffix={` ${t('statistics.kpi.pp')}`} /> {t('statistics.kpi.vs_prev')}</div>
+          )}
         </div>
 
         <div className="stat-kpi">
           <Eyebrow>{t('statistics.kpi.avg_monthly_expenses')}</Eyebrow>
-          <div className="stat-kpi-val">
-            <span className="amt amt-neg">{fmtAbs(kpis.avg_monthly_expenses)}</span>
-            {spendDelta != null && <DeltaTag delta={spendDelta} goodWhenUp={false} suffix="%" />}
-          </div>
-          <div className="stat-kpi-sub">{t('statistics.kpi.vs_prev')}</div>
+          <div className="stat-kpi-val"><span className="amt amt-neg">{fmtAbs(kpis.avg_monthly_expenses)}</span></div>
+          {spendDelta != null && (
+            <div className="stat-kpi-sub"><DeltaTag delta={spendDelta} goodWhenUp={false} suffix=" %" /> {t('statistics.kpi.vs_prev')}</div>
+          )}
         </div>
 
         <div className="stat-kpi">

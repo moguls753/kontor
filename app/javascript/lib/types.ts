@@ -166,7 +166,7 @@ export interface StatKpis {
   recurring_payment_count: number
   top_category: { name: string | null; amount: string } | null
   savings_rate_prev: number | null
-  avg_monthly_expenses_prev: string
+  avg_monthly_expenses_prev: string | null
 }
 
 export interface StatCashflowPoint {

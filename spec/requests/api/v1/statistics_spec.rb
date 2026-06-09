@@ -42,34 +42,40 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     expect(stat["kpis"]["expenses"].to_f).to eq(dash["expenses"].to_f)
   end
 
-  # Review B2 — a recurring transfer leg that survives `privat` scope (counterpart
-  # out of scope) is a real outflow, but must NOT be counted as committed "fixed".
-  it "treats a cross-scope recurring transfer leg as variable, not fixed, under privat" do
+  # Under Privat, a recurring COST-share paid into the joint account (rent/utilities)
+  # is a real outflow AND a fixed cost → must count as fixed. A recurring SAVINGS
+  # transfer (Sparen category) is a real outflow but NOT a fixed cost.
+  it "counts a recurring cost-share transfer as fixed under privat, but not a savings transfer" do
     privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
     gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
-    series = create(:recurring_series, user: user)
-    group = SecureRandom.uuid
+    miete = create(:recurring_series, user: user, canonical_name: "Eike Miete")
+    sparen = create(:recurring_series, user: user, canonical_name: "Eike Sparen")
+    wohnen_cat = create(:category, user: user, name: "Wohnen & Miete")
+    sparen_cat = create(:category, user: user, name: "Sparen")
+    g1 = SecureRandom.uuid
+    g2 = SecureRandom.uuid
 
-    # Recurring umbuchung personal → shared (carries recurring_series_id + transfer_group_id).
-    create(:transaction_record, account: privat, amount: -70, booking_date: Date.current,
-                                recurring_series_id: series.id, transfer_group_id: group,
-                                transfer_counterpart_account: gemein)
-    create(:transaction_record, account: gemein, amount: 70, booking_date: Date.current,
-                                transfer_group_id: group, transfer_counterpart_account: privat)
-    # A genuine recurring contract on the personal account.
-    create(:transaction_record, account: privat, amount: -20, booking_date: Date.current,
-                                recurring_series_id: series.id)
+    # recurring rent-share privat → joint (real fixed cost)
+    create(:transaction_record, account: privat, amount: -445, booking_date: Date.current, category: wohnen_cat,
+                                recurring_series_id: miete.id, transfer_group_id: g1, transfer_counterpart_account: gemein)
+    create(:transaction_record, account: gemein, amount: 445, booking_date: Date.current,
+                                transfer_group_id: g1, transfer_counterpart_account: privat)
+    # recurring savings transfer privat → joint (not a fixed cost)
+    create(:transaction_record, account: privat, amount: -200, booking_date: Date.current, category: sparen_cat,
+                                recurring_series_id: sparen.id, transfer_group_id: g2, transfer_counterpart_account: gemein)
+    create(:transaction_record, account: gemein, amount: 200, booking_date: Date.current,
+                                transfer_group_id: g2, transfer_counterpart_account: privat)
 
     get api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
     k = response.parsed_body["kpis"]
 
-    expect(k["expenses"].to_f).to eq(-90.0)          # both legs are real outflows from privat
-    expect(k["fixed_monthly"].to_f).to eq(-20.0)     # but only the contract is "fixed"
-    expect(k["recurring_payment_count"]).to eq(1)    # transfer series excluded from the count
+    expect(k["expenses"].to_f).to eq(-645.0)          # both legs are real privat outflows
+    expect(k["fixed_monthly"].to_f).to eq(-445.0)     # only the cost-share is "fixed"
+    expect(k["recurring_payment_count"]).to eq(1)     # savings series excluded from the count
 
     fv = response.parsed_body["fixed_variable"].last
-    expect(fv["fixed"].to_f).to eq(-20.0)
-    expect(fv["variable"].to_f).to eq(-70.0)
+    expect(fv["fixed"].to_f).to eq(-445.0)
+    expect(fv["variable"].to_f).to eq(-200.0)
   end
 
   # Review S3 — Sparen/Überweisungen are split into a `transfers` group, and the two
@@ -164,5 +170,14 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     create(:account, bank_connection: bc, balance_amount: 100)
     get api_v1_statistics_path, params: { from: Date.current.iso8601, to: (Date.current - 2.months).iso8601 }, as: :json
     expect(response).to have_http_status(:ok)
+  end
+
+  # Avoid a meaningless +1000 % delta when the previous window has no data yet.
+  it "suppresses the prior-period delta when the previous window predates the data" do
+    account = create(:account, bank_connection: bc, balance_amount: 1000)
+    create(:transaction_record, account: account, amount: -50, booking_date: Date.current)
+
+    get api_v1_statistics_path, params: this_month_params, as: :json
+    expect(response.parsed_body["kpis"]["avg_monthly_expenses_prev"]).to be_nil
   end
 end
