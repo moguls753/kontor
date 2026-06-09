@@ -99,7 +99,10 @@ export default function RecurringPage() {
   const refetch = () => setRetryKey(k => k + 1)
 
   const patchSeries = async (id: number, body: Record<string, unknown>) => {
-    const r = await api(`/api/v1/recurring/${id}`, { method: 'PATCH', body })
+    // Send the active lens so the PATCH response's flow_bucket stays scope-aware — otherwise an
+    // edited cross-scope transfer (e.g. rent share) would jump back to "Umbuchung" under Privat.
+    const qs = withScope(new URLSearchParams(), scope).toString()
+    const r = await api(`/api/v1/recurring/${id}${qs ? `?${qs}` : ''}`, { method: 'PATCH', body })
     if (r.ok) {
       const updated: RecurringSeries = await r.json()
       setSeries(list => list.map(s => (s.id === id ? updated : s)))

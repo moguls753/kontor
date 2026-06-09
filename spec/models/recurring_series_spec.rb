@@ -136,5 +136,16 @@ RSpec.describe RecurringSeries, type: :model do
 
       expect(series.flow_bucket).to eq("expense")
     end
+
+    it "treats a cross-scope transfer as an expense when scope_ids exclude the counterpart" do
+      shared = create(:account, bank_connection: bc, shared: true)
+      series = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Mietanteil")
+      create(:transaction_record, account: giro, recurring_series: series, amount: -445,
+        transfer_group_id: "g-rent", transfer_counterpart_account: shared)
+
+      expect(series.flow_bucket).to eq("transfer")                          # Familie (unscoped)
+      expect(series.flow_bucket(scope_ids: [ giro.id ])).to eq("expense")   # Privat: counterpart out of scope
+      expect(series.flow_bucket(scope_ids: [ giro.id, shared.id ])).to eq("transfer") # both in scope
+    end
   end
 end

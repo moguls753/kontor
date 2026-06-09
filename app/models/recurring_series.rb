@@ -80,18 +80,30 @@ class RecurringSeries < ApplicationRecord
   # signals only — direction and whether it moves between the user's OWN accounts. No
   # "is this savings?" guessing (that classification was fuzzy: Scalable, Mila and own
   # Ansparen all defied a clean rule, so it was dropped). Returns one of FLOW_BUCKETS:
-  #   • transfer — ANY member is a matched internal transfer (live transfer_group_id), i.e.
-  #     a net-zero move between own accounts. Derived from the LIVE link, never a sticky
-  #     merchant_type, so an unmatched series falls back to a real flow.
+  #   • transfer — a matched internal transfer (live transfer_group_id) whose counterpart is
+  #     in scope, i.e. a net-zero move between own in-scope accounts. Derived from the LIVE
+  #     link, never a sticky merchant_type. Scope-aware: under the Privat lens a transfer to
+  #     the out-of-scope joint account is NOT net-zero → falls through to a real flow (scope_ids).
   #   • income   — money coming in (inflow).
   #   • expense  — money going out (everything else: contracts, subscriptions, savings plans).
   #
   # `members` may be supplied (preloaded, with :transfer_counterpart_account) to avoid an
   # N+1 in the index; otherwise it falls back to the association.
-  def flow_bucket(members: nil)
+  def flow_bucket(members: nil, scope_ids: nil)
     members ||= transaction_records.to_a
 
-    if members.any?(&:internal_transfer?)
+    # A matched transfer is a net-zero "Umbuchung" only when its counterpart account is ALSO
+    # in scope (mirrors ScopedAccounts#in_scope §4a). scope_ids nil (Familie / unscoped) →
+    # any matched transfer counts (unchanged). Under Privat a transfer to the out-of-scope
+    # joint account has its counterpart excluded → not net-zero → falls through to expense,
+    # exactly as the dashboard/statistics treat it.
+    net_zero_transfer = members.any? do |m|
+      next false if m.transfer_group_id.blank?
+
+      scope_ids.nil? || (m.transfer_counterpart_account_id.present? && scope_ids.include?(m.transfer_counterpart_account_id))
+    end
+
+    if net_zero_transfer
       "transfer"
     elsif direction == "inflow"
       "income"

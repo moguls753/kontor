@@ -68,7 +68,8 @@ module Api
         # Derive each series' Topf (flow_bucket: expense / income / transfer) from preloaded
         # members. Transfers (pure net-zero moves between own accounts) stay hidden unless
         # ?include_transfers=true (the Transfers tab opts in).
-        buckets = scope.to_a.to_h { |s| [ s, s.flow_bucket(members: s.transaction_records.to_a) ] }
+        sids = bucket_scope_ids
+        buckets = scope.to_a.to_h { |s| [ s, s.flow_bucket(members: s.transaction_records.to_a, scope_ids: sids) ] }
         unless params[:include_transfers] == "true"
           buckets.reject! { |_s, b| b == "transfer" }
         end
@@ -130,10 +131,18 @@ module Api
         permitted
       end
 
+      # §4a scope-aware bucketing: under Privat a transfer whose counterpart is out of scope
+      # (e.g. a cost-share into the joint account) is a real flow, not an Umbuchung. Familie
+      # (nil) keeps the unscoped behaviour. Shared by the index and the show/update responses
+      # so a series can never be classified as a transfer in one view and an expense in another.
+      def bucket_scope_ids
+        params[:scope] == "privat" ? scoped_account_ids : nil
+      end
+
       def recurring_series_json(s, flow_bucket: nil)
         {
           id: s.id,
-          flow_bucket: flow_bucket || s.flow_bucket,
+          flow_bucket: flow_bucket || s.flow_bucket(scope_ids: bucket_scope_ids),
           canonical_name: s.canonical_name,
           merchant_type: s.merchant_type,
           direction: s.direction,

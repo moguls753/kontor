@@ -63,6 +63,28 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       expect(ids).to include(mine.id, gemein.id)
     end
 
+    # §4a — a personal→shared recurring transfer (e.g. a rent share into the joint account)
+    # is a real Ausgabe under Privat (counterpart out of scope), not an Umbuchung.
+    it "shows a personal→shared recurring transfer as an expense (not Umbuchung) in ?scope=privat" do
+      personal = create(:account, bank_connection: bc, shared: false)
+      shared   = create(:account, bank_connection: bc, shared: true)
+      rent = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Mietanteil")
+      create(:transaction_record, account: personal, recurring_series: rent, amount: -445,
+        transfer_group_id: "tg-rent", transfer_counterpart_account: shared)
+
+      # Privat: counterpart out of scope → expense → in the DEFAULT list (no include_transfers)
+      get api_v1_recurring_index_path, params: { scope: "privat" }, as: :json
+      row = response.parsed_body["series"].find { |x| x["id"] == rent.id }
+      expect(row).to be_present
+      expect(row["flow_bucket"]).to eq("expense")
+
+      # Familie: both legs in scope → net-zero Umbuchung → hidden unless include_transfers
+      get api_v1_recurring_index_path, params: { scope: "familie" }, as: :json
+      expect(response.parsed_body["series"].map { |x| x["id"] }).not_to include(rent.id)
+      get api_v1_recurring_index_path, params: { scope: "familie", include_transfers: "true" }, as: :json
+      expect(response.parsed_body["series"].find { |x| x["id"] == rent.id }["flow_bucket"]).to eq("transfer")
+    end
+
     # §4 fix — a personal→personal transfer has BOTH legs in scope, so the §4a net-zero
     # exclusion would leave zero in-scope members. The "privat" lens must key on account
     # membership only, so the transfer series stays visible in ?scope=privat (Transfers tab).
