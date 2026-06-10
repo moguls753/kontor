@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useScope, withScope } from '../lib/scope'
@@ -10,8 +10,17 @@ import type { StatisticsData, StatRange, StatForecast } from '../lib/types'
 import { PERIOD_KEYS, periodRange, formatMonth, readPeriod, type PeriodKey } from '../lib/period'
 
 const TOP_CATEGORIES = 8
+const UPCOMING_PREVIEW = 7
 const HORIZONS = [3, 6, 12] as const
 type Horizon = (typeof HORIZONS)[number]
+
+const TABS = ['trends', 'categories', 'forecast'] as const
+type Tab = (typeof TABS)[number]
+const readTab = (): Tab => {
+  if (typeof localStorage === 'undefined') return 'trends'
+  const saved = localStorage.getItem('stats-tab') ?? ''
+  return (TABS as readonly string[]).includes(saved) ? (saved as Tab) : 'trends'
+}
 
 export default function StatisticsPage() {
   const { t, i18n } = useTranslation()
@@ -19,6 +28,7 @@ export default function StatisticsPage() {
   const [period, setPeriod] = useState<PeriodKey>(readPeriod)
   const [showAllCats, setShowAllCats] = useState(false)
   const [horizon, setHorizon] = useState<Horizon>(3)
+  const [tab, setTab] = useState<Tab>(readTab)
   const [data, setData] = useState<StatisticsData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -47,6 +57,27 @@ export default function StatisticsPage() {
     setPeriod(k)
     setShowAllCats(false)
     localStorage.setItem('stats-period', k)
+  }
+
+  const changeTab = (k: Tab) => {
+    setTab(k)
+    localStorage.setItem('stats-tab', k)
+  }
+
+  // Roving arrow-key navigation across the tablist (WAI-ARIA tabs, automatic activation).
+  const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const i = TABS.indexOf(tab)
+    const next =
+      e.key === 'ArrowRight' ? TABS[(i + 1) % TABS.length]
+        : e.key === 'ArrowLeft' ? TABS[(i - 1 + TABS.length) % TABS.length]
+          : e.key === 'Home' ? TABS[0]
+            : e.key === 'End' ? TABS[TABS.length - 1]
+              : null
+    if (next) {
+      e.preventDefault()
+      changeTab(next)
+      document.getElementById(`stat-tab-${next}`)?.focus()
+    }
   }
 
   const head = (
@@ -167,69 +198,72 @@ export default function StatisticsPage() {
         </div>
       </div>
 
-      {/* KPI strip */}
-      <div className="panel stat-kpis mb-5">
-        <div className="stat-kpi">
-          <Eyebrow>{t('statistics.kpi.fixed_costs_so_far')}</Eyebrow>
-          <div className="stat-kpi-val"><span className="amt amt-neg">{fmtAbs(kpis.fixed_monthly)}</span></div>
-          <div className="stat-kpi-sub">{t('statistics.kpi.recurring_count', { n: kpis.recurring_payment_count })}</div>
-        </div>
-
-        <div className="stat-kpi">
-          <Eyebrow>{t('statistics.kpi.top_category')}</Eyebrow>
-          {kpis.top_category ? (
-            <>
-              <div className="stat-kpi-val"><span className="amt amt-neg">{fmtAbs(kpis.top_category.amount)}</span></div>
-              <div className="stat-kpi-sub">{kpis.top_category.name || t('statistics.cat.uncategorized')}</div>
-            </>
-          ) : <div className="stat-kpi-val"><span>—</span></div>}
-        </div>
+      {/* Tabs — named by the question you're asking; keep everything to one screen */}
+      <div className="stat-tabs" role="tablist" aria-label={t('statistics.title')} onKeyDown={onTabKey}>
+        {TABS.map(k => (
+          <button key={k} id={`stat-tab-${k}`} role="tab" aria-selected={tab === k} aria-controls="stat-tabpanel"
+            tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => changeTab(k)}>
+            {t(`statistics.tab.${k}`)}
+          </button>
+        ))}
       </div>
 
-      {/* Cashflow + category breakdown */}
-      <div className="stat-grid">
-        <div className="panel">
-          <div className="panel-head">
-            <h2 className="section-title">{t('statistics.chart.cashflow')}</h2>
-            <Legend items={[
-              { label: t('statistics.legend.income'), color: 'var(--income)' },
-              { label: t('statistics.legend.expenses'), color: 'var(--ink)', opacity: 0.5 },
-            ]} />
-          </div>
-          <div className="panel-pad"><BarChart data={cashflowData} mode="grouped" /></div>
-        </div>
+      <div className="stat-tab-panel" key={tab} id="stat-tabpanel" role="tabpanel" aria-labelledby={`stat-tab-${tab}`} tabIndex={0}>
+        {tab === 'trends' && (
+          <div className="stat-grid stat-grid-even">
+            <div className="panel">
+              <div className="panel-head">
+                <h2 className="section-title">{t('statistics.chart.cashflow')}</h2>
+                <Legend items={[
+                  { label: t('statistics.legend.income'), color: 'var(--income)' },
+                  { label: t('statistics.legend.expenses'), color: 'var(--ink)', opacity: 0.5 },
+                ]} />
+              </div>
+              <div className="panel-pad"><BarChart data={cashflowData} mode="grouped" /></div>
+            </div>
 
-        <div className="panel">
-          <div className="panel-head"><h2 className="section-title">{t('statistics.chart.by_category')}</h2></div>
-          <div className="panel-pad">
-            <RankedBars items={visibleCats} maxValue={catMax} formatValue={v => formatAmount(Math.abs(v))} />
-            {hiddenCount > 0 && (
-              <Btn variant="ghost" size="sm" className="mt-2" onClick={() => setShowAllCats(true)}>
-                {t('statistics.cat.more', { n: hiddenCount })}
-              </Btn>
-            )}
-            <div className="stat-foot">
-              <span className="text-ink-muted text-[12.5px]">{t('statistics.legend.expenses')}</span>
-              <span className="amt amt-neg mono text-[14px]">{fmtAbs(data.categories.total)}</span>
+            <div className="panel">
+              <div className="panel-head">
+                <h2 className="section-title">{t('statistics.chart.fixed_vs_variable')}</h2>
+                <Legend items={[
+                  { label: t('statistics.legend.fixed'), color: 'var(--brass)' },
+                  { label: t('statistics.legend.variable'), color: 'var(--ink)', opacity: 0.32 },
+                ]} />
+              </div>
+              <div className="panel-pad">
+                <BarChart data={fvData} mode="stacked" />
+                <div className="stat-context">
+                  <span>{t('statistics.kpi.fixed_costs_so_far')}</span>
+                  <span className="stat-context-fig">{fmtAbs(kpis.fixed_monthly)}</span>
+                  <span>· {t('statistics.kpi.recurring_count', { n: kpis.recurring_payment_count })}</span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
+        )}
 
-      {/* Fixed vs. variable */}
-      <div className="panel mb-5">
-        <div className="panel-head">
-          <h2 className="section-title">{t('statistics.chart.fixed_vs_variable')}</h2>
-          <Legend items={[
-            { label: t('statistics.legend.fixed'), color: 'var(--brass)' },
-            { label: t('statistics.legend.variable'), color: 'var(--ink)', opacity: 0.32 },
-          ]} />
-        </div>
-        <div className="panel-pad"><BarChart data={fvData} mode="stacked" /></div>
-      </div>
+        {tab === 'categories' && (
+          <div className="panel">
+            <div className="panel-head"><h2 className="section-title">{t('statistics.chart.by_category')}</h2></div>
+            <div className="panel-pad">
+              <RankedBars items={visibleCats} maxValue={catMax} formatValue={v => formatAmount(Math.abs(v))} />
+              {hiddenCount > 0 && (
+                <Btn variant="ghost" size="sm" className="mt-2" onClick={() => setShowAllCats(true)}>
+                  {t('statistics.cat.more', { n: hiddenCount })}
+                </Btn>
+              )}
+              <div className="stat-foot">
+                <span className="text-ink-muted text-[12.5px]">{t('statistics.legend.expenses')}</span>
+                <span className="amt amt-neg mono text-[14px]">{fmtAbs(data.categories.total)}</span>
+              </div>
+            </div>
+          </div>
+        )}
 
-      {/* Forecast — Vorschau „nächste Monate" */}
-      <ForecastPanel forecast={data.forecast} horizon={horizon} setHorizon={setHorizon} locale={locale} t={t} />
+        {tab === 'forecast' && (
+          <ForecastPanel forecast={data.forecast} horizon={horizon} setHorizon={setHorizon} locale={locale} t={t} />
+        )}
+      </div>
     </div>
   )
 }
@@ -241,6 +275,7 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
   locale: string
   t: (k: string, o?: Record<string, unknown>) => string
 }) {
+  const [showAllUpcoming, setShowAllUpcoming] = useState(false)
   // Run-rate recurring (both directions) + symmetric average of the variable one-offs.
   const recIncome = parseFloat(forecast.recurring_income)        // ≥ 0
   const recExpenses = parseFloat(forecast.recurring_expenses)    // ≤ 0 (incl. Sparen — cashflow)
@@ -256,15 +291,15 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
   const hasData = recIncome !== 0 || recExpenses !== 0 || varIncome !== 0 || varExpenses !== 0
   const upcoming = forecast.upcoming
   const signedDelta = (v: number) => (v >= 0 ? '+ ' : '− ') + formatAmount(Math.abs(v))
+  // Absolute saldo: no leading sign when positive, but a U+2212 (not the Intl hyphen) when
+  // negative, so the whole receipt shares one minus glyph + spacing.
+  const saldo = (v: number) => (v < 0 ? '− ' : '') + formatAmount(Math.abs(v))
 
   return (
     <div className="panel">
       <div className="panel-head">
-        <h2 className="section-title">
-          {t('statistics.forecast.title')}
-          <span className="text-ink-faint font-normal"> · {horizon === 12 ? t('statistics.forecast.trend') : `${horizon} ${t('statistics.forecast.horizon_unit')}`}</span>
-        </h2>
-        <div className="segmented" role="group" aria-label={t('statistics.forecast.title')}>
+        <h2 className="section-title">{t('statistics.forecast.heading')}</h2>
+        <div className="segmented" role="group" aria-label={t('statistics.forecast.heading')}>
           {HORIZONS.map(h => (
             <button key={h} className={h === horizon ? 'on' : ''} onClick={() => setHorizon(h)} aria-pressed={h === horizon}>
               {h}
@@ -277,20 +312,21 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
           <div className="fc-empty">{t('statistics.forecast.empty_series')}</div>
         ) : (
           <>
-            <Eyebrow className="mb-2.5">{t('statistics.forecast.typical_month')}</Eyebrow>
-            <div className="fc-typical">
-              <span className="fc-flow">{t('statistics.forecast.recurring_net', { value: signedDelta(recurringNet) })}</span>
-              <span className="fc-flow">{t('statistics.forecast.variable_net', { value: signedDelta(variableNet), n: months })}</span>
+            <Eyebrow className="mb-3">{t('statistics.forecast.typical_month')}</Eyebrow>
+            <div className="fc-ledger">
+              <span className="fc-ledger-label">{t('statistics.forecast.recurring_label')}</span>
+              <span className="fc-ledger-amt">{signedDelta(recurringNet)}</span>
+              <span className="fc-ledger-label">{t('statistics.forecast.variable_label', { n: months })}</span>
+              <span className="fc-ledger-amt">{signedDelta(variableNet)}</span>
+              <div className="fc-ledger-rule" />
+              <span className="fc-ledger-label is-sum">{t('statistics.forecast.net_label')}</span>
+              <span className={'fc-ledger-amt is-sum amt ' + (projectedNet >= 0 ? 'amt-pos' : 'amt-neg')}>{signedDelta(projectedNet)}</span>
             </div>
-            <div className="fc-net">
-              <span className={'fc-net-fig amt ' + (projectedNet >= 0 ? 'amt-pos' : 'amt-neg')}>
-                {t('statistics.forecast.projected_net', { value: signedDelta(projectedNet) })}
-              </span>
-            </div>
-            <div className="fc-proj">
-              <span>{t('statistics.forecast.projected_balance', { months: horizon })}</span>
-              <span className="fc-proj-fig">{formatAmount(projectedBalance)}</span>
-              <span className="fc-proj-delta">({signedDelta(delta)})</span>
+            <div className="fc-balance">
+              <span>{t('statistics.forecast.balance_today')}</span>
+              <span className="fc-balance-amt">{saldo(balance)}</span>
+              <span>{t('statistics.forecast.balance_future', { months: horizon })}</span>
+              <span className="fc-balance-amt">{saldo(projectedBalance)}<span className="fc-balance-delta">({signedDelta(delta)})</span></span>
             </div>
 
             {upcoming.length > 0 && (
@@ -299,7 +335,7 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
                   <Eyebrow>{t('statistics.forecast.upcoming')}</Eyebrow>
                   <Amount value={forecast.upcoming_total} className="text-[13.5px]" />
                 </div>
-                {upcoming.map((it, i) => (
+                {(showAllUpcoming ? upcoming : upcoming.slice(0, UPCOMING_PREVIEW)).map((it, i) => (
                   <div className="fc-row" key={it.name + it.date + i}>
                     <span className="fc-row-date">{formatDay(it.date, locale)}</span>
                     <span className="fc-row-name">
@@ -309,6 +345,11 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
                     <Amount value={it.amount} className="fc-row-amt" />
                   </div>
                 ))}
+                {!showAllUpcoming && upcoming.length > UPCOMING_PREVIEW && (
+                  <Btn variant="ghost" size="sm" className="mt-2" onClick={() => setShowAllUpcoming(true)}>
+                    {t('statistics.cat.more', { n: upcoming.length - UPCOMING_PREVIEW })}
+                  </Btn>
+                )}
               </div>
             )}
           </>
