@@ -45,6 +45,31 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Ansparen"])
   end
 
+  # Direction composes with scope: it is applied AFTER in_scope, so it filters the surviving
+  # cross-scope legs by their REAL sign without bypassing the §4a exclusion.
+  it "composes direction with scope=privat (filters surviving cross-scope legs by sign)" do
+    personal = create(:account, bank_connection: bc, shared: false)
+    shared   = create(:account, bank_connection: bc, shared: true)
+    g_out = SecureRandom.uuid
+    g_in  = SecureRandom.uuid
+    # privat → joint: the personal leg (−) survives in privat as a real OUTFLOW
+    create(:transaction_record, account: personal, amount: -70, remittance: "Raus privat",
+                                transfer_group_id: g_out, transfer_counterpart_account: shared)
+    create(:transaction_record, account: shared, amount: 70, remittance: "Rein joint",
+                                transfer_group_id: g_out, transfer_counterpart_account: personal)
+    # joint → privat: the personal leg (+) survives in privat as a real INFLOW
+    create(:transaction_record, account: personal, amount: 50, remittance: "Rein privat",
+                                transfer_group_id: g_in, transfer_counterpart_account: shared)
+    create(:transaction_record, account: shared, amount: -50, remittance: "Raus joint",
+                                transfer_group_id: g_in, transfer_counterpart_account: personal)
+
+    get api_v1_transactions_path, params: { scope: "privat", direction: "in" }, as: :json
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Rein privat"])
+
+    get api_v1_transactions_path, params: { scope: "privat", direction: "out" }, as: :json
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Raus privat"])
+  end
+
   # §4a fix — an orphaned transfer leg (transfer_group_id still set, but the counterpart
   # account was deleted ⇒ transfer_counterpart_account_id NULL) is a real flow, not a
   # net-zero internal transfer, and must stay visible. The exclusion keys on the
@@ -92,6 +117,43 @@ RSpec.describe "Api::V1::Transactions", type: :request do
 
     get api_v1_transactions_path, params: { search: "REWE" }, as: :json
     expect(response.parsed_body["transactions"].length).to eq(1)
+  end
+
+  describe "direction filter (Ein/Aus by amount sign)" do
+    before do
+      create(:transaction_record, account: account, amount: 2500.00, remittance: "Gehalt")
+      create(:transaction_record, account: account, amount: -42.50, remittance: "REWE")
+    end
+
+    it "returns only inflows for direction=in" do
+      get api_v1_transactions_path, params: { direction: "in" }, as: :json
+      expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Gehalt"])
+    end
+
+    it "returns only outflows for direction=out" do
+      get api_v1_transactions_path, params: { direction: "out" }, as: :json
+      expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["REWE"])
+    end
+
+    it "returns everything when direction is absent or 'all'" do
+      get api_v1_transactions_path, as: :json
+      expect(response.parsed_body["transactions"].length).to eq(2)
+
+      get api_v1_transactions_path, params: { direction: "all" }, as: :json
+      expect(response.parsed_body["transactions"].length).to eq(2)
+    end
+
+    it "ignores an unknown direction value (no filter)" do
+      get api_v1_transactions_path, params: { direction: "bogus" }, as: :json
+      expect(response.parsed_body["transactions"].length).to eq(2)
+    end
+
+    it "composes with another filter (search + direction=in)" do
+      create(:transaction_record, account: account, amount: 9.99, remittance: "Gehalt Bonus", creditor_name: nil, debtor_name: "Boss")
+      get api_v1_transactions_path, params: { direction: "in", search: "Gehalt" }, as: :json
+      remittances = response.parsed_body["transactions"].map { |t| t["remittance"] }
+      expect(remittances).to match_array(["Gehalt", "Gehalt Bonus"])
+    end
   end
 
   describe "POST /categorize" do

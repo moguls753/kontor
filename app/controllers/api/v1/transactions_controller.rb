@@ -14,6 +14,11 @@ module Api
         scope = scope.where(booking_date: params[:from]..) if params[:from].present?
         scope = scope.where(booking_date: ..params[:to]) if params[:to].present?
         scope = scope.uncategorized if params[:uncategorized] == "true"
+        # Ein/Aus direction by amount sign (credits = income/Ein, debits = expense/Aus).
+        # Unknown/"all"/absent ⇒ no filter. Applied after in_scope so a surviving
+        # cross-scope transfer leg's real sign classifies it correctly.
+        scope = scope.credits if params[:direction] == "in"
+        scope = scope.debits if params[:direction] == "out"
         scope = scope.where("remittance LIKE ? OR creditor_name LIKE ? OR debtor_name LIKE ?",
           "%#{params[:search]}%", "%#{params[:search]}%", "%#{params[:search]}%") if params[:search].present?
 

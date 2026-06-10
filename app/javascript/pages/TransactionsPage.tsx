@@ -28,6 +28,7 @@ export default function TransactionsPage() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [uncategorized, setUncategorized] = useState(false)
+  const [direction, setDirection] = useState<'all' | 'in' | 'out'>('all')
   const [page, setPage] = useState(1)
 
   // Dropdown data
@@ -50,7 +51,7 @@ export default function TransactionsPage() {
   }, [search])
 
   // Reset page on filter change
-  useEffect(() => { setPage(1) }, [debouncedSearch, accountId, categoryId, dateFrom, dateTo, uncategorized, scope])
+  useEffect(() => { setPage(1) }, [debouncedSearch, accountId, categoryId, dateFrom, dateTo, uncategorized, direction, scope])
 
   // Fetch transactions
   useEffect(() => {
@@ -62,6 +63,7 @@ export default function TransactionsPage() {
     if (dateFrom) params.set('from', dateFrom)
     if (dateTo) params.set('to', dateTo)
     if (uncategorized) params.set('uncategorized', 'true')
+    if (direction !== 'all') params.set('direction', direction)
     withScope(params, scope)
     params.set('page', String(page))
     params.set('per', String(PER))
@@ -87,7 +89,7 @@ export default function TransactionsPage() {
       .finally(() => setIsLoading(false))
 
     return () => controller.abort()
-  }, [debouncedSearch, accountId, categoryId, dateFrom, dateTo, uncategorized, page, retryKey, scope])
+  }, [debouncedSearch, accountId, categoryId, dateFrom, dateTo, uncategorized, direction, page, retryKey, scope])
 
   // In "privat" the shared (Gemeinschafts-) accounts are out of scope, so listing
   // them in the filter would only yield empty results — drop them from the options.
@@ -111,7 +113,7 @@ export default function TransactionsPage() {
     return map[code] || code.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
   }
 
-  const hasFilters = !!(search || accountId || categoryId || dateFrom || dateTo || uncategorized)
+  const hasFilters = !!(search || accountId || categoryId || dateFrom || dateTo || uncategorized || direction !== 'all')
 
   const clearFilters = () => {
     setSearch('')
@@ -120,6 +122,7 @@ export default function TransactionsPage() {
     setDateFrom('')
     setDateTo('')
     setUncategorized(false)
+    setDirection('all')
   }
 
   const fromIdx = meta.total === 0 ? 0 : (meta.page - 1) * meta.per + 1
@@ -150,6 +153,18 @@ export default function TransactionsPage() {
         )}
         <input type="date" className="field w-auto min-w-[150px]" value={dateFrom} onChange={e => setDateFrom(e.target.value)} title={t('transactions.date_from')} />
         <input type="date" className="field w-auto min-w-[150px]" value={dateTo} onChange={e => setDateTo(e.target.value)} title={t('transactions.date_to')} />
+        <div className="segmented w-fit" role="group" aria-label={t('transactions.filter_direction')}>
+          {(['all', 'in', 'out'] as const).map(code => (
+            <button
+              key={code}
+              className={'px-4 font-sans ' + (direction === code ? 'on' : '')}
+              aria-pressed={direction === code}
+              onClick={() => setDirection(code)}
+            >
+              {t(`transactions.direction_${code}`)}
+            </button>
+          ))}
+        </div>
         <button
           onClick={() => setUncategorized(v => !v)}
           className={'btn btn-sm ' + (uncategorized ? 'btn-secondary border-brass text-brass-ink bg-brass-soft' : 'btn-ghost')}

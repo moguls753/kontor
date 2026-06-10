@@ -160,6 +160,10 @@ export default {
     showing: 'Showing {{from}}–{{to}} of {{total}}',
     categorize_privacy: 'Privacy-first · remittance text only',
     uncategorized_chip: 'Uncategorised',
+    filter_direction: 'Direction',
+    direction_all: 'All',
+    direction_in: 'In',
+    direction_out: 'Out',
   },
   accounts: {
     title: 'Accounts',

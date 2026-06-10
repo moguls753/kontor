@@ -160,6 +160,10 @@ export default {
     showing: '{{from}}–{{to}} von {{total}}',
     categorize_privacy: 'Datenschutzorientiert · nur Verwendungszweck',
     uncategorized_chip: 'Nicht kategorisiert',
+    filter_direction: 'Richtung',
+    direction_all: 'Alle',
+    direction_in: 'Ein',
+    direction_out: 'Aus',
   },
   accounts: {
     title: 'Konten',
