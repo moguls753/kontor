@@ -183,4 +183,197 @@ RSpec.describe TransferMatcher do
       expect(out.transfer_group_id).to be_nil
     end
   end
+
+  # PayPal-conduit recognition: a bank↔PayPal flow is a one-legged, same-sign
+  # transfer to the user's PayPal ASSET account. Classified by COUNTERPARTY
+  # (PayPal Europe ...200E / "PayPal Europe"), never by 1:1 amount matching.
+  describe "PayPal conduit (one-legged transfer to the PayPal account)" do
+    # The user's PayPal account, identified by its bank_connection provider.
+    let(:paypal_bc) { create(:bank_connection, :paypal, user: user) }
+    let!(:paypal) { create(:account, bank_connection: paypal_bc, account_uid: "paypal", iban: nil, name: "PayPal", role_locked: true) }
+
+    it "marks a giro→PayPal funding Lastschrift (debit) as a transfer to the PayPal account" do
+      # The real funding-Lastschrift shape: −188,95 to PayPal Europe S.à r.l.,
+      # creditor IBAN ending …200E.
+      funding = leg(account: privat, amount: -188.95,
+        creditor_name: "PayPal Europe S.a.r.l. et Cie S.C.A",
+        creditor_iban: "LU89751000135104200E",
+        remittance: "PP.6150.PP TRMNL")
+
+      subject.match
+
+      funding.reload
+      expect(funding.transfer_counterpart_account_id).to eq(paypal.id)
+      expect(funding.transfer_group_id).to be_present
+    end
+
+    it "marks a PayPal→giro withdrawal (credit) as a transfer to the PayPal account" do
+      # User withdraws their PayPal balance back to the bank: a giro CREDIT whose
+      # DEBTOR is PayPal Europe.
+      withdrawal = leg(account: privat, amount: 250.00,
+        creditor_name: nil, debtor_name: "PayPal Europe S.a.r.l. et Cie S.C.A",
+        debtor_iban: "LU89751000135104200E", remittance: "PayPal Auszahlung")
+
+      subject.match
+
+      withdrawal.reload
+      expect(withdrawal.transfer_counterpart_account_id).to eq(paypal.id)
+      expect(withdrawal.transfer_group_id).to be_present
+    end
+
+    it "matches by counterparty NAME when the IBAN is missing (fallback)" do
+      funding = leg(account: privat, amount: -42.00,
+        creditor_name: "PayPal Europe S.a.r.l. et Cie S.C.A", creditor_iban: nil,
+        remittance: "PP.1234.PP")
+
+      subject.match
+
+      expect(funding.reload.transfer_counterpart_account_id).to eq(paypal.id)
+    end
+
+    it "does NOT touch the PayPal account's OWN purchase row (it stays an expense, counted once)" do
+      # The actual −188,95 "TRMNL" purchase lives ON the PayPal account. It must
+      # NOT be reclassified — it is the single expense the dashboard should show.
+      purchase = leg(account: paypal, amount: -188.95, creditor_name: "TRMNL", remittance: "TRMNL")
+
+      subject.match
+
+      purchase.reload
+      expect(purchase.transfer_group_id).to be_nil
+      expect(purchase.transfer_counterpart_account_id).to be_nil
+    end
+
+    it "is idempotent — a second run keeps the same group_id" do
+      funding = leg(account: privat, amount: -188.95,
+        creditor_name: "PayPal Europe S.a.r.l. et Cie S.C.A", creditor_iban: "LU89751000135104200E")
+
+      subject.match
+      group_id = funding.reload.transfer_group_id
+      expect(group_id).to be_present
+
+      described_class.new(user).match
+
+      expect(funding.reload.transfer_group_id).to eq(group_id)
+      expect(funding.transfer_counterpart_account_id).to eq(paypal.id)
+    end
+
+    it "does NOT mark a 'PayPal Europe'-named row carrying a NON-200E IBAN (IBAN is authoritative)" do
+      # A PayPal-branded service/fee billed from a different IBAN is NOT a wallet
+      # top-up — the IBAN, when present, overrides the name fallback.
+      fee = leg(account: privat, amount: -9.99,
+        creditor_name: "PayPal Europe S.a.r.l. et Cie S.C.A",
+        creditor_iban: "DE12345678901234567890")
+
+      subject.match
+
+      fee.reload
+      expect(fee.transfer_group_id).to be_nil
+      expect(fee.transfer_counterpart_account_id).to be_nil
+    end
+
+    it "matches the canonical parenthesised name 'PayPal (Europe) S.à r.l.' on an IBAN-less row" do
+      funding = leg(account: privat, amount: -19.00, creditor_iban: nil,
+        creditor_name: "PayPal (Europe) S.à r.l. et Cie, S.C.A.", remittance: "PP.9999.PP")
+
+      subject.match
+
+      expect(funding.reload.transfer_counterpart_account_id).to eq(paypal.id)
+    end
+
+    it "preserves a user category on a funding leg it marks (only the transfer FKs change)" do
+      cat = create(:category, user: user)
+      funding = leg(account: privat, amount: -188.95, category: cat,
+        creditor_name: "PayPal Europe S.a.r.l. et Cie S.C.A", creditor_iban: "LU89751000135104200E")
+
+      subject.match
+
+      funding.reload
+      expect(funding.transfer_counterpart_account_id).to eq(paypal.id)
+      expect(funding.category_id).to eq(cat.id)
+    end
+  end
+
+  describe "PayPal conduit guard — no PayPal account" do
+    # NO PayPal connection here: paypal_account_id is nil, so the pass is inert.
+    it "leaves a giro→PayPal debit as a real expense when the user has no PayPal account" do
+      funding = leg(account: privat, amount: -188.95,
+        creditor_name: "PayPal Europe S.a.r.l. et Cie S.C.A", creditor_iban: "LU89751000135104200E")
+
+      subject.match
+
+      funding.reload
+      expect(funding.transfer_group_id).to be_nil
+      expect(funding.transfer_counterpart_account_id).to be_nil
+    end
+
+    it "leaves a non-PayPal REWE debit untouched even with a PayPal account present" do
+      create(:account, bank_connection: create(:bank_connection, :paypal, user: user),
+        account_uid: "paypal", iban: nil, name: "PayPal", role_locked: true)
+      rewe = leg(account: privat, amount: -188.95, creditor_name: "REWE Markt GmbH",
+        creditor_iban: "DE99999999999999999999")
+
+      subject.match
+
+      rewe.reload
+      expect(rewe.transfer_group_id).to be_nil
+      expect(rewe.transfer_counterpart_account_id).to be_nil
+    end
+  end
+
+  # The conduit pass must not disturb the existing +/− matcher: the easybank
+  # giro −X ↔ card +X settlement still pairs as a real two-leg transfer.
+  describe "does not break the existing two-leg (easybank-style) settlement matching" do
+    it "still pairs a giro −X with the card +X even when a PayPal account exists" do
+      # A PayPal account is present, but neither settlement leg faces PayPal Europe.
+      create(:account, bank_connection: create(:bank_connection, :paypal, user: user),
+        account_uid: "paypal", iban: nil, name: "PayPal", role_locked: true)
+      out = leg(account: privat, amount: -300.00, creditor_iban: gemeinschaft.iban)
+      inn = leg(account: gemeinschaft, amount: 300.00, debtor_iban: privat.iban)
+
+      subject.match
+
+      out.reload
+      inn.reload
+      expect(out.transfer_group_id).to be_present
+      expect(out.transfer_group_id).to eq(inn.transfer_group_id)
+      expect(out.transfer_counterpart_account_id).to eq(gemeinschaft.id)
+      expect(inn.transfer_counterpart_account_id).to eq(privat.id)
+    end
+  end
+
+  # Integration with the §4a exclusion: once marked, the funding leg's counterpart
+  # is the PayPal account, so in_scope nets it out → no double-count, hidden from
+  # the list (under both Familie and Privat, since PayPal is personal by default).
+  describe "in_scope nets the marked conduit leg (no double-count)" do
+    let(:paypal_bc) { create(:bank_connection, :paypal, user: user) }
+    let!(:paypal) { create(:account, bank_connection: paypal_bc, account_uid: "paypal", iban: nil, name: "PayPal", role_locked: true) }
+
+    def in_scope(scope, ids)
+      return scope.none if ids.empty?
+
+      scope.where(account_id: ids)
+           .where("transfer_counterpart_account_id IS NULL OR transfer_counterpart_account_id NOT IN (?)", ids)
+    end
+
+    it "excludes the funding Lastschrift from the user's flows after matching (Familie + Privat)" do
+      funding = leg(account: privat, amount: -188.95,
+        creditor_name: "PayPal Europe S.a.r.l. et Cie S.C.A", creditor_iban: "LU89751000135104200E")
+      purchase = leg(account: paypal, amount: -188.95, creditor_name: "TRMNL")
+
+      subject.match
+
+      # Familie = all accounts in scope → funding leg's counterpart (PayPal) in
+      # scope → excluded; the PayPal purchase stays (counted once).
+      familie_ids = user.accounts.pluck(:id)
+      familie = in_scope(TransactionRecord.all, familie_ids)
+      expect(familie).to include(purchase)
+      expect(familie).not_to include(funding)
+
+      # Privat = personal accounts (PayPal is personal) → still in scope → still excluded.
+      privat_ids = user.accounts.personal.pluck(:id)
+      expect(privat_ids).to include(paypal.id)
+      privat_scope = in_scope(TransactionRecord.all, privat_ids)
+      expect(privat_scope).not_to include(funding)
+    end
+  end
 end

@@ -27,6 +27,27 @@ require "set"
 # transfer_counterpart_account_id is NULL (the counterpart account was deleted →
 # FK nullified the column) is un-matched, so the surviving leg counts as a flow
 # again.
+#
+# PayPal conduit (standard double-entry model — Firefly III / QuickBooks):
+# PayPal is an ASSET account the user funds and withdraws from, so a bank↔PayPal
+# flow is a TRANSFER, not a flow. But unlike a normal own-account transfer it is
+# ONE-LEGGED and SAME-SIGN: the giro Lastschrift (−X, "PayPal Europe S.à r.l.")
+# funds the wallet, yet PayPal NEVER books a matching +X (it doesn't record the
+# funding-in). pair_new_legs only ever pairs a −X with a +X on another account,
+# so this lone debit never enters a pair → it counts as an expense ALONGSIDE the
+# real PayPal purchase = double-count. mark_paypal_conduit_legs fixes this: it
+# classifies a giro leg facing PayPal Europe as a transfer to the user's PayPal
+# account by COUNTERPARTY (not by 1:1 amount matching — funding is batched and
+# FX'd, so amounts never line up), setting transfer_counterpart_account_id =
+# the PayPal account. in_scope/flow_bucket then net it (§4a keys on that FK, not
+# on group cardinality), so it stops counting and drops out of the list.
+#
+# ⚠️ TRADE-OFF (accepted): netting is by-counterparty with no offsetting expense
+# required. If a bank-funded PayPal payment's purchase is NOT on the PayPal account
+# (guest/express checkout, a scraper gap, or giro history predating PayPal data),
+# the funding leg is netted but no purchase carries the spend → that expense
+# silently UNDERcounts. Inherent to the Firefly-style model + scrape completeness;
+# spot-check after the first re-run (Σ marked giro→PayPal ≈ Σ PayPal outflows).
 class TransferMatcher
   # Booking lag between two accounts: real bookings run 0–3 days apart; the user's
   # own data lands same-day. ±4 days is the safe window (§7).
@@ -34,6 +55,16 @@ class TransferMatcher
 
   # Remittance tokens that corroborate an internal move (tertiary, weak signal).
   TRANSFER_HINTS = /\b(umbuchung|übertrag|uebertrag|transfer|eigenübertrag)\b/i
+
+  # PayPal Europe S.à r.l.'s SEPA collection IBAN ends in "200E" (e.g.
+  # LU89751000135104200E). It is the counterparty on every funding Lastschrift /
+  # withdrawal credit — stable and language-independent, so the PRIMARY signal.
+  PAYPAL_IBAN_SUFFIX = "200E"
+  # Fallback for rows missing the counterpart IBAN: the counterparty name. Tolerates
+  # the canonical legal form "PayPal (Europe) S.à r.l. …" (parenthesised) as well as
+  # "PayPal Europe", but stays specific (a bare "paypal" never matches) so a normal
+  # merchant is never reclassified.
+  PAYPAL_NAME = /paypal\b.{0,3}\beurope/i
 
   def initialize(user)
     @user = user
@@ -43,6 +74,7 @@ class TransferMatcher
     TransactionRecord.transaction do
       unmatch_orphaned_legs
       pair_new_legs
+      mark_paypal_conduit_legs
     end
   end
 
@@ -116,6 +148,62 @@ class TransferMatcher
       out.update!(transfer_group_id: group_id, transfer_counterpart_account_id: match.account_id)
       match.update!(transfer_group_id: group_id, transfer_counterpart_account_id: out.account_id)
     end
+  end
+
+  # PayPal conduit (one-legged, both directions, idempotent). For each leg that is
+  # NOT on the PayPal account and is not already a transfer, if its counterparty
+  # (by sign: creditor on a debit/funding, debtor on a credit/withdrawal) is
+  # PayPal Europe, mark it as a transfer TO the PayPal account. There is no second
+  # leg to share a group with, so we mint a fresh per-leg group_id; in_scope and
+  # flow_bucket read only transfer_counterpart_account_id, so a lone leg suffices.
+  #
+  # Guards: a no-op unless the user actually HAS a PayPal account (a one-off "pay
+  # via PayPal" without a wallet stays a real expense); never touches PayPal's own
+  # purchase/income rows; skips already-matched legs (internal_transfer?) so a
+  # re-run keeps the same group_id and the +/− matcher's real transfers are left
+  # alone. Runs AFTER pair_new_legs so a genuine two-leg transfer is claimed first
+  # (defensive — PayPal books no funding +X, so they never actually collide).
+  def mark_paypal_conduit_legs
+    return unless paypal_account_id
+
+    legs.each do |t|
+      next if t.account_id == paypal_account_id
+      next if t.internal_transfer?
+      next unless paypal_counterparty?(t)
+
+      t.update!(
+        transfer_group_id: SecureRandom.uuid,
+        transfer_counterpart_account_id: paypal_account_id
+      )
+    end
+  end
+
+  # The single PayPal account's id, identified by its bank_connection provider
+  # (the typed enum set at connect time) — NOT the renameable name or the inferred
+  # role. Memoized so the join runs once, not per-leg. nil ⇒ no PayPal account ⇒
+  # the whole conduit pass is inert.
+  def paypal_account_id
+    return @paypal_account_id if defined?(@paypal_account_id)
+
+    @paypal_account_id = @user.accounts.joins(:bank_connection)
+                              .where(bank_connections: { provider: "paypal" })
+                              .pick(:id)
+  end
+
+  # True when this giro leg's counterparty is PayPal Europe. By sign: a debit
+  # (funding) names PayPal as the CREDITOR; a credit (withdrawal) names it as the
+  # DEBTOR. Match the counterpart IBAN ending "200E" (primary) or the counterpart
+  # name "PayPal Europe" (fallback for IBAN-less rows).
+  def paypal_counterparty?(t)
+    debit = t.amount.negative?
+    cp_iban = normalize_iban(debit ? t.creditor_iban : t.debtor_iban)
+    # IBAN is authoritative when present: a row carrying a counterpart IBAN is PayPal
+    # only if that IBAN is the "200E" collection account. A different IBAN with a
+    # "PayPal …" name (a PayPal-branded service fee / card settlement) is NOT a wallet
+    # top-up and must stay a real flow. Fall back to the name ONLY for IBAN-less rows.
+    return cp_iban.upcase.end_with?(PAYPAL_IBAN_SUFFIX) if cp_iban.present?
+
+    (debit ? t.creditor_name : t.debtor_name).to_s.match?(PAYPAL_NAME)
   end
 
   # `bucket` is already filtered to the same currency and the exact opposite
