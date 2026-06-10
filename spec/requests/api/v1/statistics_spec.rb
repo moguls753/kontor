@@ -361,6 +361,26 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       expect(fc["variable_income"].to_f).to eq(100.0)      # +200 ÷ 2
     end
 
+    # Window-start clamp (user rule 2026-06-10): never average a period the DATA-WEAKEST
+    # in-scope account didn't cover. A long-history account averaged against a freshly-added
+    # one must clamp to the YOUNGEST account's first month — else old months (which the young
+    # account, e.g. a later-added Giro, never covered) skew the rate / leak phantom income.
+    it "clamps the variable window to the youngest in-scope account's first month" do
+      old_acc = create(:account, bank_connection: bc, balance_amount: 1000)
+      new_acc = create(:account, bank_connection: bc, balance_amount: 500)
+      bom = Date.current.beginning_of_month
+      # old account: a non-recurring debit in each of the last 4 full months
+      (1..4).each { |i| create(:transaction_record, account: old_acc, amount: -100, booking_date: bom.prev_month(i) + 9.days) }
+      # young account: only the most-recent full month → window must clamp to it (÷1, not ÷4)
+      create(:transaction_record, account: new_acc, amount: -300, booking_date: bom.prev_month(1) + 9.days)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      fc = response.parsed_body["forecast"]
+
+      expect(fc["avg_window_months"]).to eq(1)             # clamped to the young account's 1 month, not 4
+      expect(fc["variable_expenses"].to_f).to eq(-400.0)   # only month −1: −100 (old) + −300 (new), ÷1
+    end
+
     # upcoming = active in-scope series with next_expected_on in the next 30 days,
     # ONE row per series, sorted by date asc; upcoming_total = Σ signed amount.
     it "lists upcoming payments within 30 days, one row per series, sorted, with a signed total" do

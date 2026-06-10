@@ -215,15 +215,25 @@ module Api
       # rows are NOT here (they're the run-rate) → no double-count.
       #
       # ⚠️ Divisor = months that actually HAVE in-scope data (distinct YYYY-MM with ≥1
-      # in-scope tx), NEVER a flat FORECAST_WINDOW_MONTHS. Months with no data (before the
-      # accounts existed) must NOT be averaged in, or the rate is diluted toward zero. A
-      # month WITH data but no variable flow IS a real €0 month and counts (pulls the avg
-      # down).
+      # in-scope tx), NEVER a flat FORECAST_WINDOW_MONTHS. A month WITH data but no variable
+      # flow IS a real €0 month and counts (pulls the avg down).
+      #
+      # ⚠️ The window START is also clamped to the LATEST first-transaction among in-scope
+      # accounts that have history, capped at FORECAST_WINDOW_MONTHS — we never average a
+      # period the DATA-WEAKEST account didn't cover yet. Otherwise a long-history expense
+      # card (PayPal/easybank back ~1yr) averaged against a younger income account (a Giro
+      # added later) skews the rate — AND pre-Giro months leak phantom "income" (credit-card
+      # bill settlements whose paying leg isn't tracked yet → can't be netted). Empty accounts
+      # (no tx) don't constrain; the clamp self-relaxes to the full window once every account
+      # has ≥FORECAST_WINDOW_MONTHS of history (user rule 2026-06-10).
       def variable_averages(ids)
-        from   = Date.current.beginning_of_month.prev_month(FORECAST_WINDOW_MONTHS)
-        to     = Date.current.beginning_of_month - 1.day
+        cap_from = Date.current.beginning_of_month.prev_month(FORECAST_WINDOW_MONTHS)
+        to       = Date.current.beginning_of_month - 1.day
+        latest_start = Current.user.transaction_records.where(account_id: ids)
+                              .group(:account_id).minimum(:booking_date).values.compact.max
+        from   = latest_start ? [ cap_from, latest_start.beginning_of_month ].max : cap_from
         scoped = in_scope(Current.user.transaction_records.in_period(from, to), ids)
-        months = scoped.distinct.count(MONTH) # months WITH data — never a flat 6
+        months = scoped.distinct.count(MONTH) # months WITH data in the (clamped) window
         divisor = [ months, 1 ].max
         nonrec = scoped.where(recurring_series_id: nil)
         {

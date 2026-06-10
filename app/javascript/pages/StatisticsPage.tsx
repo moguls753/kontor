@@ -1,4 +1,4 @@
-import { useState, useEffect, type KeyboardEvent } from 'react'
+import { useState, useEffect, Fragment, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useScope, withScope } from '../lib/scope'
@@ -12,7 +12,6 @@ import { PERIOD_KEYS, periodRange, formatMonth, readPeriod, type PeriodKey } fro
 const TOP_CATEGORIES = 8
 const UPCOMING_PREVIEW = 7
 const HORIZONS = [3, 6, 12] as const
-type Horizon = (typeof HORIZONS)[number]
 
 const TABS = ['trends', 'categories', 'forecast'] as const
 type Tab = (typeof TABS)[number]
@@ -27,7 +26,6 @@ export default function StatisticsPage() {
   const { scope } = useScope()
   const [period, setPeriod] = useState<PeriodKey>(readPeriod)
   const [showAllCats, setShowAllCats] = useState(false)
-  const [horizon, setHorizon] = useState<Horizon>(3)
   const [tab, setTab] = useState<Tab>(readTab)
   const [data, setData] = useState<StatisticsData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -261,17 +259,15 @@ export default function StatisticsPage() {
         )}
 
         {tab === 'forecast' && (
-          <ForecastPanel forecast={data.forecast} horizon={horizon} setHorizon={setHorizon} locale={locale} t={t} />
+          <ForecastPanel forecast={data.forecast} locale={locale} t={t} />
         )}
       </div>
     </div>
   )
 }
 
-function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
+function ForecastPanel({ forecast, locale, t }: {
   forecast: StatForecast
-  horizon: Horizon
-  setHorizon: (h: Horizon) => void
   locale: string
   t: (k: string, o?: Record<string, unknown>) => string
 }) {
@@ -285,8 +281,6 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
   const variableNet = varIncome + varExpenses
   const projectedNet = recurringNet + variableNet
   const balance = parseFloat(forecast.current_balance)
-  const projectedBalance = balance + projectedNet * horizon
-  const delta = projectedNet * horizon
   const months = forecast.avg_window_months
   const hasData = recIncome !== 0 || recExpenses !== 0 || varIncome !== 0 || varExpenses !== 0
   const upcoming = forecast.upcoming
@@ -299,13 +293,6 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
     <div className="panel">
       <div className="panel-head">
         <h2 className="section-title">{t('statistics.forecast.heading')}</h2>
-        <div className="segmented" role="group" aria-label={t('statistics.forecast.heading')}>
-          {HORIZONS.map(h => (
-            <button key={h} className={h === horizon ? 'on' : ''} onClick={() => setHorizon(h)} aria-pressed={h === horizon}>
-              {h}
-            </button>
-          ))}
-        </div>
       </div>
       <div className="panel-pad">
         {!hasData ? (
@@ -329,8 +316,12 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
             <div className="fc-balance">
               <span>{t('statistics.forecast.balance_today')}</span>
               <span className="fc-balance-amt">{saldo(balance)}</span>
-              <span>{t('statistics.forecast.balance_future', { months: horizon })}</span>
-              <span className="fc-balance-amt">{saldo(projectedBalance)}<span className="fc-balance-delta">({signedDelta(delta)})</span></span>
+              {HORIZONS.map(h => (
+                <Fragment key={h}>
+                  <span>{t('statistics.forecast.balance_future', { months: h })}</span>
+                  <span className="fc-balance-amt">{saldo(balance + projectedNet * h)}<span className="fc-balance-delta">({signedDelta(projectedNet * h)})</span></span>
+                </Fragment>
+              ))}
             </div>
 
             {upcoming.length > 0 && (
