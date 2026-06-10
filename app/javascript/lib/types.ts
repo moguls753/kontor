@@ -165,8 +165,6 @@ export interface StatKpis {
   fixed_monthly: string
   recurring_payment_count: number
   top_category: { name: string | null; amount: string } | null
-  savings_rate_prev: number | null
-  avg_monthly_expenses_prev: string | null
 }
 
 export interface StatCashflowPoint {
@@ -191,9 +189,24 @@ export interface StatCategoryItem {
 }
 
 export interface StatCategories {
-  spending: StatCategoryItem[]
-  transfers: StatCategoryItem[]
-  total_spent: string
+  items: StatCategoryItem[]
+  total: string
+}
+
+export interface StatForecastItem {
+  name: string
+  date: string
+  amount: string
+  direction: 'inflow' | 'outflow'
+}
+
+export interface StatForecast {
+  expected_monthly_income: string
+  expected_monthly_fixed: string
+  avg_monthly_variable: string
+  current_balance: string
+  upcoming: StatForecastItem[]
+  upcoming_total: string
 }
 
 export interface StatisticsData {
@@ -203,4 +216,5 @@ export interface StatisticsData {
   cashflow: StatCashflowPoint[]
   fixed_variable: StatFixedVariablePoint[]
   categories: StatCategories
+  forecast: StatForecast
 }

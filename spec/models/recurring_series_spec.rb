@@ -91,6 +91,54 @@ RSpec.describe RecurringSeries, type: :model do
     expect(tx.reload.recurring_series_id).to be_nil
   end
 
+  # with_member_in: shared "≥1 in-scope member (or no members)" filter, keyed on
+  # account MEMBERSHIP only (NOT the §4a net-zero exclusion). Used by both the
+  # recurring index and the statistics forecast (A6).
+  describe ".with_member_in" do
+    let(:bc) { create(:bank_connection) }
+    let(:user) { bc.user }
+    let(:personal) { create(:account, bank_connection: bc, shared: false) }
+    let(:shared)   { create(:account, bank_connection: bc, shared: true) }
+
+    it "keeps a series with a member booked on an in-scope account" do
+      s = create(:recurring_series, user: user, canonical_name: "On Personal")
+      create(:transaction_record, account: personal, recurring_series: s, amount: -12)
+
+      expect(described_class.with_member_in([ personal.id ])).to include(s)
+    end
+
+    it "drops a series whose members are all out of scope" do
+      s = create(:recurring_series, user: user, canonical_name: "On Shared")
+      create(:transaction_record, account: shared, recurring_series: s, amount: -15)
+
+      expect(described_class.with_member_in([ personal.id ])).not_to include(s)
+    end
+
+    it "keeps a series that has no members at all" do
+      s = create(:recurring_series, user: user, canonical_name: "No Members")
+
+      expect(described_class.with_member_in([ personal.id ])).to include(s)
+    end
+
+    # A personal→personal transfer has BOTH legs in scope; keying on membership (not
+    # the §4a net-zero exclusion) keeps the series visible (it would otherwise have
+    # zero in-scope members and vanish).
+    it "keeps a personal→personal transfer series (membership, not net-zero, decides)" do
+      other = create(:account, bank_connection: bc, shared: false)
+      s = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Sparplan")
+      create(:transaction_record, account: personal, recurring_series: s, amount: -250,
+        transfer_group_id: "tg-priv", transfer_counterpart_account: other)
+
+      expect(described_class.with_member_in([ personal.id, other.id ])).to include(s)
+    end
+
+    it "returns none for empty ids" do
+      create(:recurring_series, user: user)
+      expect(described_class.with_member_in([])).to eq([])
+      expect(described_class.with_member_in(nil)).to eq([])
+    end
+  end
+
   # flow_bucket: three töpfe from UNAMBIGUOUS signals only — direction + own-account
   # membership. No "is this savings?" guessing (dropped). expense / income / transfer.
   describe "#flow_bucket" do

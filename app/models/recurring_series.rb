@@ -68,6 +68,27 @@ class RecurringSeries < ApplicationRecord
   scope :outflows,  -> { where(direction: "outflow") }
   scope :inflows,   -> { where(direction: "inflow") }
 
+  # §4b / A6 — series visible under a given account scope: keep a series that has
+  # ≥1 member booked on one of `account_ids`, OR has no members at all (nothing to
+  # place out of scope). Keyed on account MEMBERSHIP ONLY, NOT the §4a in_scope
+  # net-zero exclusion: a personal→personal transfer has BOTH legs in scope, so
+  # the net-zero rule would leave it zero in-scope members and wrongly hide the
+  # whole series — membership keeps it visible. Empty ids → none. Subqueries (not
+  # plucked arrays) so empty results never produce invalid `IN ()` SQL.
+  scope :with_member_in, ->(account_ids) {
+    return none if account_ids.blank?
+
+    in_scope_series = TransactionRecord.where(account_id: account_ids)
+                                       .where.not(recurring_series_id: nil)
+                                       .select(:recurring_series_id)
+    any_member = TransactionRecord.where.not(recurring_series_id: nil)
+                                  .select(:recurring_series_id)
+    where(
+      "recurring_series.id IN (#{in_scope_series.to_sql}) " \
+      "OR recurring_series.id NOT IN (#{any_member.to_sql})"
+    )
+  }
+
   # #9 — single source of truth for the series fingerprint. Both the detector and
   # the rename-on-save callback derive the fingerprint here so name and fingerprint
   # can never desync. Formula copied verbatim from the detector → byte-identical
@@ -87,8 +108,9 @@ class RecurringSeries < ApplicationRecord
   #   • income   — money coming in (inflow).
   #   • expense  — money going out (everything else: contracts, subscriptions, savings plans).
   #
-  # `members` may be supplied (preloaded, with :transfer_counterpart_account) to avoid an
-  # N+1 in the index; otherwise it falls back to the association.
+  # `members` may be supplied (preloaded) to avoid an N+1; flow_bucket reads only their
+  # transfer_group_id + transfer_counterpart_account_id FK columns (never the association
+  # object), so preloading the members alone suffices. Otherwise it falls back to the association.
   def flow_bucket(members: nil, scope_ids: nil)
     members ||= transaction_records.to_a
 

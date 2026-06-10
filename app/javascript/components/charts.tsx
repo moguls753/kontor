@@ -71,20 +71,6 @@ export function RankedBars({ items, maxValue, formatValue }: { items: RankedItem
   )
 }
 
-/** Hairline 0–100 meter (savings rate). */
-export function KpiMeter({ value }: { value: number }) {
-  const pct = Math.max(0, Math.min(100, value))
-  return <div className="stat-meter"><div className="stat-meter-fill" style={{ width: `${pct}%` }} /></div>
-}
-
-/** ↑/↓ delta tag, coloured by whether the direction is good for the metric. */
-export function DeltaTag({ delta, goodWhenUp = true, suffix = '' }: { delta: number; goodWhenUp?: boolean; suffix?: string }) {
-  if (!isFinite(delta) || Math.abs(delta) < 0.05) return null
-  const up = delta > 0
-  const good = up === goodWhenUp
-  return <span className={'stat-delta mono ' + (good ? 'good' : 'bad')}>{up ? '↑' : '↓'} {Math.abs(delta).toFixed(1)}{suffix}</span>
-}
-
 export function Legend({ items }: { items: { label: string; color: string; opacity?: number }[] }) {
   return (
     <div className="stat-legend">

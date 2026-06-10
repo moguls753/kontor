@@ -3,19 +3,22 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useScope, withScope } from '../lib/scope'
 import { formatAmount } from '../lib/format'
-import { catColor, hueFor, Empty, Eyebrow, Btn, Select } from '../components/ui'
-import { BarChart, RankedBars, KpiMeter, DeltaTag, Legend } from '../components/charts'
+import { catColor, hueFor, Amount, Empty, Eyebrow, Btn, Select } from '../components/ui'
+import { BarChart, RankedBars, Legend } from '../components/charts'
 import type { BarDatum, RankedItem } from '../components/charts'
-import type { StatisticsData, StatRange } from '../lib/types'
+import type { StatisticsData, StatRange, StatForecast } from '../lib/types'
 import { PERIOD_KEYS, periodRange, formatMonth, readPeriod, type PeriodKey } from '../lib/period'
 
 const TOP_CATEGORIES = 8
+const HORIZONS = [3, 6, 12] as const
+type Horizon = (typeof HORIZONS)[number]
 
 export default function StatisticsPage() {
   const { t, i18n } = useTranslation()
   const { scope } = useScope()
   const [period, setPeriod] = useState<PeriodKey>(readPeriod)
   const [showAllCats, setShowAllCats] = useState(false)
+  const [horizon, setHorizon] = useState<Horizon>(3)
   const [data, setData] = useState<StatisticsData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -86,16 +89,18 @@ export default function StatisticsPage() {
     )
   }
 
-  // ---- KPI deltas vs. the prior equal-length window ----
+  // ---- Hero: Einnahmen / Ausgaben / Netto (+ Ø/Mt + Sparquote%) ----
+  const income = parseFloat(kpis.income)
+  const expenses = parseFloat(kpis.expenses) // already signed (≤ 0)
+  const net = income + expenses
   const rate = kpis.savings_rate
-  const rateDelta = rate != null && kpis.savings_rate_prev != null ? rate - kpis.savings_rate_prev : null
-  const curSpend = Math.abs(parseFloat(kpis.avg_monthly_expenses))
-  const prevSpend = kpis.avg_monthly_expenses_prev != null ? Math.abs(parseFloat(kpis.avg_monthly_expenses_prev)) : 0
-  const spendDelta = prevSpend > 0 ? ((curSpend - prevSpend) / prevSpend) * 100 : null
+  const months = range.months
+  const perMonth = (total: number) =>
+    months > 1 ? t('statistics.summary.per_month', { value: formatAmount(Math.abs(total) / months) }) : null
 
   // ---- chart data ----
   const cashflowData: BarDatum[] = data.cashflow.map(p => {
-    const inc = parseFloat(p.income); const exp = parseFloat(p.expenses); const net = parseFloat(p.net)
+    const inc = parseFloat(p.income); const exp = parseFloat(p.expenses); const n = parseFloat(p.net)
     return {
       label: formatMonth(p.month, locale),
       segments: [
@@ -105,7 +110,7 @@ export default function StatisticsPage() {
       tooltip: <Tip title={formatMonth(p.month, locale)} rows={[
         [t('statistics.legend.income'), formatAmount(inc)],
         [t('statistics.legend.expenses'), formatAmount(exp)],
-        [t('statistics.legend.net'), formatAmount(net)],
+        [t('statistics.legend.net'), formatAmount(n)],
       ]} />,
     }
   })
@@ -125,52 +130,47 @@ export default function StatisticsPage() {
     }
   })
 
-  const allCats = [...data.categories.spending, ...data.categories.transfers]
-  const catMax = Math.max(1, ...allCats.map(c => Math.abs(parseFloat(c.amount))))
-  const spendingItems: RankedItem[] = data.categories.spending.map(c => ({
+  // ---- one ranked category list (no muted group) ----
+  const catItems: RankedItem[] = data.categories.items.map(c => ({
     id: c.id ?? c.name ?? 'uncat',
     label: c.name || t('statistics.cat.uncategorized'),
     value: parseFloat(c.amount),
     share: c.share,
     color: catColor(hueFor(c.name || 'uncat')),
   }))
-  const transferItems: RankedItem[] = data.categories.transfers.map(c => ({
-    id: c.id ?? c.name ?? 'transfer',
-    label: c.name || '—',
-    value: parseFloat(c.amount),
-    share: null,
-    color: 'var(--ink-faint)',
-    muted: true,
-  }))
-  const visibleSpending = showAllCats ? spendingItems : spendingItems.slice(0, TOP_CATEGORIES)
-  const hiddenCount = spendingItems.length - visibleSpending.length
+  const catMax = Math.max(1, ...catItems.map(c => Math.abs(c.value)))
+  const visibleCats = showAllCats ? catItems : catItems.slice(0, TOP_CATEGORIES)
+  const hiddenCount = catItems.length - visibleCats.length
 
   return (
     <div className="page">
       {head}
       {range.clamped && <ClampHint range={range} locale={locale} t={t} />}
 
+      {/* Hero — was rein / raus / übrig */}
+      <div className="panel stat-hero">
+        <div className="stat-hero-col">
+          <Eyebrow>{t('statistics.summary.income')}</Eyebrow>
+          <div className="stat-hero-fig"><Amount value={kpis.income} /></div>
+          {perMonth(income) && <div className="stat-hero-sub">{perMonth(income)}</div>}
+        </div>
+        <div className="stat-hero-col">
+          <Eyebrow>{t('statistics.summary.expenses')}</Eyebrow>
+          <div className="stat-hero-fig"><Amount value={kpis.expenses} /></div>
+          {perMonth(expenses) && <div className="stat-hero-sub">{perMonth(expenses)}</div>}
+        </div>
+        <div className="stat-hero-col">
+          <Eyebrow>{t('statistics.summary.net')}</Eyebrow>
+          <div className="stat-hero-fig"><Amount value={net} /></div>
+          {perMonth(net) && <div className="stat-hero-sub">{perMonth(net)}</div>}
+          {rate != null && <div className="stat-hero-rate">{t('statistics.summary.savings_rate', { value: nf1.format(rate) })}</div>}
+        </div>
+      </div>
+
       {/* KPI strip */}
       <div className="panel stat-kpis mb-5">
         <div className="stat-kpi">
-          <Eyebrow>{t('statistics.kpi.savings_rate')}</Eyebrow>
-          <div className="stat-kpi-val"><span>{rate == null ? '—' : `${nf1.format(rate)} %`}</span></div>
-          {rate != null && <KpiMeter value={rate} />}
-          {rateDelta != null && (
-            <div className="stat-kpi-sub"><DeltaTag delta={rateDelta} goodWhenUp suffix={` ${t('statistics.kpi.pp')}`} /> {t('statistics.kpi.vs_prev')}</div>
-          )}
-        </div>
-
-        <div className="stat-kpi">
-          <Eyebrow>{t('statistics.kpi.avg_monthly_expenses')}</Eyebrow>
-          <div className="stat-kpi-val"><span className="amt amt-neg">{fmtAbs(kpis.avg_monthly_expenses)}</span></div>
-          {spendDelta != null && (
-            <div className="stat-kpi-sub"><DeltaTag delta={spendDelta} goodWhenUp={false} suffix=" %" /> {t('statistics.kpi.vs_prev')}</div>
-          )}
-        </div>
-
-        <div className="stat-kpi">
-          <Eyebrow>{t('statistics.kpi.fixed_costs')}</Eyebrow>
+          <Eyebrow>{t('statistics.kpi.fixed_costs_so_far')}</Eyebrow>
           <div className="stat-kpi-val"><span className="amt amt-neg">{fmtAbs(kpis.fixed_monthly)}</span></div>
           <div className="stat-kpi-sub">{t('statistics.kpi.recurring_count', { n: kpis.recurring_payment_count })}</div>
         </div>
@@ -202,28 +202,22 @@ export default function StatisticsPage() {
         <div className="panel">
           <div className="panel-head"><h2 className="section-title">{t('statistics.chart.by_category')}</h2></div>
           <div className="panel-pad">
-            <RankedBars items={visibleSpending} maxValue={catMax} formatValue={v => formatAmount(Math.abs(v))} />
+            <RankedBars items={visibleCats} maxValue={catMax} formatValue={v => formatAmount(Math.abs(v))} />
             {hiddenCount > 0 && (
               <Btn variant="ghost" size="sm" className="mt-2" onClick={() => setShowAllCats(true)}>
                 {t('statistics.cat.more', { n: hiddenCount })}
               </Btn>
             )}
-            {transferItems.length > 0 && (
-              <>
-                <div className="stat-group-label eyebrow">{t('statistics.cat.transfers_group')}</div>
-                <RankedBars items={transferItems} maxValue={catMax} formatValue={v => formatAmount(Math.abs(v))} />
-              </>
-            )}
             <div className="stat-foot">
               <span className="text-ink-muted text-[12.5px]">{t('statistics.legend.expenses')}</span>
-              <span className="amt amt-neg mono text-[14px]">{fmtAbs(kpis.expenses)}</span>
+              <span className="amt amt-neg mono text-[14px]">{fmtAbs(data.categories.total)}</span>
             </div>
           </div>
         </div>
       </div>
 
       {/* Fixed vs. variable */}
-      <div className="panel">
+      <div className="panel mb-5">
         <div className="panel-head">
           <h2 className="section-title">{t('statistics.chart.fixed_vs_variable')}</h2>
           <Legend items={[
@@ -233,8 +227,98 @@ export default function StatisticsPage() {
         </div>
         <div className="panel-pad"><BarChart data={fvData} mode="stacked" /></div>
       </div>
+
+      {/* Forecast — Vorschau „nächste Monate" */}
+      <ForecastPanel forecast={data.forecast} horizon={horizon} setHorizon={setHorizon} locale={locale} t={t} />
     </div>
   )
+}
+
+function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
+  forecast: StatForecast
+  horizon: Horizon
+  setHorizon: (h: Horizon) => void
+  locale: string
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  const income = parseFloat(forecast.expected_monthly_income)
+  const fixed = parseFloat(forecast.expected_monthly_fixed)     // signed (≤ 0)
+  const variable = parseFloat(forecast.avg_monthly_variable)    // signed (≤ 0)
+  const projectedNet = income - Math.abs(fixed) - Math.abs(variable)
+  const balance = parseFloat(forecast.current_balance)
+  const projectedBalance = balance + projectedNet * horizon
+  const delta = projectedNet * horizon
+  const hasSeries = income !== 0 || fixed !== 0 || variable !== 0
+  const upcoming = forecast.upcoming
+  const fmt = (v: number) => formatAmount(Math.abs(v))
+  const signedDelta = (v: number) => (v >= 0 ? '+ ' : '− ') + formatAmount(Math.abs(v))
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2 className="section-title">
+          {t('statistics.forecast.title')}
+          <span className="text-ink-faint font-normal"> · {horizon === 12 ? t('statistics.forecast.trend') : `${horizon} ${t('statistics.forecast.horizon_unit')}`}</span>
+        </h2>
+        <div className="segmented" role="group" aria-label={t('statistics.forecast.title')}>
+          {HORIZONS.map(h => (
+            <button key={h} className={h === horizon ? 'on' : ''} onClick={() => setHorizon(h)} aria-pressed={h === horizon}>
+              {h}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="panel-pad">
+        {!hasSeries ? (
+          <div className="fc-empty">{t('statistics.forecast.empty_series')}</div>
+        ) : (
+          <>
+            <Eyebrow className="mb-2.5">{t('statistics.forecast.typical_month')}</Eyebrow>
+            <div className="fc-typical">
+              <span className="fc-flow in">{t('statistics.forecast.flow_income', { value: fmt(income) })}</span>
+              <span className="fc-flow">{t('statistics.forecast.flow_fixed', { value: fmt(fixed) })}</span>
+              <span className="fc-flow">{t('statistics.forecast.flow_variable', { value: fmt(variable) })}</span>
+            </div>
+            <div className="fc-net">
+              <span className={'fc-net-fig amt ' + (projectedNet >= 0 ? 'amt-pos' : 'amt-neg')}>
+                {t('statistics.forecast.projected_net', { value: signedDelta(projectedNet) })}
+              </span>
+            </div>
+            <div className="fc-proj">
+              <span>{t('statistics.forecast.projected_balance', { months: horizon })}</span>
+              <span className="fc-proj-fig">{formatAmount(projectedBalance)}</span>
+              <span className="fc-proj-delta">({signedDelta(delta)})</span>
+            </div>
+
+            {upcoming.length > 0 && (
+              <div className="fc-list">
+                <div className="fc-list-head">
+                  <Eyebrow>{t('statistics.forecast.upcoming')}</Eyebrow>
+                  <Amount value={forecast.upcoming_total} className="text-[13.5px]" />
+                </div>
+                {upcoming.map((it, i) => (
+                  <div className="fc-row" key={it.name + it.date + i}>
+                    <span className="fc-row-date">{formatDay(it.date, locale)}</span>
+                    <span className="fc-row-name">
+                      <span className={'fc-row-flow ' + it.direction} aria-hidden="true">{it.direction === 'inflow' ? '↓' : '↑'}</span>
+                      <span>{it.name}</span>
+                    </span>
+                    <Amount value={it.amount} className="fc-row-amt" />
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// "YYYY-MM-DD" → short day label (e.g. "01.07." / "Jul 1") without a year.
+function formatDay(dateStr: string, locale: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Intl.DateTimeFormat(locale, { day: '2-digit', month: '2-digit' }).format(new Date(y, m - 1, d))
 }
 
 function Tip({ title, rows }: { title: string; rows: [string, string][] }) {

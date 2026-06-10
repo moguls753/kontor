@@ -14,28 +14,9 @@ module Api
         # §4a in_scope rule means a cross-scope transfer leg still counts as in-scope
         # here, so a mixed transfer series stays visible in "privat".
         if params[:scope] == "privat"
-          ids = scoped_account_ids
-          if ids.empty?
-            scope = scope.none
-          else
-            # ids of series that have ≥1 member booked on an in-scope account. Keyed
-            # on account membership ONLY (not the §4a in_scope exclusion): a personal→
-            # personal transfer has BOTH legs in scope, so the §4a net-zero
-            # exclusion would leave it zero in-scope members and wrongly hide the whole
-            # series in "privat". A series booked on an in-scope account stays visible.
-            in_scope_series = TransactionRecord.where(account_id: ids)
-                                .where.not(recurring_series_id: nil)
-                                .select(:recurring_series_id)
-            # ids of series that have ANY member at all.
-            any_member = TransactionRecord.where.not(recurring_series_id: nil)
-                                          .select(:recurring_series_id)
-            # keep: series with no members OR with ≥1 in-scope member. Subqueries (not
-            # plucked arrays) so empty results never produce invalid `IN ()` SQL.
-            scope = scope.where(
-              "recurring_series.id IN (#{in_scope_series.to_sql}) " \
-              "OR recurring_series.id NOT IN (#{any_member.to_sql})"
-            )
-          end
+          # A6 — shared "≥1 in-scope member (or no members)" filter, keyed on account
+          # membership only (not the §4a net-zero exclusion). Empty scope → none.
+          scope = scope.merge(RecurringSeries.with_member_in(scoped_account_ids))
         end
 
         # default: show only ACTIVE series. "ended" (the pattern stopped) and "dismissed"

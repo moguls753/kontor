@@ -19,10 +19,12 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     expect(response).to have_http_status(:ok)
     body = response.parsed_body
 
-    expect(body).to include("range", "kpis", "cashflow", "fixed_variable", "categories", "transaction_count")
+    expect(body).to include("range", "kpis", "cashflow", "fixed_variable", "categories", "transaction_count", "forecast")
     expect(body["kpis"]).to include("income", "expenses", "net", "savings_rate",
                                     "avg_monthly_expenses", "fixed_monthly", "recurring_payment_count")
-    expect(body["categories"]).to include("spending", "transfers", "total_spent")
+    expect(body["categories"]).to include("items", "total")
+    expect(body["forecast"]).to include("expected_monthly_income", "expected_monthly_fixed", "avg_monthly_variable",
+                                        "current_balance", "upcoming", "upcoming_total")
     expect(body["cashflow"].last).to include("month", "income", "expenses", "net")
   end
 
@@ -78,9 +80,9 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     expect(fv["variable"].to_f).to eq(-200.0)
   end
 
-  # Review S3 — Sparen/Überweisungen are split into a `transfers` group, and the two
-  # groups always reconcile to total expenses (no hidden gap).
-  it "splits transfer categories out yet reconciles to total expenses" do
+  # D-A4 — one ranked list: Sparen/Überweisungen are plain categories (no muted
+  # group). The list is sorted by magnitude desc and reconciles to total expenses.
+  it "returns one ranked category list (incl. Sparen/Überweisungen) that reconciles to expenses" do
     account = create(:account, bank_connection: bc, balance_amount: 1000)
     groceries = create(:category, user: user, name: "Lebensmittel & Getränke")
     sparen = create(:category, user: user, name: "Sparen")
@@ -93,12 +95,13 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     body = response.parsed_body
     cats = body["categories"]
 
-    expect(cats["spending"].map { |i| i["name"] }).to eq(["Lebensmittel & Getränke"])
-    expect(cats["transfers"].map { |i| i["name"] }).to match_array(["Sparen", "Überweisungen"])
-    expect(cats["total_spent"].to_f).to eq(-30.0)
+    # all three categories appear in one list, largest magnitude first.
+    expect(cats["items"].map { |i| i["name"] }).to eq(["Sparen", "Überweisungen", "Lebensmittel & Getränke"])
+    expect(cats["total"].to_f).to eq(-180.0)
 
-    reconciled = cats["spending"].sum { |i| i["amount"].to_f } + cats["transfers"].sum { |i| i["amount"].to_f }
+    reconciled = cats["items"].sum { |i| i["amount"].to_f }
     expect(reconciled).to be_within(0.001).of(body["kpis"]["expenses"].to_f)
+    expect(reconciled).to be_within(0.001).of(cats["total"].to_f)
   end
 
   it "buckets cashflow by month across a year boundary" do
@@ -133,9 +136,18 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     body = response.parsed_body
 
     expect(body["transaction_count"]).to eq(0)
-    expect(body["categories"]["spending"]).to eq([])
+    expect(body["categories"]["items"]).to eq([])
     expect(body["kpis"]["income"].to_f).to eq(0.0)
     expect(body["kpis"]["savings_rate"]).to be_nil
+
+    # Forecast zeros (serialized as decimal strings, not Integer 0) + empty upcoming.
+    fc = body["forecast"]
+    expect(fc["expected_monthly_income"]).to eq("0.0")
+    expect(fc["expected_monthly_fixed"]).to eq("0.0")
+    expect(fc["avg_monthly_variable"]).to eq("0.0")
+    expect(fc["current_balance"]).to eq("0.0")
+    expect(fc["upcoming"]).to eq([])
+    expect(fc["upcoming_total"]).to eq("0.0")
   end
 
   it "requires authentication" do
@@ -172,12 +184,202 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     expect(response).to have_http_status(:ok)
   end
 
-  # Avoid a meaningless +1000 % delta when the previous window has no data yet.
-  it "suppresses the prior-period delta when the previous window predates the data" do
-    account = create(:account, bank_connection: bc, balance_amount: 1000)
-    create(:transaction_record, account: account, amount: -50, booking_date: Date.current)
+  describe "forecast (Vorschau nächste Monate)" do
+    # expected_monthly_income/fixed are the cadence-normalised run-rate of active
+    # recurring contracts: |expected_amount| × 30 / cadence_days.
+    it "normalises income and fixed-cost series to a 30-day month" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      # biweekly outflow -70 → 70 × 30/14 = 150.00 fixed (no transfer category).
+      sub = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Gym",
+                                      cadence: "biweekly", cadence_days: 14, expected_amount: -70)
+      create(:transaction_record, account: account, amount: -70, booking_date: Date.current - 14, recurring_series: sub)
+      # monthly inflow 2500 → 2500 × 30/30 = 2500.00 income.
+      salary = create(:recurring_series, :inflow, user: user, canonical_name: "Gehalt", expected_amount: 2500)
+      create(:transaction_record, :credit, account: account, amount: 2500, booking_date: Date.current - 5, recurring_series: salary)
 
-    get api_v1_statistics_path, params: this_month_params, as: :json
-    expect(response.parsed_body["kpis"]["avg_monthly_expenses_prev"]).to be_nil
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      fc = response.parsed_body["forecast"]
+
+      expect(fc["expected_monthly_income"].to_f).to eq(2500.0)
+      expect(fc["expected_monthly_fixed"].to_f).to eq(-150.0)   # signed negative
+    end
+
+    # The forecast skips series whose cadence yields no usable interval (irregular /
+    # cadence_days ≤ 0) and any non-EUR series — no guess-30.
+    it "skips irregular, zero-cadence and non-EUR series from the run-rate" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      irregular = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Irregular",
+                                            cadence: "irregular", cadence_days: nil, expected_amount: -99)
+      create(:transaction_record, account: account, amount: -99, booking_date: Date.current - 3, recurring_series: irregular)
+      foreign = create(:recurring_series, user: user, direction: "outflow", canonical_name: "USD Sub",
+                                          currency: "USD", expected_amount: -50)
+      create(:transaction_record, account: account, amount: -50, booking_date: Date.current - 3, recurring_series: foreign)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      fc = response.parsed_body["forecast"]
+
+      expect(fc["expected_monthly_fixed"].to_f).to eq(0.0)
+    end
+
+    # expected_monthly_fixed uses the SAME inclusion rule as the Fixkosten KPI/chart:
+    # a recurring SAVINGS series (category ∈ TRANSFER_CATEGORY_NAMES) is NOT fixed; it
+    # lands in avg_monthly_variable instead (chart-consistent).
+    it "excludes savings categories from fixed and counts them in avg_monthly_variable" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      sparen_cat = create(:category, user: user, name: "Sparen")
+      # recurring savings outflow -300/month → NOT fixed; but as a debit in the last
+      # full months it feeds avg_monthly_variable.
+      sparen = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Ansparen",
+                                         category: sparen_cat, expected_amount: -300)
+      last_full = Date.current.beginning_of_month - 10.days
+      3.times do |i|
+        create(:transaction_record, account: account, amount: -300, category: sparen_cat,
+                                    recurring_series: sparen, booking_date: last_full - (i * 30))
+      end
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      fc = response.parsed_body["forecast"]
+
+      expect(fc["expected_monthly_fixed"].to_f).to eq(0.0)        # savings excluded from fixed
+      expect(fc["avg_monthly_variable"].to_f).to be < 0.0          # savings counted as variable
+    end
+
+    # avg_monthly_variable = last-3-FULL-calendar-months avg of NON-fixed in-scope
+    # debits ÷ 3 (current partial month excluded; a fixed-cost debit does not count).
+    it "averages non-fixed debits over the last three full months, excluding the current month" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      fixed = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Rent")
+      # one -300 discretionary debit in each of the last 3 full months → (-900)/3 = -300.
+      3.times do |i|
+        create(:transaction_record, account: account, amount: -300,
+                                    booking_date: Date.current.beginning_of_month - (i * 30 + 5).days)
+      end
+      # a fixed-cost debit (recurring) in a full month must NOT count toward variable.
+      create(:transaction_record, account: account, amount: -1000, recurring_series: fixed,
+                                  booking_date: Date.current.beginning_of_month - 5.days)
+      # a debit in the CURRENT (partial) month must NOT count.
+      create(:transaction_record, account: account, amount: -500, booking_date: Date.current)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      fc = response.parsed_body["forecast"]
+
+      expect(fc["avg_monthly_variable"].to_f).to eq(-300.0)
+    end
+
+    # Plan §4 short-history edge case: with <3 full months of data the divisor is
+    # min(3, months-with-data), not a literal 3. A brand-new account whose only full
+    # month of variable spend is €600 must report €600/mo (÷1), not €200/mo (÷3) —
+    # dividing by 3 would understate the run-rate exactly when data is thinnest.
+    it "divides by months-with-data (not a literal 3) when history is shorter than three months" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      # all variable spend lands in the single most-recent FULL calendar month.
+      last_full = Date.current.beginning_of_month - 1.day
+      create(:transaction_record, account: account, amount: -400, booking_date: last_full)
+      create(:transaction_record, account: account, amount: -200, booking_date: last_full - 3.days)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      fc = response.parsed_body["forecast"]
+
+      expect(fc["avg_monthly_variable"].to_f).to eq(-600.0) # ÷1 (one month with data), not ÷3
+    end
+
+    # Review S1: a FULL month with only fixed costs (zero discretionary spend) must still
+    # count toward the divisor — it's a real €0-variable month that pulls the average DOWN.
+    # Divisor = months of HISTORY (any debit), not months-that-had-variable-spend.
+    it "counts a fixed-only month as a zero-variable month in the divisor" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      fixed = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Rent")
+      bom = Date.current.beginning_of_month
+      create(:transaction_record, account: account, amount: -300, booking_date: bom.prev_month(3) + 9.days) # month -3, variable
+      create(:transaction_record, account: account, amount: -300, booking_date: bom.prev_month(1) + 9.days) # month -1, variable
+      # month -2: ONLY a fixed-cost (recurring) debit — still a month of history → in the divisor.
+      create(:transaction_record, account: account, amount: -1000, recurring_series: fixed,
+                                  booking_date: bom.prev_month(2) + 9.days)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      # -600 variable over 3 months of history (incl. the fixed-only month) → -200, not -300 (÷2).
+      expect(response.parsed_body["forecast"]["avg_monthly_variable"].to_f).to eq(-200.0)
+    end
+
+    # Scope-awareness: a recurring rent-share (personal→joint) is a fixed cost under
+    # Privat (counterpart out of scope) but netted away under Familie (both legs in
+    # scope) — symmetric with the dashboard/statistics treatment.
+    it "counts a cross-scope rent-share in fixed under privat but nets it under familie" do
+      privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
+      gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
+      wohnen = create(:category, user: user, name: "Wohnen & Miete")
+      rent = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Mietanteil",
+                                       category: wohnen, expected_amount: -445)
+      g = SecureRandom.uuid
+      create(:transaction_record, account: privat, amount: -445, category: wohnen, recurring_series: rent,
+                                  booking_date: Date.current - 3, transfer_group_id: g, transfer_counterpart_account: gemein)
+      create(:transaction_record, account: gemein, amount: 445, booking_date: Date.current - 3,
+                                  transfer_group_id: g, transfer_counterpart_account: privat)
+
+      get api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
+      expect(response.parsed_body["forecast"]["expected_monthly_fixed"].to_f).to eq(-445.0)
+
+      get api_v1_statistics_path, params: this_month_params.merge(scope: "familie"), as: :json
+      expect(response.parsed_body["forecast"]["expected_monthly_fixed"].to_f).to eq(0.0) # netted → transfer bucket
+    end
+
+    # Under Privat, the inflow leg of an own-account transfer is a `transfer` bucket
+    # (net-zero), so it must NOT inflate expected_monthly_income.
+    it "excludes an own-account inflow transfer leg from expected_monthly_income under privat" do
+      privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
+      other  = create(:account, bank_connection: bc, balance_amount: 500, shared: false)
+      series = create(:recurring_series, :inflow, user: user, canonical_name: "Umbuchung rein", expected_amount: 300)
+      g = SecureRandom.uuid
+      create(:transaction_record, :credit, account: privat, amount: 300, recurring_series: series,
+                                  booking_date: Date.current - 3, transfer_group_id: g, transfer_counterpart_account: other)
+      create(:transaction_record, account: other, amount: -300, booking_date: Date.current - 3,
+                                  transfer_group_id: g, transfer_counterpart_account: privat)
+
+      get api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
+      # both legs in scope → net-zero transfer → income unaffected.
+      expect(response.parsed_body["forecast"]["expected_monthly_income"].to_f).to eq(0.0)
+    end
+
+    # upcoming = active in-scope series with next_expected_on in the next 30 days,
+    # ONE row per series, sorted by date asc; upcoming_total = Σ signed amount.
+    it "lists upcoming payments within 30 days, one row per series, sorted, with a signed total" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      soon_out = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Netflix",
+                                           expected_amount: -15, next_expected_on: Date.current + 5)
+      create(:transaction_record, account: account, amount: -15, recurring_series: soon_out, booking_date: Date.current - 25)
+      soon_in = create(:recurring_series, :inflow, user: user, canonical_name: "Gehalt",
+                                          expected_amount: 2000, next_expected_on: Date.current + 2)
+      create(:transaction_record, :credit, account: account, amount: 2000, recurring_series: soon_in, booking_date: Date.current - 28)
+      # outside the 30-day window → excluded.
+      later = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Yearly Insurance",
+                                        cadence: "yearly", cadence_days: 365, expected_amount: -120, next_expected_on: Date.current + 200)
+      create(:transaction_record, account: account, amount: -120, recurring_series: later, booking_date: Date.current - 160)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      up = response.parsed_body["forecast"]["upcoming"]
+
+      expect(up.map { |u| u["name"] }).to eq(["Gehalt", "Netflix"])       # sorted by date asc
+      expect(up.map { |u| u["direction"] }).to eq(["inflow", "outflow"])
+      expect(up.first).to include("date" => (Date.current + 2).iso8601, "amount" => "2000.0")
+      expect(response.parsed_body["forecast"]["upcoming_total"].to_f).to eq(1985.0)  # 2000 + (-15)
+    end
+
+    # current_balance == the dashboard's total_balance for the SAME scope.
+    it "reports current_balance equal to the dashboard total_balance per scope" do
+      privat = create(:account, bank_connection: bc, balance_amount: 1234.56, shared: false)
+      gemein = create(:account, bank_connection: bc, balance_amount: 800.00, shared: true)
+
+      get api_v1_dashboard_path, params: { scope: "familie" }, as: :json
+      dash_familie = response.parsed_body["total_balance"].to_f
+      get api_v1_statistics_path, params: this_month_params.merge(scope: "familie"), as: :json
+      expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(dash_familie)
+      expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(2034.56)
+
+      get api_v1_dashboard_path, params: { scope: "privat" }, as: :json
+      dash_privat = response.parsed_body["total_balance"].to_f
+      get api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
+      expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(dash_privat)
+      expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(1234.56)
+    end
   end
 end
