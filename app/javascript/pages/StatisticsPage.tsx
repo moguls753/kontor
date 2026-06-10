@@ -241,16 +241,20 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
   locale: string
   t: (k: string, o?: Record<string, unknown>) => string
 }) {
-  const income = parseFloat(forecast.expected_monthly_income)
-  const fixed = parseFloat(forecast.expected_monthly_fixed)     // signed (≤ 0)
-  const variable = parseFloat(forecast.avg_monthly_variable)    // signed (≤ 0)
-  const projectedNet = income - Math.abs(fixed) - Math.abs(variable)
+  // Run-rate recurring (both directions) + symmetric average of the variable one-offs.
+  const recIncome = parseFloat(forecast.recurring_income)        // ≥ 0
+  const recExpenses = parseFloat(forecast.recurring_expenses)    // ≤ 0 (incl. Sparen — cashflow)
+  const varIncome = parseFloat(forecast.variable_income)         // ≥ 0 (Ø non-recurring credits)
+  const varExpenses = parseFloat(forecast.variable_expenses)     // ≤ 0 (Ø non-recurring debits)
+  const recurringNet = recIncome + recExpenses
+  const variableNet = varIncome + varExpenses
+  const projectedNet = recurringNet + variableNet
   const balance = parseFloat(forecast.current_balance)
   const projectedBalance = balance + projectedNet * horizon
   const delta = projectedNet * horizon
-  const hasSeries = income !== 0 || fixed !== 0 || variable !== 0
+  const months = forecast.avg_window_months
+  const hasData = recIncome !== 0 || recExpenses !== 0 || varIncome !== 0 || varExpenses !== 0
   const upcoming = forecast.upcoming
-  const fmt = (v: number) => formatAmount(Math.abs(v))
   const signedDelta = (v: number) => (v >= 0 ? '+ ' : '− ') + formatAmount(Math.abs(v))
 
   return (
@@ -269,15 +273,14 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
         </div>
       </div>
       <div className="panel-pad">
-        {!hasSeries ? (
+        {!hasData ? (
           <div className="fc-empty">{t('statistics.forecast.empty_series')}</div>
         ) : (
           <>
             <Eyebrow className="mb-2.5">{t('statistics.forecast.typical_month')}</Eyebrow>
             <div className="fc-typical">
-              <span className="fc-flow in">{t('statistics.forecast.flow_income', { value: fmt(income) })}</span>
-              <span className="fc-flow">{t('statistics.forecast.flow_fixed', { value: fmt(fixed) })}</span>
-              <span className="fc-flow">{t('statistics.forecast.flow_variable', { value: fmt(variable) })}</span>
+              <span className="fc-flow">{t('statistics.forecast.recurring_net', { value: signedDelta(recurringNet) })}</span>
+              <span className="fc-flow">{t('statistics.forecast.variable_net', { value: signedDelta(variableNet), n: months })}</span>
             </div>
             <div className="fc-net">
               <span className={'fc-net-fig amt ' + (projectedNet >= 0 ? 'amt-pos' : 'amt-neg')}>

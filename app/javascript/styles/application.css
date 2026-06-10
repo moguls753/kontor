@@ -686,7 +686,6 @@ html.dark {
 /* Forecast panel — „typischer Monat" run-rate + projected saldo + 30-day list */
 .fc-typical { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
 .fc-flow { font-family: var(--font-mono); font-size: 14px; font-weight: 500; letter-spacing: -0.01em; color: var(--ink-muted); }
-.fc-flow.in { color: var(--income); }
 .fc-net { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin-top: 11px; }
 .fc-net-fig { font-family: var(--font-mono); font-size: 20px; font-weight: 550; letter-spacing: -0.02em; }
 .fc-proj { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-top: 5px; font-size: 12.5px; color: var(--ink-muted); }

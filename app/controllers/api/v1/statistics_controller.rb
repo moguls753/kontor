@@ -9,16 +9,23 @@ module Api
       # Savings/transfer-flavoured categories, matched by name against BOTH locale
       # default sets (User::DEFAULT_CATEGORIES). The category card no longer singles
       # them out (D-A4: one ranked list — they're plain categories and `in_scope`
-      # already nets in-scope transfers per lens). This constant survives ONLY where
-      # the Fixkosten logic must exclude pure savings — `fixed_scope` (KPI Fixkosten/Mt
-      # + the Fix-vs-variabel chart) and the forecast's `expected_monthly_fixed`:
-      # "Sparen" is not a fixed cost (plan §1.3 / §2.1).
+      # already nets in-scope transfers per lens). This constant survives ONLY in
+      # `fixed_scope` — the Fixkosten/Mt KPI + the Fix-vs-variabel chart — which must
+      # exclude pure savings ("Sparen" is not a fixed COST). NB: the forecast is CASHFLOW,
+      # not Fixkosten — it does NOT use this exclusion; a recurring Sparen outflow counts
+      # there as a recurring expense (plan §1.3, redesign 2026-06-10).
       TRANSFER_CATEGORY_NAMES = ["Überweisungen", "Transfers", "Sparen", "Savings"].freeze
 
       # SQLite-only month bucket (the app is SQLite-only per CLAUDE.md). Used only as
       # a GROUP BY expression — the summed column stays a typed decimal, so grouped
       # `.sum(:amount)` returns BigDecimal (sidesteps the raw-Arel Float trap, S2).
       MONTH = Arel.sql("strftime('%Y-%m', booking_date)")
+
+      # Lookback for the forecast's VARIABLE-flow average (full months; current partial
+      # month excluded). Long enough to amortise lumps (vacations, annual bills) and let a
+      # one-off and its refund both land in the window. ⚠️ The divisor is months-WITH-DATA,
+      # NEVER this flat number (see variable_averages).
+      FORECAST_WINDOW_MONTHS = 6
 
       def show
         ids = scoped_account_ids
@@ -79,7 +86,7 @@ module Api
             { month: m, fixed: fixed, variable: total - fixed }
           },
           categories: cats,
-          forecast: forecast(ids, transfer_cat_ids)
+          forecast: forecast(ids)
         }
       end
 
@@ -143,10 +150,17 @@ module Api
       # Forward "typischer Monat" projection — window-INDEPENDENT ("ab heute") but
       # scope-aware (plan §2.1–§2.3). All money serialized as dashboard-style
       # BigDecimal strings (.to_d), so an empty scope renders "0.0", not Integer 0.
-      def forecast(ids, transfer_cat_ids)
-        # Active series with ≥1 in-scope member (shared A6 filter). flow_bucket only
-        # reads each member's transfer_group_id + transfer_counterpart_account_id FK
-        # (never the association object), so preloading the members alone is N+1-free.
+      def forecast(ids)
+        # Two parts (redesigned with the user 2026-06-10):
+        #  • RECURRING (both directions) — reliable, taken at RUN-RATE (current contract
+        #    amount), never averaged. flow_bucket(scope_ids:) nets in-scope transfers, so a
+        #    Privat→joint outflow counts but a Familie internal move doesn't. "expense" here
+        #    is ALL recurring outflow incl. Sparen — it's CASHFLOW, not the Fixkosten KPI.
+        #  • VARIABLE — the unpredictable one-offs — averaged SYMMETRICALLY (income AND
+        #    expenses) over the last months, so a one-off (vacation) and its offset (refund)
+        #    net out. Clean partition, NO double-count: recurring_series_id present →
+        #    run-rate here; NULL → the variable average. (Preloading members alone is
+        #    N+1-free — flow_bucket reads only the FK columns.)
         scope_ids = params[:scope] == "privat" ? ids : nil
         series = Current.user.recurring_series.active
                         .merge(RecurringSeries.with_member_in(ids))
@@ -154,25 +168,25 @@ module Api
                         .to_a
         buckets = series.to_h { |s| [ s, s.flow_bucket(members: s.transaction_records.to_a, scope_ids: scope_ids) ] }
 
-        income = 0.to_d
-        fixed  = 0.to_d
+        rec_income   = 0.to_d
+        rec_expenses = 0.to_d
         series.each do |s|
           eq = monthly_equiv(s)
           next if eq.nil?
 
           case buckets[s]
-          when "income"
-            income += eq
-          when "expense"
-            # SAME inclusion rule as fixed_scope: exclude pure savings/transfer cats.
-            fixed -= eq unless s.category_id && transfer_cat_ids.include?(s.category_id)
+          when "income"  then rec_income   += eq
+          when "expense" then rec_expenses -= eq
           end
         end
 
+        var = variable_averages(ids)
         {
-          expected_monthly_income: income,
-          expected_monthly_fixed: fixed,
-          avg_monthly_variable: avg_monthly_variable(ids, transfer_cat_ids),
+          recurring_income: rec_income,
+          recurring_expenses: rec_expenses,
+          variable_income: var[:income],
+          variable_expenses: var[:expenses],
+          avg_window_months: var[:months],
           current_balance: Current.user.accounts.where(id: ids).sum(:balance_amount).to_d,
           upcoming: upcoming_payments(series, buckets)
         }.tap { |f| f[:upcoming_total] = f[:upcoming].sum(0.to_d) { |u| u[:amount] } }
@@ -191,29 +205,32 @@ module Api
         s.expected_amount.abs * 30.0 / cd
       end
 
-      # Avg over the last 3 FULL calendar months (current partial month excluded) of
-      # in-scope debits that are NOT a fixed cost (recurring_series_id IS NULL OR
-      # category ∈ transfer cats), signed negative (.to_d). This is the chart's
-      # "variabel" (discretionary + savings); carries savings outflows under Privat.
+      # Symmetric average of the UNPREDICTABLE, non-recurring flows over the last
+      # FORECAST_WINDOW_MONTHS full calendar months (current partial month excluded):
+      # variable income (non-recurring credits) AND variable expenses (non-recurring
+      # debits), each ÷ the SAME divisor. Symmetric so a one-off expense (vacation) and its
+      # offset (a refund) net out; the window amortises lumps into a sustainable monthly
+      # rate. NO weighting — the recency that matters (a raise, a new/cancelled contract) is
+      # already in the run-rate; the variable part we deliberately smooth. recurring-linked
+      # rows are NOT here (they're the run-rate) → no double-count.
       #
-      # Divisor = months of HISTORY in the window — distinct YYYY-MM buckets that had ANY
-      # in-scope debit — capped 1..3 (review S1). NOT months that happened to have variable
-      # spend: a full month with only fixed costs is a real €0-variable month that pulls the
-      # average DOWN; counting it on the filtered set would overstate the run-rate. Only
-      # months with NO history are excluded (short-history guard — a brand-new account with
-      # one full month of €600 variable reports €600/mo (÷1), not €200/mo (÷3)).
-      def avg_monthly_variable(ids, transfer_cat_ids)
-        from = Date.current.beginning_of_month.prev_month(3)
-        to   = Date.current.beginning_of_month - 1.day
-        debits = in_scope(Current.user.transaction_records.in_period(from, to), ids).debits
-        months_with_data = debits.distinct.count(MONTH)
-        divisor = [ [ 3, months_with_data ].min, 1 ].max
-        variable = if transfer_cat_ids.any?
-          debits.where("recurring_series_id IS NULL OR category_id IN (?)", transfer_cat_ids)
-        else
-          debits.where(recurring_series_id: nil)
-        end
-        (variable.sum(:amount).to_d / divisor)
+      # ⚠️ Divisor = months that actually HAVE in-scope data (distinct YYYY-MM with ≥1
+      # in-scope tx), NEVER a flat FORECAST_WINDOW_MONTHS. Months with no data (before the
+      # accounts existed) must NOT be averaged in, or the rate is diluted toward zero. A
+      # month WITH data but no variable flow IS a real €0 month and counts (pulls the avg
+      # down).
+      def variable_averages(ids)
+        from   = Date.current.beginning_of_month.prev_month(FORECAST_WINDOW_MONTHS)
+        to     = Date.current.beginning_of_month - 1.day
+        scoped = in_scope(Current.user.transaction_records.in_period(from, to), ids)
+        months = scoped.distinct.count(MONTH) # months WITH data — never a flat 6
+        divisor = [ months, 1 ].max
+        nonrec = scoped.where(recurring_series_id: nil)
+        {
+          income: (nonrec.credits.sum(:amount).to_d / divisor),
+          expenses: (nonrec.debits.sum(:amount).to_d / divisor),
+          months: months
+        }
       end
 
       # Anstehende Zahlungen: active in-scope series whose next_expected_on falls in

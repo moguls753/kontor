@@ -201,9 +201,11 @@ export interface StatForecastItem {
 }
 
 export interface StatForecast {
-  expected_monthly_income: string
-  expected_monthly_fixed: string
-  avg_monthly_variable: string
+  recurring_income: string
+  recurring_expenses: string
+  variable_income: string
+  variable_expenses: string
+  avg_window_months: number
   current_balance: string
   upcoming: StatForecastItem[]
   upcoming_total: string
