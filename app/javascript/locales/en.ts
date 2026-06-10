@@ -313,8 +313,10 @@ export default {
     forecast: {
       heading: 'Outlook',
       typical_month: 'Typical month',
-      recurring_label: 'Recurring',
-      variable_label: 'Variable · avg {{n}} mo.',
+      recurring_income_label: 'Recurring income',
+      recurring_expenses_label: 'Recurring expenses',
+      variable_income_label: 'Variable income · avg {{n}} mo.',
+      variable_expenses_label: 'Variable expenses · avg {{n}} mo.',
       net_label: 'Expected net / month',
       balance_today: 'Balance today',
       balance_future: 'in {{months}} months',

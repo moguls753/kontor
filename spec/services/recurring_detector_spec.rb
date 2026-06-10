@@ -95,6 +95,31 @@ RSpec.describe RecurringDetector do
     end
   end
 
+  describe "account-coherent series (no cross-account merge)" do
+    it "does not merge a one-off on a personal account into the same payee's joint-account series" do
+      joint = create(:account, bank_connection: bc, iban: nil, shared: true)
+      # Katja's monthly contribution lands on the JOINT account (3 occurrences) …
+      [ Date.current - 5, Date.current - 35, Date.current - 65 ].each do |d|
+        create(:transaction_record, account: joint, creditor_name: nil, debtor_name: "Katja Stumpf",
+          amount: 70.00, booking_date: d, currency: "EUR")
+      end
+      # … plus ONE same-payee occurrence on a PERSONAL account, monthly-aligned + within the
+      # amount band — WITHOUT account-coherence it would fold into a single 4-member series
+      # spanning both accounts, which then leaks the joint flow into the Privat scope.
+      credit(name: "Katja Stumpf", amount: 72.00, date: Date.current - 95)
+
+      subject.detect
+
+      series = user.recurring_series.find_by(canonical_name: "Katja Stumpf")
+      expect(series).to be_present
+      # account-coherent: every member is on the joint account …
+      expect(TransactionRecord.where(recurring_series_id: series.id).distinct.pluck(:account_id)).to eq([ joint.id ])
+      # … and the lone personal occurrence never joined a series (too few to recur alone).
+      personal = TransactionRecord.find_by(account_id: account.id, debtor_name: "Katja Stumpf")
+      expect(personal.recurring_series_id).to be_nil
+    end
+  end
+
   describe "rejection rules" do
     it "does not detect a 2-occurrence series (≥3 floor)" do
       monthly_dates(2).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }

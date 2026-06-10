@@ -68,9 +68,15 @@ class RecurringDetector
 
       detected_series_ids = Set.new # #3 — key reconcile on SERIES ID, not fingerprint
 
-      # §5.3/§5.4 — partition by [direction, currency], group by canonical
+      # §5.3/§5.4 — partition by [direction, currency], group by [canonical, account].
+      # account_id is in the key so a series is ACCOUNT-COHERENT: a payer's payments on a
+      # personal account must NOT merge with the same payer's payments on the joint account.
+      # The cross-account merge wrongly pulled a joint-only inflow into the Privat scope (a
+      # one-off PayPal payment dragged Katja's whole joint contribution into Privat). With
+      # the split, a lone cross-account occurrence forms its own group → too few to build a
+      # regular series → stays unmatched, and the scoping (with_member_in) is auto-correct.
       rows.group_by { |r| [ r[:direction], r[:currency] ] }.each do |(direction, currency), part_rows|
-        part_rows.group_by { |r| r[:canonical] }.each do |canonical, group_rows|
+        part_rows.group_by { |r| [ r[:canonical], r[:account_id] ] }.each do |(canonical, _account_id), group_rows|
           clusters = amount_subcluster(group_rows)
           clusters.each do |cluster|
             series = build_series(cluster, direction:, currency:, canonical:)
@@ -155,6 +161,7 @@ class RecurringDetector
 
     {
       tx_id: tx.id,
+      account_id: tx.account_id,
       amount: tx.amount,
       booking_date: tx.booking_date,
       currency: tx.currency,

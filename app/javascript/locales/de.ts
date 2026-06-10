@@ -313,8 +313,10 @@ export default {
     forecast: {
       heading: 'Ausblick',
       typical_month: 'Typischer Monat',
-      recurring_label: 'Wiederkehrend',
-      variable_label: 'Variabel · Ø {{n}} Mt.',
+      recurring_income_label: 'Wiederkehrende Einnahmen',
+      recurring_expenses_label: 'Wiederkehrende Ausgaben',
+      variable_income_label: 'Variable Einnahmen · Ø {{n}} Mt.',
+      variable_expenses_label: 'Variable Ausgaben · Ø {{n}} Mt.',
       net_label: 'Erwartetes Netto / Monat',
       balance_today: 'Saldo heute',
       balance_future: 'in {{months}} Monaten',

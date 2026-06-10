@@ -697,13 +697,13 @@ html.dark {
 /* Forecast panel — „typischer Monat" run-rate + projected saldo + 30-day list */
 /* „Typischer Monat" as a receipt: aligned label | amount, hairline rule, sum heavier.
    tabular-nums keeps the mono column dead-straight; the dashed line is the „Abriss". */
-.fc-ledger { display: grid; grid-template-columns: 1fr auto; gap: 9px 24px; align-items: baseline; max-width: 360px; }
+.fc-ledger { display: grid; grid-template-columns: 1fr auto; gap: 9px 24px; align-items: baseline; max-width: 400px; }
 .fc-ledger-label { font-size: 13px; color: var(--ink-muted); }
 .fc-ledger-amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 14px; text-align: right; letter-spacing: -0.01em; color: var(--ink); white-space: nowrap; }
 .fc-ledger-rule { grid-column: 1 / -1; height: 0; border-top: 1px solid var(--line-strong); margin: 3px 0 1px; }
 .fc-ledger-label.is-sum { color: var(--ink); font-weight: 600; font-size: 13.5px; }
 .fc-ledger-amt.is-sum { font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
-.fc-balance { display: grid; grid-template-columns: 1fr auto; gap: 6px 24px; align-items: baseline; max-width: 360px; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line-strong); font-size: 12.5px; color: var(--ink-muted); }
+.fc-balance { display: grid; grid-template-columns: 1fr auto; gap: 6px 24px; align-items: baseline; max-width: 400px; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line-strong); font-size: 12.5px; color: var(--ink-muted); }
 .fc-balance-amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--ink); letter-spacing: -0.01em; white-space: nowrap; }
 .fc-balance-delta { color: var(--ink-faint); font-size: 11.5px; margin-left: 6px; }
 .fc-list { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }

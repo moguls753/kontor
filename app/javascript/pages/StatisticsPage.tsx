@@ -314,10 +314,14 @@ function ForecastPanel({ forecast, horizon, setHorizon, locale, t }: {
           <>
             <Eyebrow className="mb-3">{t('statistics.forecast.typical_month')}</Eyebrow>
             <div className="fc-ledger">
-              <span className="fc-ledger-label">{t('statistics.forecast.recurring_label')}</span>
-              <span className="fc-ledger-amt">{signedDelta(recurringNet)}</span>
-              <span className="fc-ledger-label">{t('statistics.forecast.variable_label', { n: months })}</span>
-              <span className="fc-ledger-amt">{signedDelta(variableNet)}</span>
+              <span className="fc-ledger-label">{t('statistics.forecast.recurring_income_label')}</span>
+              <span className="fc-ledger-amt">{signedDelta(recIncome)}</span>
+              <span className="fc-ledger-label">{t('statistics.forecast.recurring_expenses_label')}</span>
+              <span className="fc-ledger-amt">{signedDelta(recExpenses)}</span>
+              <span className="fc-ledger-label">{t('statistics.forecast.variable_income_label', { n: months })}</span>
+              <span className="fc-ledger-amt">{signedDelta(varIncome)}</span>
+              <span className="fc-ledger-label">{t('statistics.forecast.variable_expenses_label', { n: months })}</span>
+              <span className="fc-ledger-amt">{signedDelta(varExpenses)}</span>
               <div className="fc-ledger-rule" />
               <span className="fc-ledger-label is-sum">{t('statistics.forecast.net_label')}</span>
               <span className={'fc-ledger-amt is-sum amt ' + (projectedNet >= 0 ? 'amt-pos' : 'amt-neg')}>{signedDelta(projectedNet)}</span>
