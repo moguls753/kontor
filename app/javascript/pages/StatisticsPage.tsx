@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment, type KeyboardEvent } from 'react'
+import { useState, useEffect, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useScope, withScope, type Scope } from '../lib/scope'
@@ -8,11 +8,13 @@ import { BarChart, RankedBars, Legend } from '../components/charts'
 import type { BarDatum, RankedItem } from '../components/charts'
 import type { StatisticsData, StatRange, StatForecast } from '../lib/types'
 import VariableFlowsModal from '../components/VariableFlowsModal'
+import ScenarioEditor from '../components/ScenarioEditor'
+import { type ScenarioAdjustment, loadScenario, saveScenario, projectBalance } from '../lib/scenario'
 import { PERIOD_KEYS, periodRange, formatMonth, readPeriod, type PeriodKey } from '../lib/period'
 
 const TOP_CATEGORIES = 8
 const UPCOMING_PREVIEW = 7
-const HORIZONS = [3, 6, 12] as const
+const PROJ_ROWS = [0, 3, 6, 12] as const // projection table rows: Heute + the horizons
 
 const TABS = ['trends', 'categories', 'forecast'] as const
 type Tab = (typeof TABS)[number]
@@ -275,6 +277,12 @@ function ForecastPanel({ forecast, locale, t, scope }: {
 }) {
   const [showAllUpcoming, setShowAllUpcoming] = useState(false)
   const [drillKind, setDrillKind] = useState<'income' | 'expenses' | null>(null)
+  // "Was-wäre-wenn" scenario: client-only assumptions (localStorage), layered on top of
+  // the baseline via projectBalance. Survives a scope switch (the baseline re-fetches,
+  // these stay and re-apply). Reset clears them.
+  const [scenario, setScenario] = useState<ScenarioAdjustment[]>(() => loadScenario())
+  useEffect(() => { saveScenario(scenario) }, [scenario])
+  const scenarioActive = scenario.length > 0
   // Run-rate recurring (both directions) + symmetric average of the variable one-offs.
   const recIncome = parseFloat(forecast.recurring_income)        // ≥ 0
   const recExpenses = parseFloat(forecast.recurring_expenses)    // ≤ 0 (incl. Sparen — cashflow)
@@ -296,6 +304,9 @@ function ForecastPanel({ forecast, locale, t, scope }: {
   // Absolute saldo: no leading sign when positive, but a U+2212 (not the Intl hyphen) when
   // negative, so the whole receipt shares one minus glyph + spacing.
   const saldo = (v: number) => (v < 0 ? '− ' : '') + formatAmount(Math.abs(v))
+  // Scenario-aware projection (≡ the linear baseline byte-for-byte when no assumptions).
+  const liqAt = (h: number) => projectBalance(liquidBalance, liquidNet, scenario, h, 'liquid')
+  const totAt = (h: number) => projectBalance(balance, projectedNet, scenario, h, 'total')
 
   return (
     <div className="panel">
@@ -325,37 +336,59 @@ function ForecastPanel({ forecast, locale, t, scope }: {
               <span className="fc-ledger-label is-sum">{t('statistics.forecast.net_label')}</span>
               <span className={'fc-ledger-amt is-sum amt ' + (projectedNet >= 0 ? 'amt-pos' : 'amt-neg')}>{signedDelta(projectedNet)}</span>
             </div>
-            <div className="fc-proj">
-              <span className="fc-proj-corner" aria-hidden="true" />
-              <span className="fc-proj-head is-liquid">
-                <span className="fc-proj-head-key">{t('statistics.forecast.proj_liquid')}</span>
-                <span className="fc-proj-head-sub">{t('statistics.forecast.proj_liquid_sub')}</span>
-              </span>
-              <span className="fc-proj-head">
-                <span className="fc-proj-head-key">{t('statistics.forecast.proj_total')}</span>
-                <span className="fc-proj-head-sub">{t('statistics.forecast.proj_total_sub')}</span>
-              </span>
+            <table className="fc-proj">
+              <caption className="sr-only">
+                {t('statistics.forecast.heading')}{scenarioActive ? ' · ' + t('statistics.forecast.scenario.active', { n: scenario.length }) : ''}
+              </caption>
+              <thead>
+                <tr>
+                  <td className="fc-proj-corner" aria-hidden="true" />
+                  <th scope="col" className="fc-proj-head is-liquid">
+                    <span className="fc-proj-head-key">{t('statistics.forecast.proj_liquid')}</span>
+                    <span className="fc-proj-head-sub">{t('statistics.forecast.proj_liquid_sub')}</span>
+                  </th>
+                  <th scope="col" className="fc-proj-head">
+                    <span className="fc-proj-head-key">{t('statistics.forecast.proj_total')}</span>
+                    <span className="fc-proj-head-sub">{t('statistics.forecast.proj_total_sub')}</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {PROJ_ROWS.map(h => {
+                  const liq = liqAt(h)
+                  const tot = totAt(h)
+                  return (
+                    <tr key={h}>
+                      <th scope="row" className="fc-proj-time">
+                        {h === 0 ? t('statistics.forecast.proj_now') : t('statistics.forecast.balance_future', { months: h })}
+                      </th>
+                      <td className={'fc-proj-amt is-liquid' + (liq < 0 ? ' neg' : '')}>
+                        {saldo(liq)}{h > 0 && <span className="fc-proj-delta">({signedDelta(liq - liquidBalance)})</span>}
+                      </td>
+                      <td className={'fc-proj-amt' + (tot < 0 ? ' neg' : '')}>
+                        {saldo(tot)}{h > 0 && <span className="fc-proj-delta">({signedDelta(tot - balance)})</span>}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {scenarioActive && (
+              <p className="fc-proj-vs">
+                <span className="fc-proj-vs-lead">{t('statistics.forecast.scenario.vs_baseline', { months: 12 })}</span>
+                <span className="fc-proj-vs-item"><span className="fc-proj-vs-key">{t('statistics.forecast.proj_liquid')}</span>{signedDelta(liqAt(12) - (liquidBalance + liquidNet * 12))}</span>
+                <span className="fc-proj-vs-item"><span className="fc-proj-vs-key">{t('statistics.forecast.proj_total')}</span>{signedDelta(totAt(12) - (balance + projectedNet * 12))}</span>
+              </p>
+            )}
 
-              <span className="fc-proj-time">{t('statistics.forecast.proj_now')}</span>
-              <span className={'fc-proj-amt is-liquid' + (liquidBalance < 0 ? ' neg' : '')}>{saldo(liquidBalance)}</span>
-              <span className="fc-proj-amt">{saldo(balance)}</span>
-
-              {HORIZONS.map(h => {
-                const liq = liquidBalance + liquidNet * h
-                const tot = balance + projectedNet * h
-                return (
-                  <Fragment key={h}>
-                    <span className="fc-proj-time">{t('statistics.forecast.balance_future', { months: h })}</span>
-                    <span className={'fc-proj-amt is-liquid' + (liq < 0 ? ' neg' : '')}>
-                      {saldo(liq)}<span className="fc-proj-delta">({signedDelta(liquidNet * h)})</span>
-                    </span>
-                    <span className="fc-proj-amt">
-                      {saldo(tot)}<span className="fc-proj-delta">({signedDelta(projectedNet * h)})</span>
-                    </span>
-                  </Fragment>
-                )
-              })}
-            </div>
+            <ScenarioEditor
+              adjustments={scenario}
+              onAdd={a => setScenario(s => [...s, a])}
+              onRemove={id => setScenario(s => s.filter(x => x.id !== id))}
+              onReset={() => setScenario([])}
+              locale={locale}
+              t={t}
+            />
 
             {upcoming.length > 0 && (
               <div className="fc-list">
