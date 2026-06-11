@@ -310,8 +310,12 @@ function ForecastPanel({ forecast, locale, t, scope }: {
   // Scenario-adjusted "typical month": recurring BOTH-lens assumptions move the Kassenzettel
   // (a raise lifts Wiederkehrende Einnahmen, its net follows); one-offs + savings-lens don't
   // (not a typical month / net-worth-neutral). Degrades to the baseline with no assumptions.
-  const scRecIncome = scenario.reduce((s, a) => s + (a.kind === 'recurring' && a.lens === 'both' && a.amount > 0 ? a.amount : 0), 0)
-  const scRecExpense = scenario.reduce((s, a) => s + (a.kind === 'recurring' && a.lens === 'both' && a.amount < 0 ? a.amount : 0), 0)
+  // Route a recurring both-lens delta by the line it belongs to (its source direction),
+  // NOT the delta sign — so "Miete 800 → 520" (delta +280) LOWERS the expense line instead
+  // of inflating income. Older persisted adjustments without a bucket fall back to the sign.
+  const recBucket = (a: ScenarioAdjustment) => a.bucket ?? (a.amount >= 0 ? 'income' : 'expense')
+  const scRecIncome = scenario.reduce((s, a) => s + (a.kind === 'recurring' && a.lens === 'both' && recBucket(a) === 'income' ? a.amount : 0), 0)
+  const scRecExpense = scenario.reduce((s, a) => s + (a.kind === 'recurring' && a.lens === 'both' && recBucket(a) === 'expense' ? a.amount : 0), 0)
   const recIncomeScn = recIncome + scRecIncome
   const recExpensesScn = recExpenses + scRecExpense
   const projectedNetScn = recIncomeScn + recExpensesScn + variableNet

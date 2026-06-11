@@ -13,9 +13,13 @@ export interface ScenarioAdjustment {
   id: string
   kind: ScenarioKind
   label: string
-  amount: number      // signed: + income, − expense (EUR)
+  amount: number      // signed delta: + adds money, − removes it (EUR)
   lens: ScenarioLens
   fromOffset: number  // 1..12 months from the current month (1 = next month)
+  // Which "Typischer Monat" line a recurring both-lens delta belongs to — the SOURCE
+  // direction, NOT the delta sign: lowering rent is +amount but an EXPENSE-line change.
+  // Optional (older persisted adjustments fall back to the amount sign).
+  bucket?: 'income' | 'expense'
 }
 
 const STORAGE_KEY = 'kontor-scenario'
@@ -92,6 +96,7 @@ function isValidAdjustment(a: unknown): a is ScenarioAdjustment {
     && typeof o.amount === 'number' && isFinite(o.amount as number)
     && typeof o.fromOffset === 'number' && (o.fromOffset as number) >= 1
     && typeof o.label === 'string'
+    && (o.bucket === undefined || o.bucket === 'income' || o.bucket === 'expense')
 }
 
 export function loadScenario(): ScenarioAdjustment[] {

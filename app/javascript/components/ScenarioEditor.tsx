@@ -54,7 +54,9 @@ export default function ScenarioEditor({ adjustments, items, onAdd, onRemove, on
   const newValid = !isNaN(amount) && amount > 0
 
   // "Anpassen" validity + the computed delta (new signed value − current signed value).
-  const adjItem: RecurringItem | undefined = mode === 'adjust' ? items[adjustIdx] : undefined
+  // Clamp the index: a scope switch can shrink `items` while the form is open.
+  const safeIdx = Math.min(adjustIdx, Math.max(0, items.length - 1))
+  const adjItem: RecurringItem | undefined = mode === 'adjust' ? items[safeIdx] : undefined
   const adjNewAbs = parseAmount(newValueStr)
   const adjDelta = adjItem && !isNaN(adjNewAbs)
     ? Math.round(((adjItem.monthly >= 0 ? 1 : -1) * adjNewAbs - adjItem.monthly) * 100) / 100
@@ -99,12 +101,14 @@ export default function ScenarioEditor({ adjustments, items, onAdd, onRemove, on
         id: newId(), kind: 'recurring',
         label: `${adjItem.label} → ${formatAmount(adjNewAbs)}`,
         amount: adjDelta, lens: 'both', fromOffset,
+        bucket: adjItem.monthly >= 0 ? 'income' : 'expense', // the item's line, not the delta sign
       })
     } else {
       onAdd({
         id: newId(), kind, label: label.trim(),
         amount: sign * amount, // sign comes ONLY from the toggle
         lens: sign === -1 && isSavings ? 'liquid' : 'both', fromOffset,
+        bucket: sign === 1 ? 'income' : 'expense',
       })
     }
     close()
@@ -163,7 +167,7 @@ export default function ScenarioEditor({ adjustments, items, onAdd, onRemove, on
               <div className="fc-sc-row">
                 <label className="fc-sc-field fc-sc-field-grow">
                   <span className="fc-sc-flabel">{tx('item')}</span>
-                  <Select value={String(adjustIdx)} onChange={e => selectItem(Number(e.target.value))} ariaLabel={tx('item')}>
+                  <Select value={String(safeIdx)} onChange={e => selectItem(Number(e.target.value))} ariaLabel={tx('item')}>
                     {items.map((it, i) => (
                       <option key={i} value={i}>{it.label} · {(it.monthly >= 0 ? '+ ' : '− ') + formatAmount(Math.abs(it.monthly))}/Mt</option>
                     ))}
