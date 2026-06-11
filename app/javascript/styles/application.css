@@ -560,10 +560,14 @@ html.dark {
   .overlay {
     position: fixed; inset: 0; z-index: 80;
     background: transparent;
-    backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
     display: grid; place-items: center; padding: 24px;
     animation: fade 160ms ease;
   }
+  /* Blur is applied to the app content itself (reliable everywhere, unlike
+     backdrop-filter), NOT a scrim — no colour change. The modal is portaled to
+     <body>, outside #react-app, so it stays crisp above the blur. Toggled by Modal. */
+  #react-app { transition: filter 160ms ease; }
+  #react-app.is-blurred { filter: blur(7px); }
   .modal {
     width: 100%; max-width: 520px;
     background: var(--surface); border: 1px solid var(--line);
