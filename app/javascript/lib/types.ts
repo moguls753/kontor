@@ -211,6 +211,15 @@ export interface StatForecast {
   upcoming_total: string
 }
 
+export interface StatVariableFlows {
+  kind: 'income' | 'expenses'
+  range: { from: string; to: string }
+  months: number
+  total: string
+  average: string
+  transactions: Transaction[]
+}
+
 export interface StatisticsData {
   range: StatRange
   transaction_count: number

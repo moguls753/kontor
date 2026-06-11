@@ -326,6 +326,17 @@ export default {
       balance_future: 'in {{months}} months',
       upcoming: 'Upcoming (30 days)',
       empty_series: 'Not enough data yet for a forecast.',
+      variable_modal: {
+        title_income: 'Variable income',
+        title_expenses: 'Variable expenses',
+        subtitle: 'One-off transactions, averaged over {{n}} mo.',
+        sum: 'Sum',
+        divide: '÷ {{n}} mo.',
+        average: 'avg / month',
+        empty: 'No variable transactions in this period.',
+        loading: 'Loading …',
+        error: 'Could not load transactions.',
+      },
     },
   },
   settings: {

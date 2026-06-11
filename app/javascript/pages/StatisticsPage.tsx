@@ -1,12 +1,13 @@
 import { useState, useEffect, Fragment, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { useScope, withScope } from '../lib/scope'
+import { useScope, withScope, type Scope } from '../lib/scope'
 import { formatAmount } from '../lib/format'
 import { catColor, hueFor, Amount, Empty, Eyebrow, Btn, Select } from '../components/ui'
 import { BarChart, RankedBars, Legend } from '../components/charts'
 import type { BarDatum, RankedItem } from '../components/charts'
 import type { StatisticsData, StatRange, StatForecast } from '../lib/types'
+import VariableFlowsModal from '../components/VariableFlowsModal'
 import { PERIOD_KEYS, periodRange, formatMonth, readPeriod, type PeriodKey } from '../lib/period'
 
 const TOP_CATEGORIES = 8
@@ -259,19 +260,21 @@ export default function StatisticsPage() {
         )}
 
         {tab === 'forecast' && (
-          <ForecastPanel forecast={data.forecast} locale={locale} t={t} />
+          <ForecastPanel forecast={data.forecast} locale={locale} t={t} scope={scope} />
         )}
       </div>
     </div>
   )
 }
 
-function ForecastPanel({ forecast, locale, t }: {
+function ForecastPanel({ forecast, locale, t, scope }: {
   forecast: StatForecast
   locale: string
   t: (k: string, o?: Record<string, unknown>) => string
+  scope: Scope
 }) {
   const [showAllUpcoming, setShowAllUpcoming] = useState(false)
+  const [drillKind, setDrillKind] = useState<'income' | 'expenses' | null>(null)
   // Run-rate recurring (both directions) + symmetric average of the variable one-offs.
   const recIncome = parseFloat(forecast.recurring_income)        // ≥ 0
   const recExpenses = parseFloat(forecast.recurring_expenses)    // ≤ 0 (incl. Sparen — cashflow)
@@ -305,10 +308,14 @@ function ForecastPanel({ forecast, locale, t }: {
               <span className="fc-ledger-amt">{signedDelta(recIncome)}</span>
               <span className="fc-ledger-label">{t('statistics.forecast.recurring_expenses_label')}</span>
               <span className="fc-ledger-amt">{signedDelta(recExpenses)}</span>
-              <span className="fc-ledger-label">{t('statistics.forecast.variable_income_label', { n: months })}</span>
-              <span className="fc-ledger-amt">{signedDelta(varIncome)}</span>
-              <span className="fc-ledger-label">{t('statistics.forecast.variable_expenses_label', { n: months })}</span>
-              <span className="fc-ledger-amt">{signedDelta(varExpenses)}</span>
+              <button type="button" className="fc-ledger-rowbtn" onClick={() => setDrillKind('income')} aria-haspopup="dialog">
+                <span className="fc-ledger-label is-link">{t('statistics.forecast.variable_income_label', { n: months })}</span>
+                <span className="fc-ledger-amt">{signedDelta(varIncome)}</span>
+              </button>
+              <button type="button" className="fc-ledger-rowbtn" onClick={() => setDrillKind('expenses')} aria-haspopup="dialog">
+                <span className="fc-ledger-label is-link">{t('statistics.forecast.variable_expenses_label', { n: months })}</span>
+                <span className="fc-ledger-amt">{signedDelta(varExpenses)}</span>
+              </button>
               <div className="fc-ledger-rule" />
               <span className="fc-ledger-label is-sum">{t('statistics.forecast.net_label')}</span>
               <span className={'fc-ledger-amt is-sum amt ' + (projectedNet >= 0 ? 'amt-pos' : 'amt-neg')}>{signedDelta(projectedNet)}</span>
@@ -350,6 +357,9 @@ function ForecastPanel({ forecast, locale, t }: {
           </>
         )}
       </div>
+      {drillKind && (
+        <VariableFlowsModal key={`${drillKind}-${scope}`} kind={drillKind} scope={scope} locale={locale} t={t} onClose={() => setDrillKind(null)} />
+      )}
     </div>
   )
 }

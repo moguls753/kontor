@@ -156,9 +156,14 @@ export function Modal({ title, subtitle, children, footer, onClose, icon, closeL
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose?.() }
     document.addEventListener('keydown', onKey)
     const node = ref.current
+    // Remember the trigger so focus returns to it on close (a11y: no focus loss to <body>).
+    const prevFocus = document.activeElement as HTMLElement | null
     const focusable = node?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]')
     focusable?.focus()
-    return () => document.removeEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      if (prevFocus && document.body.contains(prevFocus)) prevFocus.focus()
+    }
   }, [onClose])
   return (
     <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.() }}>

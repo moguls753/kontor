@@ -719,6 +719,56 @@ html.dark {
 .fc-row-amt { font-size: 13.5px; }
 .fc-empty { font-size: 13px; color: var(--ink-muted); }
 
+/* Drill-down ledger rows — a button spanning both columns, sub-gridding the
+   parent's tracks so its label/amount stay flush with the static rows above. */
+.fc-ledger-rowbtn {
+  grid-column: 1 / -1;
+  display: grid; grid-template-columns: 1fr auto; gap: 0 24px; align-items: baseline;
+  width: 100%; margin: 0; padding: 0; border: none; background: none;
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+.fc-ledger-label.is-link {
+  text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px;
+  transition: color 120ms ease, text-decoration-color 120ms ease;
+}
+.fc-ledger-rowbtn:hover .fc-ledger-label.is-link,
+.fc-ledger-rowbtn:focus-visible .fc-ledger-label.is-link { color: var(--brass-ink); text-decoration-color: var(--brass); }
+.fc-ledger-rowbtn:hover .fc-ledger-amt { color: var(--brass-ink); }
+/* Full-row tint so the amount half is visibly part of the click target (bleed via
+   box-shadow, not padding, to keep the columns flush with the static rows above). */
+.fc-ledger-rowbtn:hover { background: var(--brass-soft); box-shadow: 0 0 0 5px var(--brass-soft); border-radius: 1px; }
+.fc-ledger-rowbtn:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
+
+/* Variable-flows drill-down modal — a receipt: month sections, a till total. */
+.vf-state { min-height: 104px; display: grid; place-items: center; padding: 30px 4px; text-align: center; color: var(--ink-muted); font-size: 13.5px; }
+.vf-group { margin-top: 16px; }
+.vf-group:first-child { margin-top: 4px; }
+.vf-group-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--line-strong);
+}
+.vf-group-month { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-muted); }
+.vf-group-sub { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--ink-muted); letter-spacing: -0.01em; }
+.vf-row {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.vf-row:last-child { border-bottom: none; }
+.vf-row-date { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; }
+.vf-row-name { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+.vf-row-title { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vf-row-amt { font-size: 13px; white-space: nowrap; }
+.vf-tally {
+  width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  padding-top: 14px; border-top: 2px solid var(--line-strong);
+}
+.vf-tally-calc { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.vf-tally-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); }
+.vf-tally-sum { font-size: 13.5px; }
+.vf-tally-op { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-muted); }
+.vf-tally-avg { display: flex; align-items: baseline; gap: 8px; }
+.vf-tally-avg-amt { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+
 @keyframes barGrow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 @keyframes rankGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 

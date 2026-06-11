@@ -48,6 +48,13 @@ require "set"
 # the funding leg is netted but no purchase carries the spend → that expense
 # silently UNDERcounts. Inherent to the Firefly-style model + scrape completeness;
 # spot-check after the first re-run (Σ marked giro→PayPal ≈ Σ PayPal outflows).
+#
+# Trade Republic conduit (same one-legged model): TR is also a balance-only asset
+# account funded from the giro (Sparpläne), and the scraper books no matching +X.
+# But TR's deposit IBAN is PER-USER — it IS the user's own TR cash-account IBAN —
+# and the counterparty name is the user's OWN name, not "Trade Republic". So unlike
+# PayPal's global "200E" suffix, the only signal is an EXACT IBAN match to the TR
+# account's stored iban. See mark_trade_republic_conduit_legs (inert until set).
 class TransferMatcher
   # Booking lag between two accounts: real bookings run 0–3 days apart; the user's
   # own data lands same-day. ±4 days is the safe window (§7).
@@ -73,17 +80,29 @@ class TransferMatcher
   def match
     TransactionRecord.transaction do
       unmatch_orphaned_legs
-      pair_new_legs
+      # Conduit passes run BEFORE the generic +/− pairing. A one-legged conduit leg
+      # (giro↔PayPal / giro↔TR) is recognized by a SPECIFIC, authoritative
+      # counterparty signal (PayPal's 200E/name; TR's exact own-account IBAN), so it
+      # must be claimed first — otherwise the greedy amount/date pairing could hijack
+      # it (e.g. pair a TR Sparplan deposit with a coincidental same-amount income,
+      # swallowing real money — the B1 disease). Conduit legs never have a genuine
+      # second leg on another own account, so claiming them first steals nothing.
       mark_paypal_conduit_legs
+      mark_trade_republic_conduit_legs
+      pair_new_legs
     end
   end
 
   private
 
-  # Own account IBANs — same source the recurring detector uses
-  # (recurring_detector.rb:111). Lower-cased for case-insensitive comparison.
+  # All own account IBANs — the (a) corroboration source for a +/− pair AND the
+  # grounding source for own-holder names. Includes the balance-only conduit accounts
+  # (TR/PayPal): they ARE the user's own accounts, so their IBAN/holder-name are
+  # genuinely "own". A giro→conduit leg faces an own IBAN too, but it is claimed by
+  # the conduit passes — which run BEFORE pair_new_legs (see #match) — so it never
+  # reaches the generic pairing to be hijacked. Lower-cased / space-stripped.
   def own_ibans
-    @own_ibans ||= @user.accounts.pluck(:iban).compact.map { |i| i.downcase.gsub(/\s+/, "") }.to_set
+    @own_ibans ||= @user.accounts.pluck(:iban).filter_map { |i| normalize_iban(i) }.to_set
   end
 
   # The user's own account-holder names. A name alone ("Amazon") being equal on
@@ -160,9 +179,9 @@ class TransferMatcher
   # Guards: a no-op unless the user actually HAS a PayPal account (a one-off "pay
   # via PayPal" without a wallet stays a real expense); never touches PayPal's own
   # purchase/income rows; skips already-matched legs (internal_transfer?) so a
-  # re-run keeps the same group_id and the +/− matcher's real transfers are left
-  # alone. Runs AFTER pair_new_legs so a genuine two-leg transfer is claimed first
-  # (defensive — PayPal books no funding +X, so they never actually collide).
+  # re-run keeps the same group_id. Runs BEFORE pair_new_legs (see #match) so the
+  # authoritative PayPal-counterparty signal claims the funding leg before the
+  # generic pairing could; PayPal books no funding +X, so this steals no real pair.
   def mark_paypal_conduit_legs
     return unless paypal_account_id
 
@@ -204,6 +223,60 @@ class TransferMatcher
     return cp_iban.upcase.end_with?(PAYPAL_IBAN_SUFFIX) if cp_iban.present?
 
     (debit ? t.creditor_name : t.debtor_name).to_s.match?(PAYPAL_NAME)
+  end
+
+  # Trade Republic conduit (one-legged, both directions, idempotent). For each leg
+  # NOT on the TR account and not already a transfer, if its counterparty (creditor
+  # on a debit/deposit, debtor on a credit/withdrawal) is the user's own TR
+  # cash-account IBAN, mark it as a transfer TO the TR account. Mirrors
+  # mark_paypal_conduit_legs; runs BEFORE pair_new_legs (see #match) so the exact-
+  # IBAN signal claims the deposit before the greedy +/− pairing can hijack it via a
+  # coincidental same-amount leg (B1) — TR books no second leg, so nothing is stolen.
+  #
+  # No-op unless the user HAS a TR account AND that account carries an iban: TR's
+  # deposit IBAN is per-user and the balance-only scraper can't read it, so it is
+  # set per user/connection. Until then a TR Sparplan deposit stays a real flow.
+  def mark_trade_republic_conduit_legs
+    tr_id   = trade_republic_account_id
+    tr_iban = normalize_iban(trade_republic_account_iban)
+    return if tr_id.nil? || tr_iban.blank?
+
+    legs.each do |t|
+      next if t.account_id == tr_id
+      next if t.internal_transfer?
+      next unless trade_republic_counterparty?(t, tr_iban)
+
+      t.update!(
+        transfer_group_id: SecureRandom.uuid,
+        transfer_counterpart_account_id: tr_id
+      )
+    end
+  end
+
+  # The single Trade Republic account, identified by its bank_connection provider
+  # (the typed enum set at connect time) — NOT the renameable name. Memoized so the
+  # join runs once; nil ⇒ no TR account ⇒ the whole TR conduit pass is inert.
+  def trade_republic_account
+    return @trade_republic_account if defined?(@trade_republic_account)
+
+    @trade_republic_account = @user.accounts.joins(:bank_connection)
+                                   .where(bank_connections: { provider: "trade_republic" })
+                                   .first
+  end
+
+  def trade_republic_account_id
+    trade_republic_account&.id
+  end
+
+  def trade_republic_account_iban
+    trade_republic_account&.iban
+  end
+
+  # True when this leg's counterparty (creditor on a debit/deposit, debtor on a
+  # credit/withdrawal) is exactly the user's TR cash-account IBAN.
+  def trade_republic_counterparty?(t, tr_iban)
+    cp_iban = normalize_iban(t.amount.negative? ? t.creditor_iban : t.debtor_iban)
+    cp_iban.present? && cp_iban == tr_iban
   end
 
   # `bucket` is already filtered to the same currency and the exact opposite

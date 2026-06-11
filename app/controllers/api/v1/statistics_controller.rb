@@ -5,6 +5,7 @@ module Api
     # (ScopedAccounts#in_scope), so the numbers reconcile (plan §1.1, invariant I1).
     class StatisticsController < ApplicationController
       include ScopedAccounts
+      include TransactionSerialization
 
       # Savings/transfer-flavoured categories, matched by name against BOTH locale
       # default sets (User::DEFAULT_CATEGORIES). The category card no longer singles
@@ -87,6 +88,29 @@ module Api
           },
           categories: cats,
           forecast: forecast(ids)
+        }
+      end
+
+      # Drill-down for the forecast's "Variable Einnahmen/Ausgaben · Ø N Mt." ledger
+      # rows: the individual non-recurring transactions that make up the average,
+      # over the SAME clamped window/scope as #forecast (variable_window). Read-only.
+      # `kind=income` ⇒ non-recurring credits; anything else ⇒ non-recurring debits.
+      def variable_transactions
+        ids  = scoped_account_ids
+        kind = params[:kind] == "income" ? "income" : "expenses"
+        w    = variable_window(ids)
+        rel  = kind == "income" ? w[:nonrec].credits : w[:nonrec].debits
+        rows = rel.includes(:account, :category).order(booking_date: :desc, id: :desc)
+
+        divisor = [ w[:months], 1 ].max
+        total   = rel.sum(:amount).to_d
+        render json: {
+          kind: kind,
+          range: { from: w[:from], to: w[:to] },
+          months: w[:months],
+          total: total,
+          average: (total / divisor),
+          transactions: rows.map { |tx| transaction_json(tx) }
         }
       end
 
@@ -227,6 +251,19 @@ module Api
       # (no tx) don't constrain; the clamp self-relaxes to the full window once every account
       # has ≥FORECAST_WINDOW_MONTHS of history (user rule 2026-06-10).
       def variable_averages(ids)
+        w = variable_window(ids)
+        divisor = [ w[:months], 1 ].max
+        {
+          income: (w[:nonrec].credits.sum(:amount).to_d / divisor),
+          expenses: (w[:nonrec].debits.sum(:amount).to_d / divisor),
+          months: w[:months]
+        }
+      end
+
+      # The clamped lookback window + scoped, non-recurring relation that BOTH the
+      # forecast average and the drill-down modal (#variable_transactions) derive
+      # from — so the listed rows always sum to exactly the row shown in the ledger.
+      def variable_window(ids)
         cap_from = Date.current.beginning_of_month.prev_month(FORECAST_WINDOW_MONTHS)
         to       = Date.current.beginning_of_month - 1.day
         latest_start = Current.user.transaction_records.where(account_id: ids)
@@ -234,13 +271,7 @@ module Api
         from   = latest_start ? [ cap_from, latest_start.beginning_of_month ].max : cap_from
         scoped = in_scope(Current.user.transaction_records.in_period(from, to), ids)
         months = scoped.distinct.count(MONTH) # months WITH data in the (clamped) window
-        divisor = [ months, 1 ].max
-        nonrec = scoped.where(recurring_series_id: nil)
-        {
-          income: (nonrec.credits.sum(:amount).to_d / divisor),
-          expenses: (nonrec.debits.sum(:amount).to_d / divisor),
-          months: months
-        }
+        { from: from, to: to, months: months, nonrec: scoped.where(recurring_series_id: nil) }
       end
 
       # Anstehende Zahlungen: active in-scope series whose next_expected_on falls in

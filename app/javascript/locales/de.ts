@@ -326,6 +326,17 @@ export default {
       balance_future: 'in {{months}} Monaten',
       upcoming: 'Anstehend (30 Tage)',
       empty_series: 'Noch nicht genug Daten für eine Vorschau.',
+      variable_modal: {
+        title_income: 'Variable Einnahmen',
+        title_expenses: 'Variable Ausgaben',
+        subtitle: 'Einmalige Buchungen, gemittelt über {{n}} Mt.',
+        sum: 'Summe',
+        divide: '÷ {{n}} Mt.',
+        average: 'Ø / Monat',
+        empty: 'Keine variablen Buchungen in diesem Zeitraum.',
+        loading: 'Wird geladen …',
+        error: 'Buchungen konnten nicht geladen werden.',
+      },
     },
   },
   settings: {

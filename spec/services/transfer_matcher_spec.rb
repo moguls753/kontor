@@ -376,4 +376,151 @@ RSpec.describe TransferMatcher do
       expect(privat_scope).not_to include(funding)
     end
   end
+
+  # Trade Republic conduit: like PayPal, a one-legged same-sign transfer to the
+  # user's TR ASSET account — but recognized by an EXACT match of the counterpart
+  # IBAN to the TR account's OWN iban. TR's deposit IBAN is per-user and the
+  # counterparty name is the user's own name, so the IBAN is the only signal.
+  describe "Trade Republic conduit (one-legged transfer to the TR account)" do
+    # The TR account carries its own cash/deposit IBAN. The balance-only scraper
+    # can't read it, so it is set per user; here we seed it. role_locked so the
+    # inferrer after_commit can't fight us.
+    let(:tr_iban) { "DE23100123450185492701" }
+    let!(:tr) do
+      create(:account, bank_connection: create(:bank_connection, :trade_republic, user: user),
+        account_uid: "trade_republic", iban: tr_iban, name: "Trade Republic", role_locked: true)
+    end
+
+    it "marks a giro→TR Sparplan deposit (debit to the TR IBAN) as a transfer to TR" do
+      # The real shape: −10 from the giro, creditor IBAN = the user's TR cash IBAN,
+      # creditor name = the user's OWN name (no "Trade Republic" string anywhere).
+      deposit = leg(account: privat, amount: -10.00,
+        creditor_name: "Eike Rackwitz", creditor_iban: tr_iban, remittance: "Testuberweisung")
+
+      subject.match
+
+      deposit.reload
+      expect(deposit.transfer_counterpart_account_id).to eq(tr.id)
+      expect(deposit.transfer_group_id).to be_present
+    end
+
+    it "marks a TR→giro withdrawal (credit from the TR IBAN) as a transfer to TR" do
+      withdrawal = leg(account: privat, amount: 500.00,
+        debtor_name: "Eike Rackwitz", debtor_iban: tr_iban, remittance: "Auszahlung")
+
+      subject.match
+
+      withdrawal.reload
+      expect(withdrawal.transfer_counterpart_account_id).to eq(tr.id)
+      expect(withdrawal.transfer_group_id).to be_present
+    end
+
+    it "does NOT touch a giro debit to a DIFFERENT IBAN (only the exact TR IBAN counts)" do
+      other = leg(account: privat, amount: -10.00, creditor_name: "Eike Rackwitz",
+        creditor_iban: "DE99999999999999999999", remittance: "woanders hin")
+
+      subject.match
+
+      other.reload
+      expect(other.transfer_group_id).to be_nil
+      expect(other.transfer_counterpart_account_id).to be_nil
+    end
+
+    it "does NOT touch the TR account's own rows" do
+      own = leg(account: tr, amount: -10.00, creditor_iban: tr_iban)
+
+      subject.match
+
+      expect(own.reload.transfer_group_id).to be_nil
+    end
+
+    it "is idempotent — a second run keeps the same group_id" do
+      deposit = leg(account: privat, amount: -10.00, creditor_iban: tr_iban, creditor_name: "Eike Rackwitz")
+
+      subject.match
+      group_id = deposit.reload.transfer_group_id
+      expect(group_id).to be_present
+
+      described_class.new(user).match
+
+      expect(deposit.reload.transfer_group_id).to eq(group_id)
+      expect(deposit.transfer_counterpart_account_id).to eq(tr.id)
+    end
+
+    it "preserves a user category on the deposit it marks (only the transfer FKs change)" do
+      cat = create(:category, user: user)
+      deposit = leg(account: privat, amount: -10.00, category: cat,
+        creditor_iban: tr_iban, creditor_name: "Eike Rackwitz")
+
+      subject.match
+
+      deposit.reload
+      expect(deposit.transfer_counterpart_account_id).to eq(tr.id)
+      expect(deposit.category_id).to eq(cat.id)
+    end
+
+    # B1 GUARD (regression for the review blocker): a giro→TR deposit must not be
+    # hijacked by the greedy +/− pairing. Before the fix, pair_new_legs ran first and
+    # the −10 deposit (creditor_iban = the TR IBAN, an own IBAN) was "corroborated" on
+    # its own, so it got paired with a coincidental unrelated +10 — silently swallowing
+    # a real income. Now the conduit pass runs BEFORE pair_new_legs and claims the
+    # deposit by its exact TR-IBAN signal, so the income stays a visible flow.
+    it "does NOT let a coincidental unrelated +X of equal amount swallow the deposit" do
+      deposit = leg(account: privat, amount: -10.00, creditor_iban: tr_iban, creditor_name: "Eike Rackwitz")
+      income  = leg(account: gemeinschaft, amount: 10.00, debtor_name: "Katja Externa")
+
+      subject.match
+
+      deposit.reload
+      income.reload
+      expect(deposit.transfer_counterpart_account_id).to eq(tr.id)
+      expect(income.transfer_group_id).to be_nil
+      expect(income.transfer_counterpart_account_id).to be_nil
+    end
+
+    it "un-marks the one-legged conduit leg when the TR account is later deleted (S2)" do
+      deposit = leg(account: privat, amount: -10.00, creditor_iban: tr_iban, creditor_name: "Eike Rackwitz")
+      subject.match
+      expect(deposit.reload.transfer_counterpart_account_id).to eq(tr.id)
+
+      # Deleting the TR account nullifies transfer_counterpart_account_id (FK
+      # on_delete: :nullify); the next run drops the orphaned group_id so the giro
+      # leg becomes a real flow again rather than a phantom transfer forever.
+      tr.destroy!
+
+      described_class.new(user).match
+
+      deposit.reload
+      expect(deposit.transfer_counterpart_account_id).to be_nil
+      expect(deposit.transfer_group_id).to be_nil
+    end
+
+    it "matches regardless of IBAN spacing/case on the leg (normalized on both sides)" do
+      deposit = leg(account: privat, amount: -10.00, creditor_name: "Eike Rackwitz",
+        creditor_iban: "de23 1001 2345 0185 4927 01")
+
+      subject.match
+
+      expect(deposit.reload.transfer_counterpart_account_id).to eq(tr.id)
+    end
+  end
+
+  describe "Trade Republic conduit guard — TR account without an IBAN" do
+    # TR account present but iban still nil (the deposit IBAN hasn't been set yet).
+    let!(:tr) do
+      create(:account, bank_connection: create(:bank_connection, :trade_republic, user: user),
+        account_uid: "trade_republic", iban: nil, name: "Trade Republic", role_locked: true)
+    end
+
+    it "leaves a giro→TR deposit as a real flow until the TR IBAN is set" do
+      deposit = leg(account: privat, amount: -10.00, creditor_name: "Eike Rackwitz",
+        creditor_iban: "DE23100123450185492701", remittance: "Testuberweisung")
+
+      subject.match
+
+      deposit.reload
+      expect(deposit.transfer_group_id).to be_nil
+      expect(deposit.transfer_counterpart_account_id).to be_nil
+    end
+  end
 end

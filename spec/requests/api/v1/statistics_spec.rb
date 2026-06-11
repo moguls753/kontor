@@ -423,4 +423,109 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(1234.56)
     end
   end
+
+  # Drill-down behind the "Variable Einnahmen/Ausgaben · Ø N Mt." ledger rows: the
+  # individual non-recurring transactions over the SAME clamped window, plus the
+  # till math (total ÷ months = average) that MUST reconcile to the forecast row.
+  describe "variable_transactions (drill-down)" do
+    it "lists the non-recurring debits that reconcile to forecast.variable_expenses" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      fixed = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Rent")
+      3.times do |i|
+        create(:transaction_record, account: account, amount: -300,
+                                    booking_date: Date.current.beginning_of_month - (i * 30 + 5).days)
+      end
+      # recurring-linked debit and a current-month debit must BOTH be excluded.
+      create(:transaction_record, account: account, amount: -1000, recurring_series: fixed,
+                                  booking_date: Date.current.beginning_of_month - 5.days)
+      create(:transaction_record, account: account, amount: -500, booking_date: Date.current)
+
+      get variable_transactions_api_v1_statistics_path, params: { kind: "expenses" }, as: :json
+      expect(response).to have_http_status(:ok)
+      body = response.parsed_body
+
+      expect(body["kind"]).to eq("expenses")
+      expect(body["transactions"].size).to eq(3)
+      expect(body["transactions"].map { |t| t["amount"].to_f }).to all(eq(-300.0))
+      expect(body["total"].to_f).to eq(-900.0)
+      expect(body["months"]).to eq(3)
+      expect(body["average"].to_f).to eq(-300.0)
+
+      # The drill-down average equals the ledger row it sits behind (the trust anchor).
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      expect(body["average"].to_f).to eq(response.parsed_body["forecast"]["variable_expenses"].to_f)
+    end
+
+    it "lists non-recurring credits for kind=income, sorted newest first" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      bom = Date.current.beginning_of_month
+      old = create(:transaction_record, :credit, account: account, amount: 200, booking_date: bom.prev_month(2) + 9.days)
+      recent = create(:transaction_record, :credit, account: account, amount: 50, booking_date: bom.prev_month(1) + 9.days)
+
+      get variable_transactions_api_v1_statistics_path, params: { kind: "income" }, as: :json
+      body = response.parsed_body
+
+      expect(body["transactions"].map { |t| t["id"] }).to eq([recent.id, old.id])
+      expect(body["transactions"].first).to include("category", "account_name", "remittance")
+    end
+
+    it "defaults to expenses for an unknown kind and honours scope" do
+      privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
+      gemein = create(:account, bank_connection: bc, balance_amount: 1000, shared: true)
+      bom = Date.current.beginning_of_month
+      create(:transaction_record, account: privat, amount: -100, booking_date: bom.prev_month(1) + 9.days)
+      create(:transaction_record, account: gemein, amount: -400, booking_date: bom.prev_month(1) + 9.days)
+
+      get variable_transactions_api_v1_statistics_path, params: { scope: "privat" }, as: :json
+      body = response.parsed_body
+      expect(body["kind"]).to eq("expenses")
+      expect(body["transactions"].map { |t| t["amount"].to_f }).to eq([-100.0])
+
+      get variable_transactions_api_v1_statistics_path, as: :json
+      expect(response.parsed_body["transactions"].map { |t| t["amount"].to_f }).to contain_exactly(-100.0, -400.0)
+    end
+
+    it "requires authentication" do
+      delete session_path, as: :json
+      get variable_transactions_api_v1_statistics_path, params: { kind: "expenses" }, as: :json
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    # §4a — the reconciliation anchor: a matched internal transfer whose counterpart
+    # is also in scope nets to zero, so it must be absent from BOTH the drill-down
+    # list AND the forecast row the modal reconciles to (in_scope, via variable_window).
+    it "excludes in-scope internal transfers, staying reconciled to the ledger row" do
+      a = create(:account, bank_connection: bc, balance_amount: 5000)
+      b = create(:account, bank_connection: bc, balance_amount: 5000)
+      bom = Date.current.beginning_of_month
+      real = create(:transaction_record, account: a, amount: -300, booking_date: bom.prev_month(1) + 9.days)
+      # a matched transfer pair between two in-scope accounts (net zero) — both legs hidden.
+      g = "grp-1"
+      out = create(:transaction_record, account: a, amount: -200, booking_date: bom.prev_month(1) + 10.days,
+                                        transfer_group_id: g, transfer_counterpart_account: b)
+      create(:transaction_record, :credit, account: b, amount: 200, booking_date: bom.prev_month(1) + 10.days,
+                                            transfer_group_id: g, transfer_counterpart_account: a)
+
+      get variable_transactions_api_v1_statistics_path, params: { kind: "expenses" }, as: :json
+      ids = response.parsed_body["transactions"].map { |t| t["id"] }
+      expect(ids).to eq([real.id])           # the transfer leg is netted out
+      expect(ids).not_to include(out.id)
+      avg = response.parsed_body["average"].to_f
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      expect(avg).to eq(response.parsed_body["forecast"]["variable_expenses"].to_f)
+    end
+
+    it "never exposes another user's transactions" do
+      other = create(:user, password: "password123")
+      other_acc = create(:account, bank_connection: create(:bank_connection, user: other), balance_amount: 999)
+      create(:transaction_record, account: other_acc, amount: -500, booking_date: Date.current.beginning_of_month.prev_month(1) + 9.days)
+      mine = create(:account, bank_connection: bc, balance_amount: 100)
+      create(:transaction_record, account: mine, amount: -10, booking_date: Date.current.beginning_of_month.prev_month(1) + 9.days)
+
+      get variable_transactions_api_v1_statistics_path, params: { kind: "expenses" }, as: :json
+      body = response.parsed_body
+      expect(body["transactions"].map { |t| t["amount"].to_f }).to eq([-10.0])
+    end
+  end
 end
