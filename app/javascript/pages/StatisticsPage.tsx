@@ -307,6 +307,15 @@ function ForecastPanel({ forecast, locale, t, scope }: {
   // Scenario-aware projection (≡ the linear baseline byte-for-byte when no assumptions).
   const liqAt = (h: number) => projectBalance(liquidBalance, liquidNet, scenario, h, 'liquid')
   const totAt = (h: number) => projectBalance(balance, projectedNet, scenario, h, 'total')
+  // Scenario-adjusted "typical month": recurring BOTH-lens assumptions move the Kassenzettel
+  // (a raise lifts Wiederkehrende Einnahmen, its net follows); one-offs + savings-lens don't
+  // (not a typical month / net-worth-neutral). Degrades to the baseline with no assumptions.
+  const scRecIncome = scenario.reduce((s, a) => s + (a.kind === 'recurring' && a.lens === 'both' && a.amount > 0 ? a.amount : 0), 0)
+  const scRecExpense = scenario.reduce((s, a) => s + (a.kind === 'recurring' && a.lens === 'both' && a.amount < 0 ? a.amount : 0), 0)
+  const recIncomeScn = recIncome + scRecIncome
+  const recExpensesScn = recExpenses + scRecExpense
+  const projectedNetScn = recIncomeScn + recExpensesScn + variableNet
+  const kassChanged = scRecIncome !== 0 || scRecExpense !== 0
 
   return (
     <div className="panel">
@@ -318,12 +327,15 @@ function ForecastPanel({ forecast, locale, t, scope }: {
           <div className="fc-empty">{t('statistics.forecast.empty_series')}</div>
         ) : (
           <>
-            <Eyebrow className="mb-3">{t('statistics.forecast.typical_month')}</Eyebrow>
+            <Eyebrow className="mb-3">
+              {t('statistics.forecast.typical_month')}
+              {kassChanged && <span className="fc-ledger-scn"> · {t('statistics.forecast.scenario.with_scenario')}</span>}
+            </Eyebrow>
             <div className="fc-ledger">
               <span className="fc-ledger-label">{t('statistics.forecast.recurring_income_label')}</span>
-              <span className="fc-ledger-amt">{signedDelta(recIncome)}</span>
+              <span className={'fc-ledger-amt' + (scRecIncome !== 0 ? ' is-scn' : '')}>{signedDelta(recIncomeScn)}</span>
               <span className="fc-ledger-label">{t('statistics.forecast.recurring_expenses_label')}</span>
-              <span className="fc-ledger-amt">{signedDelta(recExpenses)}</span>
+              <span className={'fc-ledger-amt' + (scRecExpense !== 0 ? ' is-scn' : '')}>{signedDelta(recExpensesScn)}</span>
               <button type="button" className="fc-ledger-rowbtn" onClick={() => setDrillKind('income')} aria-haspopup="dialog">
                 <span className="fc-ledger-label is-link">{t('statistics.forecast.variable_income_label', { n: months })}</span>
                 <span className="fc-ledger-amt">{signedDelta(varIncome)}</span>
@@ -334,7 +346,7 @@ function ForecastPanel({ forecast, locale, t, scope }: {
               </button>
               <div className="fc-ledger-rule" />
               <span className="fc-ledger-label is-sum">{t('statistics.forecast.net_label')}</span>
-              <span className={'fc-ledger-amt is-sum amt ' + (projectedNet >= 0 ? 'amt-pos' : 'amt-neg')}>{signedDelta(projectedNet)}</span>
+              <span className={'fc-ledger-amt is-sum amt ' + (projectedNetScn >= 0 ? 'amt-pos' : 'amt-neg')}>{signedDelta(projectedNetScn)}</span>
             </div>
             <table className="fc-proj">
               <caption className="sr-only">
@@ -383,6 +395,7 @@ function ForecastPanel({ forecast, locale, t, scope }: {
 
             <ScenarioEditor
               adjustments={scenario}
+              items={forecast.recurring_items}
               onAdd={a => setScenario(s => [...s, a])}
               onRemove={id => setScenario(s => s.filter(x => x.id !== id))}
               onReset={() => setScenario([])}

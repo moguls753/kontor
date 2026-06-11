@@ -194,15 +194,20 @@ module Api
 
         rec_income   = 0.to_d
         rec_expenses = 0.to_d
+        # Named per-series monthly run-rates (signed: + income, − expense) so the
+        # "Was-wäre-wenn" playground can let the user ADJUST an existing item (Gehalt
+        # 1.920 → 3.220) instead of hand-computing the delta. Same source as the totals.
+        rec_items = []
         series.each do |s|
           eq = monthly_equiv(s)
           next if eq.nil?
 
           case buckets[s]
-          when "income"  then rec_income   += eq
-          when "expense" then rec_expenses -= eq
+          when "income"  then rec_income   += eq; rec_items << { label: s.canonical_name, monthly: eq.to_f.round(2) }
+          when "expense" then rec_expenses -= eq; rec_items << { label: s.canonical_name, monthly: -eq.to_f.round(2) }
           end
         end
+        rec_items.sort_by! { |i| -i[:monthly].abs }
 
         var = variable_averages(ids)
         total_balance = Current.user.accounts.where(id: ids).sum(:balance_amount).to_d
@@ -227,6 +232,7 @@ module Api
           total_net: total_net,
           liquid_balance: liquid[:balance],
           liquid_net: liquid[:net],
+          recurring_items: rec_items,
           upcoming: upcoming_payments(series, buckets)
         }.tap { |f| f[:upcoming_total] = f[:upcoming].sum(0.to_d) { |u| u[:amount] } }
       end

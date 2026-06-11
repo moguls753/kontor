@@ -210,8 +210,16 @@ export interface StatForecast {
   total_net: string
   liquid_balance: string
   liquid_net: string
+  recurring_items: RecurringItem[]
   upcoming: StatForecastItem[]
   upcoming_total: string
+}
+
+// A named recurring run-rate (signed: + income, − expense) the scenario playground
+// can let the user adjust to a new value.
+export interface RecurringItem {
+  label: string
+  monthly: number
 }
 
 export interface StatVariableFlows {

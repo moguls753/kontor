@@ -710,6 +710,8 @@ html.dark {
 .fc-ledger-rule { grid-column: 1 / -1; height: 0; border-top: 1px solid var(--line-strong); margin: 3px 0 1px; }
 .fc-ledger-label.is-sum { color: var(--ink); font-weight: 600; font-size: 13.5px; }
 .fc-ledger-amt.is-sum { font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
+.fc-ledger-amt.is-scn { color: var(--brass-ink); } /* a recurring scenario assumption moved this line */
+.fc-ledger-scn { color: var(--brass-ink); }
 /* Projection — the "Ausblick" balance sheet as a SEMANTIC <table>: row headers
    (Heute / in N Mt.) × two column headers (Liquide spending-runway | Gesamt net worth).
    Liquide reads primary via a brass header rule + full-ink figures; Gesamt stays muted;
@@ -776,6 +778,8 @@ table.fc-proj { width: 100%; max-width: 560px; border-collapse: collapse; margin
 .fc-sc-savings.on { color: var(--brass-ink); font-weight: 550; }
 .fc-sc-savings input { width: 16px; height: 16px; accent-color: var(--brass); cursor: pointer; }
 .fc-sc-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.fc-sc-mode { align-self: flex-start; }
+.fc-sc-delta-hint { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--brass-ink); margin: -4px 0 0; }
 .fc-list { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .fc-list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
 .fc-row { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }

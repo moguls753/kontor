@@ -25,7 +25,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     expect(body["categories"]).to include("items", "total")
     expect(body["forecast"]).to include("recurring_income", "recurring_expenses", "variable_income", "variable_expenses",
                                         "avg_window_months", "current_balance", "total_net", "liquid_balance", "liquid_net",
-                                        "upcoming", "upcoming_total")
+                                        "recurring_items", "upcoming", "upcoming_total")
     expect(body["cashflow"].last).to include("month", "income", "expenses", "net")
   end
 
@@ -468,6 +468,23 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       expect(fc["total_net"].to_f).to eq(0.0)       # Sparplan netted (internal transfer)
       expect(fc["liquid_balance"].to_f).to eq(1000.0)
       expect(fc["liquid_net"].to_f).to eq(-100.0)   # Sparplan now a real liquid outflow
+    end
+
+    # recurring_items powers the playground's "Anpassen" mode: each recurring run-rate,
+    # named + signed (+ income, − expense), biggest first.
+    it "lists named recurring items with signed monthly run-rates" do
+      acct = create(:account, bank_connection: bc)
+      salary = create(:recurring_series, :inflow, user: user, canonical_name: "Gehalt", expected_amount: 2000)
+      create(:transaction_record, :credit, account: acct, amount: 2000, recurring_series: salary, booking_date: Date.current - 3)
+      rent = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Miete", expected_amount: -800)
+      create(:transaction_record, account: acct, amount: -800, recurring_series: rent, booking_date: Date.current - 3)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      items = response.parsed_body["forecast"]["recurring_items"]
+      by_label = items.to_h { |i| [ i["label"], i["monthly"].to_f ] }
+      expect(by_label["Gehalt"]).to eq(2000.0)   # income → positive run-rate
+      expect(by_label["Miete"]).to eq(-800.0)     # expense → negative
+      expect(items.first["label"]).to eq("Gehalt") # sorted by magnitude (2000 > 800)
     end
   end
 
