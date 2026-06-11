@@ -1,3 +1,10 @@
-<svg width="512" height="512" xmlns="http://www.w3.org/2000/svg">
-  <circle cx="256" cy="256" r="256" fill="red"/>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Kontor mark: warm paper tile, brass rim, ink K -->
+  <rect x="16" y="16" width="480" height="480" rx="92" fill="#f3f0ea"/>
+  <rect x="29" y="29" width="454" height="454" rx="78" fill="none" stroke="#a87f47" stroke-width="20" opacity="0.85"/>
+  <g fill="none" stroke="#29241e" stroke-width="52" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M190 150 V362"/>
+    <path d="M190 256 L322 150"/>
+    <path d="M190 256 L322 362"/>
+  </g>
 </svg>
