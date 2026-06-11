@@ -569,9 +569,12 @@ html.dark {
   #react-app { transition: filter 160ms ease; }
   #react-app.is-blurred { filter: blur(3px); }
   /* A descendant backdrop-filter (the topbar glass) under an ancestor `filter`
-     triggers a Chromium compositing bug that blanks sibling layers (the sidebar).
-     Neutralise it while blurred — it's redundant when the whole app is blurred. */
-  #react-app.is-blurred .topbar { backdrop-filter: none; -webkit-backdrop-filter: none; }
+     triggers a Chromium compositing bug that blanks sibling layers (the sidebar)
+     and breaks the blur. Neutralise it while blurred — redundant when the whole
+     app is blurred anyway. NB: write ONLY the unprefixed prop and let the build
+     auto-prefix it; writing both by hand makes the minifier drop the unprefixed
+     one (keeping only -webkit-), which leaves Chrome/Firefox's backdrop-filter live. */
+  #react-app.is-blurred .topbar { backdrop-filter: none; }
   .modal {
     width: 100%; max-width: 520px;
     background: var(--surface); border: 1px solid var(--line);
