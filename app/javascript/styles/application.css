@@ -567,7 +567,7 @@ html.dark {
      backdrop-filter), NOT a scrim — no colour change. The modal is portaled to
      <body>, outside #react-app, so it stays crisp above the blur. Toggled by Modal. */
   #react-app { transition: filter 160ms ease; }
-  #react-app.is-blurred { filter: blur(7px); }
+  #react-app.is-blurred { filter: blur(3px); }
   .modal {
     width: 100%; max-width: 520px;
     background: var(--surface); border: 1px solid var(--line);
