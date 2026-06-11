@@ -88,6 +88,7 @@ export default function VariableFlowsModal({ kind, scope, locale, t, onClose }: 
       onClose={onClose}
       closeLabel={t('common.close')}
       footer={footer}
+      size="lg"
     >
       {status === 'loading' && <div className="vf-state">{t('statistics.forecast.variable_modal.loading')}</div>}
       {status === 'error' && <div className="vf-state">{t('statistics.forecast.variable_modal.error')}</div>}
@@ -103,10 +104,8 @@ export default function VariableFlowsModal({ kind, scope, locale, t, onClose }: 
           {g.rows.map(tx => (
             <div className="vf-row" key={tx.id}>
               <span className="vf-row-date">{dayMonth(tx.booking_date, locale)}</span>
-              <span className="vf-row-name">
-                <span className="vf-row-title">{transactionDisplayName(tx)}</span>
-                <CategoryChip name={tx.category?.name ?? null} uncategorisedLabel={t('transactions.uncategorized_chip')} />
-              </span>
+              <span className="vf-row-title">{transactionDisplayName(tx)}</span>
+              <CategoryChip name={tx.category?.name ?? null} uncategorisedLabel={t('transactions.uncategorized_chip')} />
               <Amount value={tx.amount} currency={tx.currency} className="vf-row-amt" />
             </div>
           ))}

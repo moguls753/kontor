@@ -3,6 +3,7 @@
    These are presentation-only; all data fetching/state stays in the pages.
    ============================================================================ */
 import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
 import Icon from './Icon'
 import type { IconName } from './Icon'
@@ -149,8 +150,9 @@ interface ModalProps {
   onClose?: () => void
   icon?: IconName
   closeLabel?: string
+  size?: 'default' | 'lg'
 }
-export function Modal({ title, subtitle, children, footer, onClose, icon, closeLabel = 'Close' }: ModalProps) {
+export function Modal({ title, subtitle, children, footer, onClose, icon, closeLabel = 'Close', size = 'default' }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose?.() }
@@ -165,9 +167,12 @@ export function Modal({ title, subtitle, children, footer, onClose, icon, closeL
       if (prevFocus && document.body.contains(prevFocus)) prevFocus.focus()
     }
   }, [onClose])
-  return (
+  // Portal to <body> so the fixed overlay always covers the full viewport —
+  // a transformed/animated ancestor (e.g. an animated panel) would otherwise
+  // become the containing block and trap the overlay inside it.
+  return createPortal(
     <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.() }}>
-      <div className="modal" ref={ref} role="dialog" aria-modal="true" aria-label={title}>
+      <div className={'modal' + (size === 'lg' ? ' modal-lg' : '')} ref={ref} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-head">
           <div className="flex gap-[13px] items-start min-w-0">
             {icon && (
@@ -189,7 +194,8 @@ export function Modal({ title, subtitle, children, footer, onClose, icon, closeL
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

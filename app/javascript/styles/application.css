@@ -500,7 +500,7 @@ html.dark {
     height: 24px; padding: 0 10px 0 8px;
     border: 1px solid var(--line); border-radius: var(--radius-sm);
     font-size: 12px; font-weight: 500; color: var(--ink-muted);
-    background: var(--surface);
+    background: var(--surface); white-space: nowrap;
   }
   .chip .tick { width: 3px; height: 13px; border-radius: 2px; flex-shrink: 0; }
   .chip.uncat { color: var(--brass-ink); border-style: dashed; border-color: color-mix(in oklab, var(--brass) 45%, var(--line)); }
@@ -559,8 +559,8 @@ html.dark {
   /* ---- Modal / overlay ---- */
   .overlay {
     position: fixed; inset: 0; z-index: 80;
-    background: oklch(0.2 0.01 72 / 0.42);
-    backdrop-filter: blur(2px);
+    background: transparent;
+    backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
     display: grid; place-items: center; padding: 24px;
     animation: fade 160ms ease;
   }
@@ -571,8 +571,9 @@ html.dark {
     animation: modalIn 200ms cubic-bezier(0.22,1,0.36,1);
     max-height: calc(100vh - 48px); display: flex; flex-direction: column;
   }
+  .modal-lg { max-width: 760px; }
   .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px 22px 14px; }
-  .modal-body { padding: 4px 22px 8px; overflow-y: auto; }
+  .modal-body { padding: 4px 22px 8px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
   .modal-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 16px 22px 20px; }
 
   /* ---- Toast ---- */
@@ -750,13 +751,12 @@ html.dark {
 .vf-group-month { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-muted); }
 .vf-group-sub { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--ink-muted); letter-spacing: -0.01em; }
 .vf-row {
-  display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: center;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 4px 14px; align-items: center;
   padding: 8px 0; border-bottom: 1px solid var(--line);
 }
 .vf-row:last-child { border-bottom: none; }
 .vf-row-date { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; }
-.vf-row-name { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
-.vf-row-title { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vf-row-title { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .vf-row-amt { font-size: 13px; white-space: nowrap; }
 .vf-tally {
   width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
