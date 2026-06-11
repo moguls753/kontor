@@ -207,6 +207,9 @@ export interface StatForecast {
   variable_expenses: string
   avg_window_months: number
   current_balance: string
+  total_net: string
+  liquid_balance: string
+  liquid_net: string
   upcoming: StatForecastItem[]
   upcoming_total: string
 }

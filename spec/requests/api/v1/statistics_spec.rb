@@ -24,7 +24,8 @@ RSpec.describe "Api::V1::Statistics", type: :request do
                                     "avg_monthly_expenses", "fixed_monthly", "recurring_payment_count")
     expect(body["categories"]).to include("items", "total")
     expect(body["forecast"]).to include("recurring_income", "recurring_expenses", "variable_income", "variable_expenses",
-                                        "avg_window_months", "current_balance", "upcoming", "upcoming_total")
+                                        "avg_window_months", "current_balance", "total_net", "liquid_balance", "liquid_net",
+                                        "upcoming", "upcoming_total")
     expect(body["cashflow"].last).to include("month", "income", "expenses", "net")
   end
 
@@ -421,6 +422,52 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       get api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
       expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(dash_privat)
       expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(1234.56)
+    end
+
+    # Liquide vs Gesamt lens (2026-06-11): the runway projection splits into a liquid
+    # base (spending accounts) and the net-worth total. liquid_balance drops the
+    # investment/savings accounts by role; current_balance keeps them.
+    it "liquid_balance excludes investment/savings accounts (kreditkarte stays)" do
+      create(:account, bank_connection: bc, balance_amount: 2000, role: "giro", role_locked: true)
+      create(:account, bank_connection: bc, balance_amount: 9000, role: "investment", role_locked: true)
+      create(:account, bank_connection: bc, balance_amount: -500, role: "kreditkarte", role_locked: true)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      fc = response.parsed_body["forecast"]
+      expect(fc["current_balance"].to_f).to eq(10500.0)  # 2000 + 9000 − 500
+      expect(fc["liquid_balance"].to_f).to eq(1500.0)     # investment dropped; card kept
+    end
+
+    # No investment/savings account ⇒ the lens collapses (liquid == total).
+    it "collapses liquid to total when there is no investment/savings account" do
+      create(:account, bank_connection: bc, balance_amount: 1234.56, role: "giro", role_locked: true)
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      fc = response.parsed_body["forecast"]
+      expect(fc["liquid_balance"]).to eq(fc["current_balance"])
+      expect(fc["liquid_net"]).to eq(fc["total_net"])
+    end
+
+    # "Works with Sparplan": a recurring giro→investment transfer is NETTED in the
+    # total (net-worth) lens but is a real OUTFLOW in the liquid lens (investment is
+    # outside it), so the liquid runway drains by the savings rate. Falls straight out
+    # of the scope machinery — liquid_projection runs flow_bucket with the liquid ids,
+    # so the giro leg (counterpart out of the lens) buckets as an expense.
+    it "counts a recurring giro→investment Sparplan as a liquid outflow, neutral in total" do
+      giro   = create(:account, bank_connection: bc, balance_amount: 1000, role: "giro", role_locked: true)
+      invest = create(:account, bank_connection: bc, balance_amount: 5000, role: "investment", role_locked: true)
+      plan = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Sparplan", expected_amount: -100)
+      g = SecureRandom.uuid
+      create(:transaction_record, account: giro, amount: -100, recurring_series: plan,
+                                  booking_date: Date.current - 3, transfer_group_id: g, transfer_counterpart_account: invest)
+      create(:transaction_record, account: invest, amount: 100, booking_date: Date.current - 3,
+                                  transfer_group_id: g, transfer_counterpart_account: giro)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      fc = response.parsed_body["forecast"]
+      expect(fc["current_balance"].to_f).to eq(6000.0)
+      expect(fc["total_net"].to_f).to eq(0.0)       # Sparplan netted (internal transfer)
+      expect(fc["liquid_balance"].to_f).to eq(1000.0)
+      expect(fc["liquid_net"].to_f).to eq(-100.0)   # Sparplan now a real liquid outflow
     end
   end
 

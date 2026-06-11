@@ -205,15 +205,60 @@ module Api
         end
 
         var = variable_averages(ids)
+        total_balance = Current.user.accounts.where(id: ids).sum(:balance_amount).to_d
+        total_net     = rec_income + rec_expenses + var[:income] + var[:expenses]
+
+        # Liquide lens: the SAME projection over only the spending accounts (drop
+        # investment/savings by role). Reusing the scope machinery is the whole trick —
+        # with the liquid ids as BOTH the universe AND the flow_bucket scope, a recurring
+        # giro→investment Sparplan (its counterpart now OUTSIDE the lens) flips from a
+        # netted transfer to a real outflow, so the liquid runway honestly counts money
+        # locked away. No investment/savings account ⇒ liquid == total (lens collapses).
+        liquid_ids = ids - investment_account_ids
+        liquid     = liquid_ids.sort == ids.sort ? { balance: total_balance, net: total_net } : liquid_projection(liquid_ids)
+
         {
           recurring_income: rec_income,
           recurring_expenses: rec_expenses,
           variable_income: var[:income],
           variable_expenses: var[:expenses],
           avg_window_months: var[:months],
-          current_balance: Current.user.accounts.where(id: ids).sum(:balance_amount).to_d,
+          current_balance: total_balance,
+          total_net: total_net,
+          liquid_balance: liquid[:balance],
+          liquid_net: liquid[:net],
           upcoming: upcoming_payments(series, buckets)
         }.tap { |f| f[:upcoming_total] = f[:upcoming].sum(0.to_d) { |u| u[:amount] } }
+      end
+
+      # Investment/savings accounts (role-based) — excluded from the liquid runway lens.
+      def investment_account_ids
+        Current.user.accounts.where(role: %w[investment sparkonto]).pluck(:id)
+      end
+
+      # Numeric projection (current balance + monthly net = recurring run-rate + variable
+      # average) for a liquid sub-universe. scope_ids == ids so flow_bucket treats a
+      # transfer to an account OUTSIDE this set (giro→TR) as a real outflow, mirroring
+      # in_scope inside variable_averages (the two-classifiers invariant, on the subset).
+      def liquid_projection(ids)
+        series = Current.user.recurring_series.active
+                        .merge(RecurringSeries.with_member_in(ids))
+                        .includes(:transaction_records).to_a
+        rec = 0.to_d
+        series.each do |s|
+          eq = monthly_equiv(s)
+          next if eq.nil?
+
+          case s.flow_bucket(members: s.transaction_records.to_a, scope_ids: ids)
+          when "income"  then rec += eq
+          when "expense" then rec -= eq
+          end
+        end
+        var = variable_averages(ids)
+        {
+          balance: Current.user.accounts.where(id: ids).sum(:balance_amount).to_d,
+          net: rec + var[:income] + var[:expenses]
+        }
       end
 
       # |expected_amount| normalised to a 30-day month. cd = explicit cadence_days,

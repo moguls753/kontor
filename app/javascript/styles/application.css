@@ -559,22 +559,17 @@ html.dark {
   /* ---- Modal / overlay ---- */
   .overlay {
     position: fixed; inset: 0; z-index: 80;
+    /* Blur the page BEHIND the modal via backdrop-filter — NO colour scrim. This is
+       GPU-safe: it does not filter the app container, so it can't drop layers (a
+       `filter` on the viewport-sized #react-app blanked the sidebar on real GPUs,
+       though never in headless/software raster). The modal sits crisp above it.
+       NB: write only the unprefixed prop; the build auto-adds -webkit- (hand-writing
+       both makes the minifier drop the unprefixed one). */
     background: transparent;
+    backdrop-filter: blur(5px);
     display: grid; place-items: center; padding: 24px;
     animation: fade 160ms ease;
   }
-  /* Blur is applied to the app content itself (reliable everywhere, unlike
-     backdrop-filter), NOT a scrim — no colour change. The modal is portaled to
-     <body>, outside #react-app, so it stays crisp above the blur. Toggled by Modal. */
-  #react-app { transition: filter 160ms ease; }
-  #react-app.is-blurred { filter: blur(3px); }
-  /* A descendant backdrop-filter (the topbar glass) under an ancestor `filter`
-     triggers a Chromium compositing bug that blanks sibling layers (the sidebar)
-     and breaks the blur. Neutralise it while blurred — redundant when the whole
-     app is blurred anyway. NB: write ONLY the unprefixed prop and let the build
-     auto-prefix it; writing both by hand makes the minifier drop the unprefixed
-     one (keeping only -webkit-), which leaves Chrome/Firefox's backdrop-filter live. */
-  #react-app.is-blurred .topbar { backdrop-filter: none; }
   .modal {
     width: 100%; max-width: 520px;
     background: var(--surface); border: 1px solid var(--line);
@@ -715,9 +710,22 @@ html.dark {
 .fc-ledger-rule { grid-column: 1 / -1; height: 0; border-top: 1px solid var(--line-strong); margin: 3px 0 1px; }
 .fc-ledger-label.is-sum { color: var(--ink); font-weight: 600; font-size: 13.5px; }
 .fc-ledger-amt.is-sum { font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
-.fc-balance { display: grid; grid-template-columns: 1fr auto; gap: 6px 24px; align-items: baseline; max-width: 400px; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line-strong); font-size: 12.5px; color: var(--ink-muted); }
-.fc-balance-amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--ink); letter-spacing: -0.01em; white-space: nowrap; }
-.fc-balance-delta { color: var(--ink-faint); font-size: 11.5px; margin-left: 6px; }
+/* Two-column projection — the "Ausblick" balance sheet: shared time-gutter, then
+   Liquide (spending runway) | Gesamt (net worth). Liquide reads as primary via a
+   brass header rule + full-ink figures; Gesamt stays muted. A balance projected
+   underwater renders in --danger — the honest signal the net-worth column hides. */
+.fc-proj { display: grid; grid-template-columns: max-content 1fr 1fr; gap: 10px 32px; align-items: baseline; max-width: 600px; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line-strong); }
+.fc-proj-head { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding-bottom: 8px; margin-bottom: 2px; border-bottom: 1px solid var(--line); }
+.fc-proj-head.is-liquid { border-bottom: 1.5px solid var(--brass); }
+.fc-proj-head-key { font-size: 10.5px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-muted); }
+.fc-proj-head.is-liquid .fc-proj-head-key { color: var(--brass-ink); }
+.fc-proj-head-sub { font-size: 11px; color: var(--ink-faint); }
+.fc-proj-time { font-size: 12.5px; color: var(--ink-muted); white-space: nowrap; }
+.fc-proj-amt { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 14px; text-align: right; color: var(--ink-muted); letter-spacing: -0.01em; white-space: nowrap; }
+.fc-proj-amt.is-liquid { color: var(--ink); font-weight: 550; }
+.fc-proj-amt.neg { color: var(--danger); }
+.fc-proj-delta { color: var(--ink-faint); font-size: 11px; margin-left: 7px; font-weight: 400; }
+.fc-proj-amt.neg .fc-proj-delta { color: color-mix(in oklab, var(--danger) 55%, var(--ink-faint)); }
 .fc-list { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .fc-list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
 .fc-row { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }

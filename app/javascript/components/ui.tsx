@@ -162,20 +162,9 @@ export function Modal({ title, subtitle, children, footer, onClose, icon, closeL
     const prevFocus = document.activeElement as HTMLElement | null
     const focusable = node?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]')
     focusable?.focus()
-    // Blur the underlying app (ref-counted so stacked modals don't un-blur early).
-    const root = document.getElementById('react-app')
-    if (root) {
-      root.dataset.modalCount = String(Number(root.dataset.modalCount || '0') + 1)
-      root.classList.add('is-blurred')
-    }
     return () => {
       document.removeEventListener('keydown', onKey)
       if (prevFocus && document.body.contains(prevFocus)) prevFocus.focus()
-      if (root) {
-        const n = Number(root.dataset.modalCount || '1') - 1
-        if (n <= 0) { root.classList.remove('is-blurred'); delete root.dataset.modalCount }
-        else root.dataset.modalCount = String(n)
-      }
     }
   }, [onClose])
   // Portal to <body> so the fixed overlay always covers the full viewport —

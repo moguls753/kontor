@@ -324,6 +324,11 @@ export default {
       net_label: 'Expected net / month',
       balance_today: 'Balance today',
       balance_future: 'in {{months}} months',
+      proj_now: 'Today',
+      proj_liquid: 'Liquid',
+      proj_liquid_sub: 'Checking + cards',
+      proj_total: 'Total',
+      proj_total_sub: 'incl. investments',
       upcoming: 'Upcoming (30 days)',
       empty_series: 'Not enough data yet for a forecast.',
       variable_modal: {

@@ -324,6 +324,11 @@ export default {
       net_label: 'Erwartetes Netto / Monat',
       balance_today: 'Saldo heute',
       balance_future: 'in {{months}} Monaten',
+      proj_now: 'Heute',
+      proj_liquid: 'Liquide',
+      proj_liquid_sub: 'Giro + Karten',
+      proj_total: 'Gesamt',
+      proj_total_sub: 'inkl. Investment',
       upcoming: 'Anstehend (30 Tage)',
       empty_series: 'Noch nicht genug Daten für eine Vorschau.',
       variable_modal: {

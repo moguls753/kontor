@@ -284,6 +284,11 @@ function ForecastPanel({ forecast, locale, t, scope }: {
   const variableNet = varIncome + varExpenses
   const projectedNet = recurringNet + variableNet
   const balance = parseFloat(forecast.current_balance)
+  // Two projection lenses: Liquide (spending accounts only — the runway that can go
+  // underwater) and Gesamt (incl. investment — net worth). Same start today when no
+  // recurring savings-transfer exists; the liquid rate diverges once a Sparplan recurs.
+  const liquidBalance = parseFloat(forecast.liquid_balance)
+  const liquidNet = parseFloat(forecast.liquid_net)
   const months = forecast.avg_window_months
   const hasData = recIncome !== 0 || recExpenses !== 0 || varIncome !== 0 || varExpenses !== 0
   const upcoming = forecast.upcoming
@@ -320,15 +325,36 @@ function ForecastPanel({ forecast, locale, t, scope }: {
               <span className="fc-ledger-label is-sum">{t('statistics.forecast.net_label')}</span>
               <span className={'fc-ledger-amt is-sum amt ' + (projectedNet >= 0 ? 'amt-pos' : 'amt-neg')}>{signedDelta(projectedNet)}</span>
             </div>
-            <div className="fc-balance">
-              <span>{t('statistics.forecast.balance_today')}</span>
-              <span className="fc-balance-amt">{saldo(balance)}</span>
-              {HORIZONS.map(h => (
-                <Fragment key={h}>
-                  <span>{t('statistics.forecast.balance_future', { months: h })}</span>
-                  <span className="fc-balance-amt">{saldo(balance + projectedNet * h)}<span className="fc-balance-delta">({signedDelta(projectedNet * h)})</span></span>
-                </Fragment>
-              ))}
+            <div className="fc-proj">
+              <span className="fc-proj-corner" aria-hidden="true" />
+              <span className="fc-proj-head is-liquid">
+                <span className="fc-proj-head-key">{t('statistics.forecast.proj_liquid')}</span>
+                <span className="fc-proj-head-sub">{t('statistics.forecast.proj_liquid_sub')}</span>
+              </span>
+              <span className="fc-proj-head">
+                <span className="fc-proj-head-key">{t('statistics.forecast.proj_total')}</span>
+                <span className="fc-proj-head-sub">{t('statistics.forecast.proj_total_sub')}</span>
+              </span>
+
+              <span className="fc-proj-time">{t('statistics.forecast.proj_now')}</span>
+              <span className={'fc-proj-amt is-liquid' + (liquidBalance < 0 ? ' neg' : '')}>{saldo(liquidBalance)}</span>
+              <span className="fc-proj-amt">{saldo(balance)}</span>
+
+              {HORIZONS.map(h => {
+                const liq = liquidBalance + liquidNet * h
+                const tot = balance + projectedNet * h
+                return (
+                  <Fragment key={h}>
+                    <span className="fc-proj-time">{t('statistics.forecast.balance_future', { months: h })}</span>
+                    <span className={'fc-proj-amt is-liquid' + (liq < 0 ? ' neg' : '')}>
+                      {saldo(liq)}<span className="fc-proj-delta">({signedDelta(liquidNet * h)})</span>
+                    </span>
+                    <span className="fc-proj-amt">
+                      {saldo(tot)}<span className="fc-proj-delta">({signedDelta(projectedNet * h)})</span>
+                    </span>
+                  </Fragment>
+                )
+              })}
             </div>
 
             {upcoming.length > 0 && (
