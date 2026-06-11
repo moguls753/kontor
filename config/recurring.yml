@@ -15,7 +15,14 @@ production:
     schedule: every hour at minute 12
   sync_all_accounts:
     class: SyncAllAccountsJob
-    schedule: every 6 hours
+    # Once a day at 03:00 Berlin — before detect (04:30) / snapshot (04:50) so the
+    # daily snapshot sees fresh balances. NOT every 6h: PSD2 caps unattended
+    # open-banking access at ~4 calls/day per account, and ONE sync already makes
+    # ~4 (each account's balance + transactions). A 6h cadence therefore drains the
+    # bank's daily budget by midday — every later sync, including the user's manual
+    # button, then bounces with 429 ASPSP_RATE_LIMIT_EXCEEDED. Once daily stays
+    # under the cap and leaves headroom for manual syncs.
+    schedule: "0 3 * * * Europe/Berlin"
   sync_scraped_balances:
     class: SyncScrapedBalancesJob
     # Once a day at 04:00 Berlin time. Explicit TZ via Fugit cron zone suffix so

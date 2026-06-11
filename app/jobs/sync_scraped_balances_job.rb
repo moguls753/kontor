@@ -1,10 +1,17 @@
-# Daily fan-out for scraped (Trade Republic, easybank) balances. Kept separate
-# from SyncAllAccountsJob (the 6h open-banking sync) because scraping runs just
-# once a day. Each connection is enqueued with jitter so the fetches don't all
-# hit the same upstream at the same instant, and connections that were synced
-# recently (e.g. a manual sync) are skipped to avoid duplicate logins. easybank
-# is included here too, and is deliberately capped to a 30-day backfill in the
-# background (the full 360-day backfill triggers an SMS mTAN — interactive only).
+# Daily fan-out for scraped balances. Only easybank rides this job: it logs in
+# with username+password and the bank does NOT challenge an mTAN on the routine
+# 30-day sync, so it refreshes unattended. Each connection is enqueued with jitter
+# so the fetches don't all hit the upstream at the same instant, and connections
+# synced recently (e.g. a manual sync) are skipped to avoid duplicate logins. The
+# 30-day cap matters: the full 360-day backfill triggers an SMS mTAN and is
+# interactive-only (SyncAccountsJob passes SHORT_BACKFILL_DAYS here).
+#
+# Trade Republic is deliberately EXCLUDED — like PayPal. Its scraped session does
+# not persist between syncs, so every sync needs a fresh app-push 2FA code that
+# nobody can enter unattended. A scheduled TR sync could therefore only ever hit
+# the dead session and flip the connection to "expired" (futile churn), never
+# refresh it. TR stays manual-only: it is synced on demand by SyncAccountsJob
+# right after a successful interactive re-pair (confirm_2fa).
 class SyncScrapedBalancesJob < ApplicationJob
   queue_as :default
 
@@ -14,7 +21,7 @@ class SyncScrapedBalancesJob < ApplicationJob
   def perform
     enqueued_user_ids = Set.new
 
-    BankConnection.active.where(provider: %w[trade_republic easybank]).find_each do |bc|
+    BankConnection.active.where(provider: %w[easybank]).find_each do |bc|
       next if bc.last_synced_at && bc.last_synced_at > RECENCY_WINDOW.ago
 
       SyncAccountsJob.set(wait: rand(0..MAX_JITTER.to_i).seconds).perform_later(bc.id)
