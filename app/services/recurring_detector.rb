@@ -68,15 +68,32 @@ class RecurringDetector
 
       detected_series_ids = Set.new # #3 — key reconcile on SERIES ID, not fingerprint
 
-      # §5.3/§5.4 — partition by [direction, currency], group by [canonical, account].
-      # account_id is in the key so a series is ACCOUNT-COHERENT: a payer's payments on a
-      # personal account must NOT merge with the same payer's payments on the joint account.
-      # The cross-account merge wrongly pulled a joint-only inflow into the Privat scope (a
-      # one-off PayPal payment dragged Katja's whole joint contribution into Privat). With
-      # the split, a lone cross-account occurrence forms its own group → too few to build a
-      # regular series → stays unmatched, and the scoping (with_member_in) is auto-correct.
+      # §5.3/§5.4 — partition by [direction, currency], group by [canonical, account, counterpart].
+      # account_id is in the key so a series is ACCOUNT-COHERENT on the SOURCE side: a payer's
+      # payments on a personal account must NOT merge with the same payer's payments on the joint
+      # account. The cross-account merge wrongly pulled a joint-only inflow into the Privat scope (a
+      # one-off PayPal payment dragged Katja's whole joint contribution into Privat). With the split,
+      # a lone cross-account occurrence forms its own group → too few to build a regular series →
+      # stays unmatched, and the scoping (with_member_in) is auto-correct.
+      #
+      # transfer_counterpart_account_id extends that coherence to the DESTINATION side: a matched
+      # transfer to one own account must NOT merge with a same-named, same-amount transfer to a
+      # DIFFERENT own account (e.g. a giro→Gemeinschaft "Ansparen" and a giro→TR "Sparplan", both
+      # bearing the user's own creditor name). Without it they merged into one series whose members
+      # straddle the liquid/investment boundary, and RecurringSeries#flow_bucket (members.any?) then
+      # classified the whole series as a transfer, silently dropping the giro→TR liquid outflow from
+      # the Liquide forecast lens. Splitting by counterpart aligns the detector, flow_bucket, and
+      # in_scope on the same counterpart signal. For merchants the FK is nil (set only by the
+      # TransferMatcher for matched internal transfers) → the third key element is a constant nil →
+      # merchants STILL group by [canonical, account] only and do NOT over-split on varying IBANs.
+      #
+      # The fingerprint (direction|currency|canonical, model fingerprint_for) deliberately does NOT
+      # include the counterpart, so it is unchanged: existing series still reconcile via
+      # where(fingerprint:) + nearest_amount_match. When two counterpart clusters share one
+      # fingerprint AND amount, the first claims its row and the @claimed set (persist_series) forces
+      # the second to create its own → two series, no double-count, no re-key of existing rows.
       rows.group_by { |r| [ r[:direction], r[:currency] ] }.each do |(direction, currency), part_rows|
-        part_rows.group_by { |r| [ r[:canonical], r[:account_id] ] }.each do |(canonical, _account_id), group_rows|
+        part_rows.group_by { |r| [ r[:canonical], r[:account_id], r[:transfer_counterpart_account_id] ] }.each do |(canonical, _account_id, _cp_id), group_rows|
           clusters = amount_subcluster(group_rows)
           clusters.each do |cluster|
             series = build_series(cluster, direction:, currency:, canonical:)
@@ -162,6 +179,12 @@ class RecurringDetector
     {
       tx_id: tx.id,
       account_id: tx.account_id,
+      # FK to the paired own account (set by TransferMatcher for matched internal
+      # transfers; nil for merchants). Part of the grouping key so two transfers from the
+      # same source to DIFFERENT own accounts don't merge. Raw column read (no association
+      # load), mirroring account_id/category_id. NOT counterparty_iban (that's the external
+      # bank IBAN text, which varies for Netflix/PayPal and would over-split merchants).
+      transfer_counterpart_account_id: tx.transfer_counterpart_account_id,
       amount: tx.amount,
       booking_date: tx.booking_date,
       currency: tx.currency,

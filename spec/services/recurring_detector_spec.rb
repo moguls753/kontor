@@ -120,6 +120,78 @@ RSpec.describe RecurringDetector do
     end
   end
 
+  describe "counterpart-coherent transfers (no cross-destination merge)" do
+    it "splits same-name, same-amount transfers to different own accounts into two series" do
+      # Two destinations for the SAME source ("account"), SAME canonical name, SAME monthly
+      # amount, but DIFFERENT transfer_counterpart_account → must NOT merge into one straddling
+      # series. iban: nil on both so own_ibans stays empty and the S3 filter is inert.
+      gemein = create(:account, bank_connection: bc, iban: nil, role: "giro", role_locked: true)
+      invest = create(:account, bank_connection: bc, iban: nil, role: "investment", role_locked: true)
+
+      # giro → Gemeinschaft "Eike Rackwitz" €70/mo (matched transfer)
+      monthly_dates(4).each.with_index do |d, i|
+        charge(name: "Eike Rackwitz", amount: -70.00, date: d,
+          transfer_group_id: "gem-#{i}", transfer_counterpart_account: gemein)
+      end
+      # giro → investment "Eike Rackwitz" €70/mo (matched transfer, different destination)
+      monthly_dates(4).each.with_index do |d, i|
+        charge(name: "Eike Rackwitz", amount: -70.00, date: d,
+          transfer_group_id: "inv-#{i}", transfer_counterpart_account: invest)
+      end
+      # control: a plain merchant (nil counterpart) must stay ONE intact series
+      monthly_dates(4).each { |d| charge(name: "Spotify", amount: -9.99, date: d) }
+
+      subject.detect
+
+      # the two transfers no longer straddle: two DISTINCT destination-coherent series
+      transfers = user.recurring_series.where(canonical_name: "Eike Rackwitz")
+      expect(transfers.count).to eq(2)
+      counterparts = transfers.map do |s|
+        TransactionRecord.where(recurring_series_id: s.id).distinct.pluck(:transfer_counterpart_account_id)
+      end
+      # each series is keyed to exactly one counterpart (no straddle), together covering both
+      expect(counterparts).to contain_exactly([ gemein.id ], [ invest.id ])
+      # each is a clean 4-member transfer series (no double-count)
+      expect(transfers.map(&:occurrences_count)).to contain_exactly(4, 4)
+      transfers.each { |s| expect(s.flow_bucket).to eq("transfer") }
+
+      # merchants do NOT over-split: the nil-counterpart series is one intact expense series
+      spotify = user.recurring_series.find_by(canonical_name: "Spotify")
+      expect(spotify.occurrences_count).to eq(4)
+      expect(spotify.flow_bucket).to eq("expense")
+    end
+
+    it "keeps the split stable across runs and preserves user edits (no reset / double-count)" do
+      gemein = create(:account, bank_connection: bc, iban: nil, role: "giro", role_locked: true)
+      invest = create(:account, bank_connection: bc, iban: nil, role: "investment", role_locked: true)
+      monthly_dates(4).each.with_index do |d, i|
+        charge(name: "Eike Rackwitz", amount: -70.00, date: d,
+          transfer_group_id: "gem-#{i}", transfer_counterpart_account: gemein)
+      end
+      monthly_dates(4).each.with_index do |d, i|
+        charge(name: "Eike Rackwitz", amount: -70.00, date: d,
+          transfer_group_id: "inv-#{i}", transfer_counterpart_account: invest)
+      end
+
+      subject.detect
+      transfers = user.recurring_series.where(canonical_name: "Eike Rackwitz")
+      expect(transfers.count).to eq(2)
+      ids_before = transfers.pluck(:id).sort
+
+      # the user confirms + renames one of the two split series
+      pinned = transfers.first
+      pinned.update!(user_confirmed: true)
+      pinned_id = pinned.id
+
+      2.times { described_class.new(user).detect }
+
+      again = user.recurring_series.where(canonical_name: "Eike Rackwitz")
+      expect(again.count).to eq(2)                      # no duplicate spawned
+      expect(again.pluck(:id).sort).to eq(ids_before)   # SAME rows reconciled, not reset
+      expect(again.find(pinned_id).user_confirmed).to be(true) # user edit survives
+    end
+  end
+
   describe "rejection rules" do
     it "does not detect a 2-occurrence series (≥3 floor)" do
       monthly_dates(2).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
