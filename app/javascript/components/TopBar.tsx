@@ -48,7 +48,6 @@ export default function TopBar({ email, onLogout, onMenuToggle, pageTitle, theme
       <div className="desktop-only flex items-center gap-2.5">
         <div className="text-right leading-[1.25]">
           <div className="text-[12.5px] font-[550] max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap">{email}</div>
-          <div className="text-ink-faint mono text-[10.5px] tracking-[0.04em]">{t('app.self_hosted')}</div>
         </div>
         <span className="icon-tile icon-tile-ink w-[34px] h-[34px] text-[13px]">
           {(email[0] || '?').toUpperCase()}

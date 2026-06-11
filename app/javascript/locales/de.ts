@@ -24,7 +24,6 @@ export default {
   app: {
     name: 'Kontor',
     tagline: 'Kontor',
-    self_hosted: 'selbst gehostet',
   },
   shell: {
     section_overview: 'Übersicht',

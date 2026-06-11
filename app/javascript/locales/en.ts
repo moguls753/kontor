@@ -24,7 +24,6 @@ export default {
   app: {
     name: 'Kontor',
     tagline: 'Counting house',
-    self_hosted: 'self-hosted',
   },
   shell: {
     section_overview: 'Overview',
