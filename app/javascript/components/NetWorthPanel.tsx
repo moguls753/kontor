@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 import { withScope, type Scope } from '../lib/scope'
 import { formatAmount } from '../lib/format'
 import { AreaSeries, type LineSeries } from './charts'
-import { Empty, Btn } from './ui'
+import { Empty, Btn, DeltaTag } from './ui'
 import type { NetWorthData } from '../lib/types'
 
 type T = (k: string, o?: Record<string, unknown>) => string
@@ -52,12 +52,10 @@ export default function NetWorthPanel({ scope, locale, t }: { scope: Scope; loca
   useEffect(() => { fetchNw() }, [scope, range]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fmt = (v: number) => formatAmount(v)
-  const nf1 = useMemo(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }), [locale])
   const fmtAxis = useMemo(() => {
     const f = new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 })
     return (v: number) => f.format(v)
   }, [locale])
-  const signed = (v: number) => (v >= 0 ? '+ ' : '− ') + formatAmount(Math.abs(v))
 
   const series = data?.series ?? []
   // Liquide differs from Gesamt only when an investment/savings account is in scope. When they
@@ -131,9 +129,7 @@ export default function NetWorthPanel({ scope, locale, t }: { scope: Scope; loca
             <div className="stat-context">
               <span>{t(isLiquid ? 'statistics.networth.kpi.today_liquid' : 'statistics.networth.kpi.today_total')}</span>
               <span className="stat-context-fig">{fmt(latest)}</span>
-              <span className={'nw-delta ' + (delta >= 0 ? 'pos' : 'neg')} aria-label={t('statistics.networth.kpi.change')}>
-                <span aria-hidden="true">{delta >= 0 ? '▲' : '▼'}</span> {signed(delta)}{deltaPct != null && ` · ${nf1.format(Math.abs(deltaPct))} %`}
-              </span>
+              <DeltaTag delta={delta} pct={deltaPct} good="up" formatValue={fmt} locale={locale} ariaLabel={t('statistics.networth.kpi.change')} />
             </div>
             {composition.length > 1 && (
               <div className="nw-compose">

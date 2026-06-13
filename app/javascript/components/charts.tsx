@@ -48,25 +48,39 @@ export function BarChart({ data, mode, height = 168 }: { data: BarDatum[]; mode:
 
 export interface RankedItem { id: string | number; label: string; value: number; share: number | null; color: string; muted?: boolean }
 
-/** Horizontal ranked bars (category breakdown). `value` is signed; bars use magnitude. */
-export function RankedBars({ items, maxValue, formatValue }: { items: RankedItem[]; maxValue: number; formatValue: (v: number) => string }) {
+/** Horizontal ranked bars (category breakdown). `value` is signed; bars use magnitude.
+ *  When `onRowClick` is given each row becomes a keyboard-accessible drill button
+ *  (a11y: brass focus ring + hover tint via .stat-rank-row); otherwise it stays a
+ *  non-interactive div (the prop is optional, so existing callers are unaffected). */
+export function RankedBars({ items, maxValue, formatValue, onRowClick }: {
+  items: RankedItem[]
+  maxValue: number
+  formatValue: (v: number) => string
+  onRowClick?: (item: RankedItem) => void
+}) {
   const max = Math.max(1, maxValue)
   return (
     <div className="stat-rank">
-      {items.map((it, i) => (
-        <div className={'stat-rank-row' + (it.muted ? ' muted' : '')} key={it.id}>
-          <div className="stat-rank-main">
-            <span className="stat-rank-label">{it.label}</span>
-            <div className="stat-rank-track">
-              <div className="stat-rank-fill" style={{ width: `${(Math.abs(it.value) / max) * 100}%`, background: it.color, '--i': i } as CSSProperties} />
+      {items.map((it, i) => {
+        const inner = (
+          <>
+            <div className="stat-rank-main">
+              <span className="stat-rank-label">{it.label}</span>
+              <div className="stat-rank-track">
+                <div className="stat-rank-fill" style={{ width: `${(Math.abs(it.value) / max) * 100}%`, background: it.color, '--i': i } as CSSProperties} />
+              </div>
             </div>
-          </div>
-          <div className="stat-rank-side">
-            <span className="amt amt-neg mono stat-rank-amt">{formatValue(it.value)}</span>
-            {it.share != null && <span className="stat-rank-share mono">{it.share}%</span>}
-          </div>
-        </div>
-      ))}
+            <div className="stat-rank-side">
+              <span className="amt amt-neg mono stat-rank-amt">{formatValue(it.value)}</span>
+              {it.share != null && <span className="stat-rank-share mono">{it.share}%</span>}
+            </div>
+          </>
+        )
+        const cls = 'stat-rank-row' + (it.muted ? ' muted' : '')
+        return onRowClick
+          ? <button type="button" className={cls + ' is-drill'} key={it.id} onClick={() => onRowClick(it)} aria-haspopup="dialog">{inner}</button>
+          : <div className={cls} key={it.id}>{inner}</div>
+      })}
     </div>
   )
 }

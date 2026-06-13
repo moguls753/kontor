@@ -2,7 +2,7 @@
    KONTOR — shared UI primitives for the Counting House design.
    These are presentation-only; all data fetching/state stays in the pages.
    ============================================================================ */
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
 import Icon from './Icon'
@@ -103,6 +103,31 @@ export function Amount({ value, currency = 'EUR', signed = true, className = '',
   else if (signed && r.sign > 0) tone = 'amt-pos'
   else if (forceNegative) tone = 'amt-neg'
   return <span className={`amt ${tone} ${className}`.trim()}>{r.text}</span>
+}
+
+/* ---- Delta tag ----------------------------------------------------------- */
+// Signed ▲/▼ delta chip. `good` flips which sign reads green: with `good='up'`,
+// delta ≥ 0 → green (.pos), < 0 → red (.neg); `good='down'` inverts it. Owns its
+// own percent formatter built from `locale` (presentation-only — callers inject
+// the value formatter and map sign→meaning per metric).
+export function DeltaTag(
+  { delta, pct, good = 'up', formatValue, locale, ariaLabel }:
+  { delta: number; pct: number | null; good?: 'up' | 'down';
+    formatValue: (v: number) => string; locale: string; ariaLabel?: string },
+) {
+  const nf1 = useMemo(
+    () => new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+    [locale],
+  )
+  const positive = delta >= 0
+  const isGood = good === 'up' ? positive : !positive
+  const signedStr = (positive ? '+ ' : '− ') + formatValue(Math.abs(delta)) // U+2212 minus
+  return (
+    <span className={'delta-tag ' + (isGood ? 'pos' : 'neg')} aria-label={ariaLabel}>
+      <span aria-hidden="true">{positive ? '▲' : '▼'}</span> {signedStr}
+      {pct != null && ` · ${nf1.format(Math.abs(pct))} %`}
+    </span>
+  )
 }
 
 /* ---- Category chip ------------------------------------------------------ */

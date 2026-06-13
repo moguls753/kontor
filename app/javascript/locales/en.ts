@@ -326,6 +326,27 @@ export default {
       uncategorized: 'Uncategorized',
       more: '+{{n}} more',
     },
+    cat_modal: {
+      count_total: '{{n}} transactions',
+      empty: 'No transactions in this period.',
+      loading: 'Loading …',
+      error: 'Could not load transactions.',
+    },
+    merchant: {
+      by_category: 'by category',
+      by_merchant: 'by payee',
+      unnamed: 'No payee',
+      count: '{{n}} transactions',
+      payee_total: 'Spend with a payee',
+      empty: 'No transactions in this period.',
+    },
+    vs: {
+      baseline: 'vs. avg {{n}} mo.',
+      baseline_partial: 'so far · vs. avg {{n}} mo.',
+      aria_income: 'Income change vs. average',
+      aria_expenses: 'Expenses change vs. average',
+      aria_net: 'Net change vs. average',
+    },
     forecast: {
       heading: 'Outlook',
       typical_month: 'Typical month',

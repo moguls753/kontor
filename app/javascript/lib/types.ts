@@ -231,6 +231,39 @@ export interface StatVariableFlows {
   transactions: Transaction[]
 }
 
+// Category drill-through response (reuses the shared Transaction type). Σ(transactions.amount)
+// reconciles to the matching category bar's amount over the same clamped window (invariant CI1).
+export interface StatCategoryFlows {
+  category: { id: number | null; name: string | null }
+  range: { from: string; to: string }
+  total: string
+  count: number
+  transactions: Transaction[]
+}
+
+// Top-merchants list (GET /api/v1/statistics/merchants). Mirrors StatCategoryItem minus
+// `id`; `name` is null for the no-creditor bucket. `total` is the UN-capped figure (the
+// `items` may sum to less because of the server-side cap — invariant MI1).
+export interface StatMerchantItem { name: string | null; amount: string; count: number; share: number | null }
+export interface StatMerchants { items: StatMerchantItem[]; total: string }
+
+// Merchant DRILL response (review M1): an EXPLICIT, non-optional shape — NOT
+// "StatVariableFlows-shaped" (which would falsely promise months/average/kind/range that the
+// merchant response never sends). VariableFlowsModal's `data` is the discriminated union
+// StatVariableFlows | StatMerchantFlows so tsc forces the `merchant == null` guards.
+export interface StatMerchantFlows { transactions: Transaction[]; total: string; count: number }
+
+// "Dieser Monat vs. dein Schnitt" (rides on #show). Per metric: the selected window's
+// per-month rate (`current`), the trailing-window baseline, their `delta`, and `pct`
+// (null when the baseline is zero — no divide-by-zero). All money as BigDecimal strings.
+export interface StatDeltaPair { current: string; baseline: string; delta: string; pct: number | null }
+export interface StatVsAverage {
+  baseline_months: number
+  income: StatDeltaPair
+  expenses: StatDeltaPair
+  net: StatDeltaPair
+}
+
 export interface StatisticsData {
   range: StatRange
   transaction_count: number
@@ -238,6 +271,7 @@ export interface StatisticsData {
   cashflow: StatCashflowPoint[]
   fixed_variable: StatFixedVariablePoint[]
   categories: StatCategories
+  vs_average: StatVsAverage
   forecast: StatForecast
 }
 

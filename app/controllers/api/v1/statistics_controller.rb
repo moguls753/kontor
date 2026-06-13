@@ -28,23 +28,19 @@ module Api
       # NEVER this flat number (see variable_averages).
       FORECAST_WINDOW_MONTHS = 6
 
+      # Server-side cap for the top-merchants list (plan §2.2): the UI shows the first 8
+      # and reveals the rest with "+N weitere". Capping breaks strict Σitems == total, so
+      # the response returns the UN-capped `total` for the footer (invariant MI1).
+      TOP_MERCHANTS = 12
+
       def show
-        ids = scoped_account_ids
-        to   = parse_date(params[:to], Date.current)
-        from = parse_date(params[:from], to.beginning_of_month - 5.months)
-        from = to if from > to
-        # SF1: bound the window so a hand-crafted `from` can't drive build_series
-        # through thousands of months (the UI only ever requests ≤12-month presets;
-        # 36 months is generous headroom). The earliest-tx clamp below narrows further.
-        from = [from, to.advance(months: -36)].max
-
-        window = in_scope(Current.user.transaction_records.in_period(from, to), ids)
-
-        # I4: clamp the display start to the earliest tx actually in the window, so
-        # accounts with shorter history don't render empty leading months.
-        earliest = window.minimum(:booking_date)
-        clamped_from = earliest && earliest > from ? earliest : from
-        months = month_span(clamped_from, to)
+        w = stats_window(params)
+        ids = w[:ids]
+        from = w[:from]
+        to = w[:to]
+        window = w[:window]
+        clamped_from = w[:clamped_from]
+        months = w[:months]
 
         income_by_month  = window.credits.group(MONTH).sum(:amount)
         expense_by_month = window.debits.group(MONTH).sum(:amount)
@@ -87,6 +83,11 @@ module Api
             { month: m, fixed: fixed, variable: total - fixed }
           },
           categories: cats,
+          # "Dieser Monat vs. dein Schnitt" — the selected window's per-month rate vs. the
+          # trailing forecast window (§3b). `income`/`expenses` are the window sums above;
+          # `months` is month_span(clamped_from, to). No extra account/category queries beyond
+          # the one shared variable_window call.
+          vs_average: vs_average(ids, income, expenses, months),
           forecast: forecast(ids)
         }
       end
@@ -114,7 +115,106 @@ module Api
         }
       end
 
+      # Drill-down for the Kategorien tab: the individual transactions behind ONE
+      # category bar, over the SAME clamped display window/scope as #show's
+      # category_items (so Σ tx.amount == the bar's amount — invariant CI1). Read-only.
+      #
+      # NB §2.1/n1: this deliberately does NOT consume stats_window — it must use the
+      # RAW passed-in `from` WITHOUT the I4 earliest-tx re-clamp, because the frontend
+      # already sends the clamped data.range.from/to (re-clamping could narrow a
+      # legitimately re-sent window). So it keeps its own short window block (SF1 floor
+      # + `from = to if from > to` only).
+      def category_transactions
+        ids  = scoped_account_ids
+        to   = parse_date(params[:to], Date.current)
+        from = parse_date(params[:from], to.beginning_of_month - 5.months)
+        from = to if from > to
+        from = [ from, to.advance(months: -36) ].max          # SF1 36-month floor
+
+        window        = in_scope(Current.user.transaction_records.in_period(from, to), ids)
+        uncategorized = params[:uncategorized] == "1"
+        category_id   = uncategorized ? nil : params[:category_id].presence
+
+        rel  = window.debits.where(category_id: category_id)
+        rows = rel.includes(:account, :category).order(booking_date: :desc, id: :desc)
+
+        category_name =
+          (uncategorized || category_id.nil?) ? nil
+            : Current.user.categories.where(id: category_id).pick(:name)
+
+        render json: {
+          category: { id: category_id&.to_i, name: category_name },
+          range: { from: from, to: to },
+          total: rel.sum(:amount).to_d,
+          count: rel.count,
+          transactions: rows.map { |tx| transaction_json(tx) }
+        }
+      end
+
+      # Spending grouped by counterparty (creditor_name on debits), distinct from the
+      # category breakdown. Two modes over the SAME scoped, internal-transfer-excluded
+      # display window as #show (so the list reconciles to the same period — invariants
+      # MI1/MI2):
+      #  • LIST mode (no `name` param) — the ranked merchants + the un-capped total.
+      #  • DRILL mode (`name` present; "" / blank ⇒ the null/no-creditor bucket via
+      #    .presence) — one merchant's transactions for VariableFlowsModal, newest first
+      #    (groupByMonth needs DESC).
+      # Person-to-person transfers (transfer_group_id present) are dropped — a person name
+      # is not a merchant (the intentional MI1 divergence from the categories list). The
+      # drill passes the SAME from/to as the list (both via stats_window), or Σ(drill) would
+      # mismatch the row for every preset but the no-from/to default (review B1). Read-only.
+      def merchants
+        window = stats_window(params)[:window]
+        debits = window.debits.where(transfer_group_id: nil)   # drop person-to-person transfers
+
+        if params.key?(:name)
+          # DRILL MODE — rows for ONE normalised merchant ("" / blank ⇒ the null bucket).
+          name = params[:name].to_s
+          rows = debits.includes(:account, :category).order(booking_date: :desc, id: :desc).select do |tx|
+            normalize_merchant(tx.creditor_name) == name.presence    # nil-key ↔ "" / blank
+          end
+          total = rows.sum(0.to_d) { |tx| tx.amount.to_d }
+          render json: {
+            transactions: rows.map { |tx| transaction_json(tx) },
+            total: total,
+            count: rows.size
+          }
+        else
+          render json: merchant_items(debits)                  # LIST MODE
+        end
+      end
+
       private
+
+      # The display-window construction shared by #show (and #merchants, §2.2): the
+      # user-chosen [from, to] period, SF1-floored and I4-clamped, plus the scoped,
+      # internal-transfer-excluded `window` relation it produces. Returns everything
+      # #show consumes from this block, so the figures reconcile (plan §1.6). The raw
+      # `from` is returned alongside `clamped_from` so #show can report `range.clamped`.
+      #
+      # NB §2.1/n1: #category_transactions deliberately does NOT consume this — it must
+      # use the raw passed-in `from` WITHOUT the I4 earliest-tx re-clamp (the frontend
+      # already sends the clamped data.range.from), so it keeps its own short block.
+      def stats_window(params)
+        ids  = scoped_account_ids
+        to   = parse_date(params[:to], Date.current)
+        from = parse_date(params[:from], to.beginning_of_month - 5.months)
+        from = to if from > to
+        # SF1: bound the window so a hand-crafted `from` can't drive build_series
+        # through thousands of months (the UI only ever requests ≤12-month presets;
+        # 36 months is generous headroom). The earliest-tx clamp below narrows further.
+        from = [ from, to.advance(months: -36) ].max
+
+        window = in_scope(Current.user.transaction_records.in_period(from, to), ids)
+
+        # I4: clamp the display start to the earliest tx actually in the window, so
+        # accounts with shorter history don't render empty leading months.
+        earliest = window.minimum(:booking_date)
+        clamped_from = earliest && earliest > from ? earliest : from
+
+        { ids: ids, from: from, to: to, window: window,
+          clamped_from: clamped_from, months: month_span(clamped_from, to) }
+      end
 
       # Inclusive count of calendar months in [from, to], min 1 (review S4 — the
       # denominator for avg_monthly_expenses / fixed_monthly).
@@ -163,6 +263,37 @@ module Api
         items.sort_by! { |i| i[:amount] }
 
         { items: items, total: total }
+      end
+
+      # Squeeze run-length whitespace in card-acquirer names ("VISA   DEBIT  REWE SAGT
+      # DANKE" → "VISA DEBIT REWE SAGT DANKE"); blank/whitespace → nil (the null bucket).
+      # FULL brand canonicalisation (acquirer prefixes, terminal-suffix variants) is OUT OF
+      # SCOPE (plan §2.2) — whitespace squeeze only.
+      def normalize_merchant(raw)
+        raw.to_s.strip.gsub(/\s+/, " ").presence
+      end
+
+      # One ranked list of in-scope debit spend grouped by NORMALISED creditor_name (plan
+      # §2.2). Grouped in Ruby (not SQL) because the whitespace-squeeze rule is a Ruby method;
+      # pull the two columns we need and fold — bounded for one user's window. Mirrors
+      # category_items minus `id`: BigDecimal discipline (I2), most-negative first, the
+      # UN-capped `total` for the footer, capped at TOP_MERCHANTS.
+      def merchant_items(debits)
+        rows = debits.pluck(:creditor_name, :amount)        # [[name, BigDecimal], ...]
+        acc  = Hash.new { |h, k| h[k] = { amount: 0.to_d, count: 0 } }
+        rows.each do |name, amount|
+          key = normalize_merchant(name)                    # nil-name → nil key (fallback bucket)
+          acc[key][:amount] += amount.to_d
+          acc[key][:count]  += 1
+        end
+
+        items = acc.map { |name, agg| { name: name, amount: agg[:amount], count: agg[:count] } }
+        total = items.sum(0.to_d) { |i| i[:amount] }
+        denom = total.abs
+        items.each { |i| i[:share] = denom.zero? ? 0.0 : (i[:amount].abs / denom * 100).round(1).to_f }
+        items.sort_by! { |i| i[:amount] }                   # most-negative (largest spend) first
+
+        { items: items.first(TOP_MERCHANTS), total: total }  # total is the UN-capped figure
       end
 
       # Forward "typischer Monat" projection — window-INDEPENDENT ("ab heute") but
@@ -269,6 +400,48 @@ module Api
         s.expected_amount.abs * 30.0 / cd
       end
 
+      # "Dieser Monat vs. dein Schnitt" (plan §3b): compares the SELECTED display window's
+      # per-month rate against the SAME trailing forecast window the Vorschau averages over
+      # (variable_window — trailing FORECAST_WINDOW_MONTHS full calendar months, current
+      # partial month EXCLUDED, scope-aware). Rides on #show — no second fetch, no new route.
+      #
+      # ⚠️ The baseline averages the FULL `scoped` relation (recurring + variable), NOT
+      # `nonrec` — the hero income/expenses/net are all-flows, so the comparison must be too
+      # (§1.6). `baseline_months` = months-WITH-data (may be < 6) so a short-history account
+      # self-adjusts; the frontend hides the chip when it's 0 (invariants VA1/VA2/VA3).
+      def vs_average(ids, cur_income, cur_expenses, cur_months)
+        w    = variable_window(ids)
+        bdiv = [ w[:months], 1 ].max
+        base_income   = w[:scoped].credits.sum(:amount).to_d / bdiv
+        base_expenses = w[:scoped].debits.sum(:amount).to_d / bdiv
+        base_net      = base_income + base_expenses
+        cdiv = [ cur_months, 1 ].max
+        cur_income_m   = cur_income   / cdiv
+        cur_expenses_m = cur_expenses / cdiv
+        cur_net_m      = cur_income_m + cur_expenses_m
+        {
+          baseline_months: w[:months],                     # months WITH data (may be < 6) — VA1
+          income:   delta_pair(cur_income_m,   base_income),
+          expenses: delta_pair(cur_expenses_m, base_expenses),
+          net:      delta_pair(cur_net_m,      base_net)    # VA3: derived, not separately summed
+        }
+      end
+
+      # {current:, baseline:, delta:, pct:} — pct nil when the baseline is zero (no
+      # divide-by-zero; the frontend then hides the percent). current/baseline/delta are
+      # .round(2) (review n2): BigDecimal÷Integer would otherwise serialize full precision
+      # ("663.5933…"), not the clean 2-dp the contract shows — consistent with
+      # avg_monthly_expenses/fixed_monthly, which already round(2). pct uses baseline.abs so
+      # signed-negative expenses read intuitively (spend MORE → delta < 0 → pct < 0; the
+      # frontend maps sign→colour per metric, §3.3 B2).
+      def delta_pair(current, baseline)
+        current  = current.round(2)
+        baseline = baseline.round(2)
+        delta    = (current - baseline).round(2)
+        pct      = baseline.zero? ? nil : (delta / baseline.abs * 100).round(1).to_f
+        { current: current, baseline: baseline, delta: delta, pct: pct }
+      end
+
       # Symmetric average of the UNPREDICTABLE, non-recurring flows over the last
       # FORECAST_WINDOW_MONTHS full calendar months (current partial month excluded):
       # variable income (non-recurring credits) AND variable expenses (non-recurring
@@ -311,7 +484,13 @@ module Api
         from   = latest_start ? [ cap_from, latest_start.beginning_of_month ].max : cap_from
         scoped = in_scope(Current.user.transaction_records.in_period(from, to), ids)
         months = scoped.distinct.count(MONTH) # months WITH data in the (clamped) window
-        { from: from, to: to, months: months, nonrec: scoped.where(recurring_series_id: nil) }
+        # `scoped` is the ALL-flows trailing relation (recurring + variable); `nonrec`
+        # drops recurring (the forecast averages variable only, taken at run-rate). The
+        # vs-average baseline (§3b) reuses `scoped` because the hero is all-flows — purely
+        # additive, the forecast/drill callers still read :nonrec/:from/:to/:months (VA1).
+        { from: from, to: to, months: months,
+          scoped: scoped,
+          nonrec: scoped.where(recurring_series_id: nil) }
       end
 
       # Anstehende Zahlungen: active in-scope series whose next_expected_on falls in

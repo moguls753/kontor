@@ -326,6 +326,27 @@ export default {
       uncategorized: 'Unkategorisiert',
       more: '+{{n}} weitere',
     },
+    cat_modal: {
+      count_total: '{{n}} Buchungen',
+      empty: 'Keine Buchungen in diesem Zeitraum.',
+      loading: 'Wird geladen …',
+      error: 'Buchungen konnten nicht geladen werden.',
+    },
+    merchant: {
+      by_category: 'nach Kategorie',
+      by_merchant: 'nach Empfänger',
+      unnamed: 'Ohne Empfänger',
+      count: '{{n}} Buchungen',
+      payee_total: 'Ausgaben mit Empfänger',
+      empty: 'Keine Buchungen in diesem Zeitraum.',
+    },
+    vs: {
+      baseline: 'ggü. Ø {{n}} Mt.',
+      baseline_partial: 'anteilig · ggü. Ø {{n}} Mt.',
+      aria_income: 'Veränderung Einnahmen gegenüber Durchschnitt',
+      aria_expenses: 'Veränderung Ausgaben gegenüber Durchschnitt',
+      aria_net: 'Veränderung Netto gegenüber Durchschnitt',
+    },
     forecast: {
       heading: 'Ausblick',
       typical_month: 'Typischer Monat',

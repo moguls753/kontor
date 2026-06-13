@@ -642,6 +642,10 @@ html.dark {
 .stat-hero-fig { font-family: var(--font-mono); font-weight: 550; letter-spacing: -0.02em; font-size: clamp(26px, 3.4vw, 38px); margin-top: 11px; line-height: 1.05; }
 .stat-hero-sub { font-size: 12px; color: var(--ink-faint); margin-top: 9px; }
 .stat-hero-rate { font-size: 12.5px; color: var(--ink-muted); margin-top: 5px; font-weight: 550; }
+/* "vs. dein Schnitt" — the ▲/▼ DeltaTag chip + a faint trailing-window caption,
+   sitting under the Ø/Mt sub on each hero column. */
+.stat-hero-vs { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; margin-top: 7px; font-size: 12px; }
+.stat-hero-vs-base { color: var(--ink-faint); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
 /* In-page tabs — underline leiste, brass active indicator; content fades in on switch */
 .stat-tabs { display: flex; gap: 2px; margin-bottom: 22px; border-bottom: 2px solid var(--line); }
@@ -656,6 +660,19 @@ html.dark {
 .stat-tabs button:focus-visible { outline: none; color: var(--ink); box-shadow: inset 0 2px 0 var(--brass); }
 .stat-tab-panel { animation: tabIn 220ms cubic-bezier(0.22,1,0.36,1) both; }
 @keyframes tabIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
+/* Segmented Kategorie ↔ Empfänger toggle inside the panel-head — same broadsheet voice as
+   the tabs (2px border, sharp corners, brass active fill), but a compact inline control. */
+.stat-seg { display: inline-flex; border: 2px solid var(--line-strong); }
+.stat-seg button {
+  appearance: none; -webkit-appearance: none; background: none; border: none; cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 550; letter-spacing: -0.01em; color: var(--ink-muted);
+  padding: 6px 13px; transition: background 140ms ease, color 140ms ease;
+}
+.stat-seg button + button { border-left: 2px solid var(--line-strong); }
+.stat-seg button:hover { color: var(--ink); background: var(--brass-soft); }
+.stat-seg button.on { color: var(--brass-ink); background: var(--brass-soft); font-weight: 600; }
+.stat-seg button:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--brass); color: var(--ink); }
 
 .stat-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px; margin-bottom: 20px; }
 .stat-grid-even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -687,6 +704,17 @@ html.dark {
 .stat-rank-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .stat-rank-row:last-child { border-bottom: none; }
 .stat-rank-row.muted { opacity: 0.62; }
+/* Drill-button variant: reset native button chrome but keep the grid + hairline rule,
+   add a brass hover tint and a 2px brass :focus-visible ring (keyboard a11y). */
+.stat-rank-row.is-drill {
+  width: 100%; margin: 0; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  background: none; border: none; border-bottom: 1px solid var(--line);
+  border-radius: 1px; transition: background 120ms ease, box-shadow 120ms ease;
+}
+.stat-rank-row.is-drill:last-child { border-bottom: none; }
+.stat-rank-row.is-drill:hover { background: var(--brass-soft); box-shadow: inset 3px 0 0 var(--brass); }
+.stat-rank-row.is-drill:hover .stat-rank-label { color: var(--brass-ink); }
+.stat-rank-row.is-drill:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--brass); }
 .stat-rank-main { min-width: 0; }
 .stat-rank-label { display: block; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stat-rank-track { height: 6px; background: var(--surface-2); border-radius: 3px; margin-top: 7px; overflow: hidden; }
@@ -821,10 +849,10 @@ table.fc-proj { width: 100%; max-width: 560px; border-collapse: collapse; margin
 /* panel-head right group (legend + range), so the head matches the other tabs' layout */
 .panel-head-side { display: inline-flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 
-/* inline Δ in the stat-context summary line (mono, ▲/▼ green/red) */
-.nw-delta { display: inline-flex; align-items: baseline; gap: 5px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.nw-delta.pos { color: var(--income); }
-.nw-delta.neg { color: var(--danger); }
+/* signed Δ chip — mono, ▲/▼ green/red (DeltaTag in ui.tsx; net-worth + hero deltas) */
+.delta-tag { display: inline-flex; align-items: baseline; gap: 5px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.delta-tag.pos { color: var(--income); }
+.delta-tag.neg { color: var(--danger); }
 
 /* today's composition — a muted, wrapping context line under the chart */
 .nw-compose { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font-size: 12px; color: var(--ink-muted); }

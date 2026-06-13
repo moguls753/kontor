@@ -3,11 +3,12 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useScope, withScope, type Scope } from '../lib/scope'
 import { formatAmount } from '../lib/format'
-import { catColor, hueFor, Amount, Empty, Eyebrow, Btn, Select } from '../components/ui'
+import { catColor, hueFor, Amount, DeltaTag, Empty, Eyebrow, Btn, Select } from '../components/ui'
 import { BarChart, RankedBars, Legend } from '../components/charts'
 import type { BarDatum, RankedItem } from '../components/charts'
-import type { StatisticsData, StatRange, StatForecast } from '../lib/types'
+import type { StatisticsData, StatRange, StatForecast, StatMerchants, StatDeltaPair } from '../lib/types'
 import VariableFlowsModal from '../components/VariableFlowsModal'
+import CategoryFlowsModal from '../components/CategoryFlowsModal'
 import NetWorthPanel from '../components/NetWorthPanel'
 import ScenarioEditor from '../components/ScenarioEditor'
 import { type ScenarioAdjustment, loadScenario, saveScenario, projectBalance } from '../lib/scenario'
@@ -15,6 +16,11 @@ import { PERIOD_KEYS, periodRange, formatMonth, readPeriod, type PeriodKey } fro
 
 const TOP_CATEGORIES = 8
 const UPCOMING_PREVIEW = 7
+
+// A merchant ranked-bar row. `id` is ONLY a React key; the genuine null-bucket flag is the
+// explicit `merchantName` (null ⇒ the drill sends name="") — never overload the label string
+// as the drill key, or a creditor literally named "unnamed" would be misrouted (review m1).
+type MerchRow = RankedItem & { merchantName: string | null }
 const PROJ_ROWS = [0, 3, 6, 12] as const // projection table rows: Heute + the horizons
 
 // Net worth leads (the headline view) and is the default for users with no saved tab;
@@ -32,6 +38,15 @@ export default function StatisticsPage() {
   const { scope } = useScope()
   const [period, setPeriod] = useState<PeriodKey>(readPeriod)
   const [showAllCats, setShowAllCats] = useState(false)
+  const [catDrill, setCatDrill] = useState<RankedItem | null>(null)
+  // Kategorie ↔ Empfänger toggle (does NOT persist — always resets to 'category' on reload).
+  const [catView, setCatView] = useState<'category' | 'merchant'>('category')
+  const [showAllMerchants, setShowAllMerchants] = useState(false)
+  const [merchants, setMerchants] = useState<StatMerchants | null>(null)
+  const [merchantsStatus, setMerchantsStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  // Merchant drill state lives HERE in the main page (owns data + catView), not in
+  // ForecastPanel; carries the merchant + the CLAMPED window the list used (review B1/m6).
+  const [drillMerchant, setDrillMerchant] = useState<{ name: string; label: string; from: string; to: string } | null>(null)
   const [tab, setTab] = useState<Tab>(readTab)
   const [data, setData] = useState<StatisticsData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -57,9 +72,38 @@ export default function StatisticsPage() {
 
   useEffect(() => { fetchStats() }, [scope, period]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Lazily fetch the top-merchants list only while the Empfänger toggle is active, over the
+  // CLAMPED window data.range (NOT raw periodRange — review m3/B1): the category bars + the
+  // category drill key off data.range (CI1), so the merchant list must share that one window
+  // or its figures silently diverge from the rest of the tab (and the drill, B1, mismatches
+  // the row). Refetch on [scope, range.from, range.to, catView] (clamped-window deps).
+  const rangeFrom = data?.range.from
+  const rangeTo = data?.range.to
+  useEffect(() => {
+    if (catView !== 'merchant' || !rangeFrom || !rangeTo) return
+    let alive = true
+    setMerchantsStatus('loading')
+    const params = withScope(new URLSearchParams({ from: rangeFrom, to: rangeTo }), scope)
+    api(`/api/v1/statistics/merchants?${params.toString()}`)
+      .then(async res => {
+        if (!res.ok) { if (alive) setMerchantsStatus('error'); return }
+        const json = await res.json()
+        if (!alive) return
+        setMerchants(json)
+        setMerchantsStatus('ready')
+      })
+      .catch(() => { if (alive) setMerchantsStatus('error') })
+    return () => { alive = false }
+  }, [scope, rangeFrom, rangeTo, catView])
+
   const changePeriod = (k: PeriodKey) => {
     setPeriod(k)
     setShowAllCats(false)
+    setShowAllMerchants(false)
+    // Close any open drill — it captured the old window at click time; leaving it open
+    // would show stale-window data against a list that has moved (review nit).
+    setCatDrill(null)
+    setDrillMerchant(null)
     localStorage.setItem('stats-period', k)
   }
 
@@ -138,6 +182,29 @@ export default function StatisticsPage() {
   const perMonth = (total: number) =>
     months > 1 ? t('statistics.summary.per_month', { value: formatAmount(Math.abs(total) / months) }) : null
 
+  // "Dieser Monat vs. dein Schnitt": the selected window's per-month rate vs. the trailing
+  // forecast window (rides on #show — no second fetch). Hide the chip when there's no
+  // trailing history (baseline_months 0); the backend self-adjusts the divisor otherwise.
+  const va = data.vs_average
+  const showVs = va.baseline_months > 0
+  // Partial-month honesty (§3.4, review m2): the baseline ALWAYS excludes the current partial
+  // month, but the current-side divisor (month_span) counts a partial trailing month as whole.
+  // So whenever range.to is NOT a month-end the divisors are asymmetric → append "anteilig"/
+  // "so far". Broader than just this_month: mid-month, m3/m6/m12/ytd all end on a partial day.
+  const toDate = new Date(range.to + 'T00:00:00')
+  const partial = toDate.getDate() !== new Date(toDate.getFullYear(), toDate.getMonth() + 1, 0).getDate()
+  const vsBaseLabel = t(partial ? 'statistics.vs.baseline_partial' : 'statistics.vs.baseline', { n: va.baseline_months })
+  // Sign→colour per metric (review B2 — verified, NOT the intuitive mapping): expenses are
+  // signed-negative, so spending MORE is delta < 0 and must read RED → good='up' (which makes
+  // delta < 0 → red). income up→green, net up→green, expenses up(delta<0)→red.
+  const vsLine = (pair: StatDeltaPair, ariaKey: string) => showVs && (
+    <div className="stat-hero-vs">
+      <DeltaTag delta={parseFloat(pair.delta)} pct={pair.pct} good="up"
+        formatValue={v => formatAmount(v)} locale={locale} ariaLabel={t(ariaKey)} />
+      <span className="stat-hero-vs-base">{vsBaseLabel}</span>
+    </div>
+  )
+
   // The hero is the page-level banner: it appears on EVERY tab (net worth included) and
   // even for an empty period — then it honestly reads 0 / 0 / 0. Built once, rendered below.
   const heroPanel = (
@@ -146,17 +213,20 @@ export default function StatisticsPage() {
         <Eyebrow>{t('statistics.summary.income')}</Eyebrow>
         <div className="stat-hero-fig"><Amount value={kpis.income} /></div>
         {perMonth(income) && <div className="stat-hero-sub">{perMonth(income)}</div>}
+        {vsLine(va.income, 'statistics.vs.aria_income')}
       </div>
       <div className="stat-hero-col">
         <Eyebrow>{t('statistics.summary.expenses')}</Eyebrow>
         <div className="stat-hero-fig"><Amount value={kpis.expenses} /></div>
         {perMonth(expenses) && <div className="stat-hero-sub">{perMonth(expenses)}</div>}
+        {vsLine(va.expenses, 'statistics.vs.aria_expenses')}
       </div>
       <div className="stat-hero-col">
         <Eyebrow>{t('statistics.summary.net')}</Eyebrow>
         <div className="stat-hero-fig"><Amount value={net} /></div>
         {perMonth(net) && <div className="stat-hero-sub">{perMonth(net)}</div>}
         {rate != null && <div className="stat-hero-rate">{t('statistics.summary.savings_rate', { value: nf1.format(rate) })}</div>}
+        {vsLine(va.net, 'statistics.vs.aria_net')}
       </div>
     </div>
   )
@@ -220,6 +290,28 @@ export default function StatisticsPage() {
   const visibleCats = showAllCats ? catItems : catItems.slice(0, TOP_CATEGORIES)
   const hiddenCount = catItems.length - visibleCats.length
 
+  // Category drill-through: recover the source StatCategoryItem (its real id + uncat
+  // flag) from the clicked RankedItem via the SAME id rule the page builds the bars with
+  // (id === c.id ?? c.name ?? 'uncat'), then open CategoryFlowsModal over the CLAMPED
+  // window (data.range — invariant CI1), not the raw periodRange.
+  const drillSrc = catDrill && data.categories.items.find(c => (c.id ?? c.name ?? 'uncat') === catDrill.id)
+
+  // ---- merchant ranked list (Empfänger toggle) ----
+  // Map merchant items → RankedItem exactly as categories, but carry the genuine null bucket
+  // as an explicit merchantName flag (null ⇒ name="" in the drill); the RankedItem.id is only
+  // a unique React key, NEVER the drill payload (review m1).
+  const merchantItems: MerchRow[] = (merchants?.items ?? []).map((m, i) => ({
+    id: m.name ?? `__null__${i}`,
+    merchantName: m.name,
+    label: m.name || t('statistics.merchant.unnamed'),
+    value: parseFloat(m.amount),
+    share: m.share,
+    color: catColor(hueFor(m.name || 'unnamed')),
+  }))
+  const merchMax = Math.max(1, ...merchantItems.map(m => Math.abs(m.value)))
+  const visibleMerchants = showAllMerchants ? merchantItems : merchantItems.slice(0, TOP_CATEGORIES)
+  const hiddenMerchants = merchantItems.length - visibleMerchants.length
+
   return (
     <div className="page">
       {head}
@@ -270,18 +362,52 @@ export default function StatisticsPage() {
 
         {tab === 'categories' && (
           <div className="panel">
-            <div className="panel-head"><h2 className="section-title">{t('statistics.chart.by_category')}</h2></div>
-            <div className="panel-pad">
-              <RankedBars items={visibleCats} maxValue={catMax} formatValue={v => formatAmount(Math.abs(v))} />
-              {hiddenCount > 0 && (
-                <Btn variant="ghost" size="sm" className="mt-2" onClick={() => setShowAllCats(true)}>
-                  {t('statistics.cat.more', { n: hiddenCount })}
-                </Btn>
-              )}
-              <div className="stat-foot">
-                <span className="text-ink-muted text-[12.5px]">{t('statistics.legend.expenses')}</span>
-                <span className="amt amt-neg mono text-[14px]">{fmtAbs(data.categories.total)}</span>
+            <div className="panel-head">
+              <h2 className="section-title">{t('statistics.chart.by_category')}</h2>
+              {/* Kategorie ↔ Empfänger segmented toggle (aria-pressed pair). */}
+              <div className="stat-seg" role="group" aria-label={t('statistics.chart.by_category')}>
+                <button type="button" className={catView === 'category' ? 'on' : ''} aria-pressed={catView === 'category'}
+                  onClick={() => setCatView('category')}>{t('statistics.merchant.by_category')}</button>
+                <button type="button" className={catView === 'merchant' ? 'on' : ''} aria-pressed={catView === 'merchant'}
+                  onClick={() => setCatView('merchant')}>{t('statistics.merchant.by_merchant')}</button>
               </div>
+            </div>
+            <div className="panel-pad">
+              {catView === 'category' ? (
+                <>
+                  <RankedBars items={visibleCats} maxValue={catMax} formatValue={v => formatAmount(Math.abs(v))} onRowClick={setCatDrill} />
+                  {hiddenCount > 0 && (
+                    <Btn variant="ghost" size="sm" className="mt-2" onClick={() => setShowAllCats(true)}>
+                      {t('statistics.cat.more', { n: hiddenCount })}
+                    </Btn>
+                  )}
+                  <div className="stat-foot">
+                    <span className="text-ink-muted text-[12.5px]">{t('statistics.legend.expenses')}</span>
+                    <span className="amt amt-neg mono text-[14px]">{fmtAbs(data.categories.total)}</span>
+                  </div>
+                </>
+              ) : merchantsStatus === 'loading' ? (
+                <div className="vf-state">{t('common.loading')}</div>
+              ) : merchantsStatus === 'error' ? (
+                <div className="vf-state">{t('common.load_error')}</div>
+              ) : (
+                <>
+                  <RankedBars items={visibleMerchants} maxValue={merchMax} formatValue={v => formatAmount(Math.abs(v))}
+                    onRowClick={(it) => {
+                      const m = it as MerchRow
+                      setDrillMerchant({ name: m.merchantName ?? '', label: m.label, from: range.from, to: range.to })
+                    }} />
+                  {hiddenMerchants > 0 && (
+                    <Btn variant="ghost" size="sm" className="mt-2" onClick={() => setShowAllMerchants(true)}>
+                      {t('statistics.cat.more', { n: hiddenMerchants })}
+                    </Btn>
+                  )}
+                  <div className="stat-foot">
+                    <span className="text-ink-muted text-[12.5px]">{t('statistics.merchant.payee_total')}</span>
+                    <span className="amt amt-neg mono text-[14px]">{fmtAbs(merchants?.total ?? '0')}</span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -290,6 +416,31 @@ export default function StatisticsPage() {
           <ForecastPanel forecast={data.forecast} locale={locale} t={t} scope={scope} />
         )}
       </div>
+
+      {drillSrc && (
+        <CategoryFlowsModal
+          key={`${drillSrc.id ?? 'uncat'}-${scope}-${range.from}-${range.to}`}
+          categoryId={drillSrc.id}
+          uncategorized={drillSrc.id == null}
+          categoryName={drillSrc.name}
+          from={range.from} to={range.to}
+          scope={scope} locale={locale} t={t}
+          onClose={() => setCatDrill(null)}
+        />
+      )}
+
+      {/* Merchant drill — the SAME VariableFlowsModal in merchant mode (kind is ignored when
+          `merchant` is set). The key remounts/refetches when window/scope/merchant change; the
+          null-bucket drill round-trips name="". */}
+      {drillMerchant && (
+        <VariableFlowsModal
+          key={`merchant-${drillMerchant.name}-${scope}-${range.from}-${range.to}`}
+          kind="expenses"
+          merchant={drillMerchant}
+          scope={scope} locale={locale} t={t}
+          onClose={() => setDrillMerchant(null)}
+        />
+      )}
     </div>
   )
 }

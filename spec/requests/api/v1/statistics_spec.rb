@@ -19,10 +19,12 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     expect(response).to have_http_status(:ok)
     body = response.parsed_body
 
-    expect(body).to include("range", "kpis", "cashflow", "fixed_variable", "categories", "transaction_count", "forecast")
+    expect(body).to include("range", "kpis", "cashflow", "fixed_variable", "categories", "transaction_count", "forecast", "vs_average")
     expect(body["kpis"]).to include("income", "expenses", "net", "savings_rate",
                                     "avg_monthly_expenses", "fixed_monthly", "recurring_payment_count")
     expect(body["categories"]).to include("items", "total")
+    expect(body["vs_average"]).to include("baseline_months", "income", "expenses", "net")
+    expect(body["vs_average"]["income"]).to include("current", "baseline", "delta", "pct")
     expect(body["forecast"]).to include("recurring_income", "recurring_expenses", "variable_income", "variable_expenses",
                                         "avg_window_months", "current_balance", "total_net", "liquid_balance", "liquid_net",
                                         "recurring_items", "upcoming", "upcoming_total")
@@ -590,6 +592,517 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       get variable_transactions_api_v1_statistics_path, params: { kind: "expenses" }, as: :json
       body = response.parsed_body
       expect(body["transactions"].map { |t| t["amount"].to_f }).to eq([-10.0])
+    end
+  end
+
+  # Drill-down behind ONE Kategorien-tab bar: the individual debits for a category over
+  # the SAME clamped display window/scope as #show, whose Σ MUST reconcile to the bar
+  # (invariant CI1). Read-only; uses the RAW passed-in `from` (no I4 re-clamp — the
+  # frontend sends the already-clamped data.range.from).
+  describe "category_transactions (Kategorien-Drill)" do
+    # CI1 (headline): the drill total == the matching #show categories bar amount, AND
+    # Σ(transactions.amount) == that total, over the SAME range #show returned.
+    it "reconciles to the category bar over the same window (CI1)" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      groceries = create(:category, user: user, name: "Lebensmittel & Getränke")
+      travel = create(:category, user: user, name: "Reisen")
+      create(:transaction_record, account: account, amount: -30, booking_date: Date.current, category: groceries)
+      create(:transaction_record, account: account, amount: -12.5, booking_date: Date.current, category: groceries)
+      create(:transaction_record, account: account, amount: -200, booking_date: Date.current, category: travel)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      show = response.parsed_body
+      range = show["range"]
+      bar = show["categories"]["items"].find { |i| i["id"] == groceries.id }
+
+      get category_transactions_api_v1_statistics_path,
+          params: { category_id: groceries.id, from: range["from"], to: range["to"] }, as: :json
+      expect(response).to have_http_status(:ok)
+      body = response.parsed_body
+
+      expect(body["category"]).to eq("id" => groceries.id, "name" => "Lebensmittel & Getränke")
+      expect(body["count"]).to eq(2)
+      expect(body["total"].to_f).to be_within(0.001).of(bar["amount"].to_f)
+      expect(body["total"].to_f).to eq(-42.5)
+      summed = body["transactions"].sum { |t| t["amount"].to_f }
+      expect(summed).to be_within(0.001).of(body["total"].to_f)
+    end
+
+    # CI1 with a FORCED clamp (review n4): the earliest in-scope debit lands AFTER a
+    # 12-month requested `from`, so #show clamps. The drill over the CLAMPED range must
+    # still reconcile — proving the clamped window (not the requested one) is the anchor.
+    it "still reconciles when #show clamped the window start (CI1, forced clamp)" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      groceries = create(:category, user: user, name: "Lebensmittel & Getränke")
+      create(:transaction_record, account: account, amount: -40, booking_date: Date.current - 4.months, category: groceries)
+      create(:transaction_record, account: account, amount: -25, booking_date: Date.current, category: groceries)
+
+      get api_v1_statistics_path, params: { from: (Date.current - 12.months).iso8601, to: Date.current.iso8601 }, as: :json
+      show = response.parsed_body
+      expect(show["range"]["clamped"]).to be(true)
+      range = show["range"]
+      bar = show["categories"]["items"].find { |i| i["id"] == groceries.id }
+
+      get category_transactions_api_v1_statistics_path,
+          params: { category_id: groceries.id, from: range["from"], to: range["to"] }, as: :json
+      body = response.parsed_body
+      expect(body["total"].to_f).to be_within(0.001).of(bar["amount"].to_f)
+      expect(body["transactions"].sum { |t| t["amount"].to_f }).to be_within(0.001).of(body["total"].to_f)
+    end
+
+    # Scope-awareness: default (familie) includes shared + personal AND nets a matched
+    # transfer whose counterpart is also in scope; ?scope=privat narrows to personal-only.
+    it "is scope-aware and nets in-scope internal transfers" do
+      privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
+      gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
+      privat2 = create(:account, bank_connection: bc, balance_amount: 500, shared: false)
+      cat = create(:category, user: user, name: "Reisen")
+      create(:transaction_record, account: privat, amount: -100, booking_date: Date.current, category: cat)
+      create(:transaction_record, account: gemein, amount: -300, booking_date: Date.current, category: cat)
+      # a matched transfer between two PERSONAL accounts (both legs in scope under either
+      # familie or privat) tagged with the same category must net out.
+      g = SecureRandom.uuid
+      create(:transaction_record, account: privat, amount: -50, booking_date: Date.current, category: cat,
+                                  transfer_group_id: g, transfer_counterpart_account: privat2)
+      create(:transaction_record, :credit, account: privat2, amount: 50, booking_date: Date.current,
+                                  transfer_group_id: g, transfer_counterpart_account: privat)
+
+      get category_transactions_api_v1_statistics_path,
+          params: this_month_params.merge(category_id: cat.id), as: :json
+      expect(response.parsed_body["total"].to_f).to eq(-400.0) # both real debits, transfer netted
+
+      get category_transactions_api_v1_statistics_path,
+          params: this_month_params.merge(category_id: cat.id, scope: "privat"), as: :json
+      expect(response.parsed_body["total"].to_f).to eq(-100.0) # personal only (transfer still netted)
+    end
+
+    # The uncategorized bucket (a null-id category bar) via the uncategorized=1 flag.
+    it "returns the uncategorized debits via uncategorized=1, reconciling to the null bar" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      groceries = create(:category, user: user, name: "Lebensmittel & Getränke")
+      create(:transaction_record, account: account, amount: -30, booking_date: Date.current, category: groceries)
+      create(:transaction_record, account: account, amount: -80, booking_date: Date.current) # no category
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      bar = response.parsed_body["categories"]["items"].find { |i| i["id"].nil? }
+
+      get category_transactions_api_v1_statistics_path,
+          params: this_month_params.merge(uncategorized: "1"), as: :json
+      body = response.parsed_body
+      expect(body["category"]).to eq("id" => nil, "name" => nil)
+      expect(body["count"]).to eq(1)
+      expect(body["total"].to_f).to eq(-80.0)
+      expect(body["total"].to_f).to be_within(0.001).of(bar["amount"].to_f)
+    end
+
+    # A "Sparen" category drills to its OWN rows (proves the Fixkosten transfer-category
+    # exclusion is NOT wrongly applied here — it would break CI1).
+    it "drills a Sparen category to its own rows (no transfer-category exclusion)" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      sparen = create(:category, user: user, name: "Sparen")
+      create(:transaction_record, account: account, amount: -150, booking_date: Date.current, category: sparen)
+
+      get category_transactions_api_v1_statistics_path,
+          params: this_month_params.merge(category_id: sparen.id), as: :json
+      body = response.parsed_body
+      expect(body["category"]["name"]).to eq("Sparen")
+      expect(body["total"].to_f).to eq(-150.0)
+      expect(body["count"]).to eq(1)
+    end
+
+    # The window is respected: a debit outside [from, to] is excluded; one inside is in.
+    it "respects the requested window" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      cat = create(:category, user: user, name: "Reisen")
+      create(:transaction_record, account: account, amount: -10, booking_date: Date.current, category: cat)
+      create(:transaction_record, account: account, amount: -99, booking_date: Date.current - 2.months, category: cat)
+
+      get category_transactions_api_v1_statistics_path,
+          params: this_month_params.merge(category_id: cat.id), as: :json
+      expect(response.parsed_body["transactions"].map { |t| t["amount"].to_f }).to eq([-10.0])
+    end
+
+    # Serialization shape: rows carry the shared transaction_json contract, newest first.
+    it "serializes rows with the shared transaction_json keys, newest first" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      cat = create(:category, user: user, name: "Reisen")
+      older = create(:transaction_record, account: account, amount: -10, booking_date: Date.current - 3, category: cat)
+      newer = create(:transaction_record, account: account, amount: -20, booking_date: Date.current, category: cat)
+
+      get category_transactions_api_v1_statistics_path,
+          params: this_month_params.merge(category_id: cat.id), as: :json
+      body = response.parsed_body
+      expect(body["transactions"].map { |t| t["id"] }).to eq([newer.id, older.id])
+      expect(body["transactions"].first).to include(
+        "id", "amount", "currency", "booking_date", "status", "remittance",
+        "creditor_name", "account_id", "account_name", "category"
+      )
+    end
+
+    it "requires authentication" do
+      delete session_path, as: :json
+      get category_transactions_api_v1_statistics_path, params: this_month_params, as: :json
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    it "never returns another user's category rows" do
+      other = create(:user, password: "password123")
+      other_acc = create(:account, bank_connection: create(:bank_connection, user: other), balance_amount: 999)
+      other_cat = create(:category, user: other, name: "Reisen")
+      create(:transaction_record, account: other_acc, amount: -500, booking_date: Date.current, category: other_cat)
+
+      get category_transactions_api_v1_statistics_path,
+          params: this_month_params.merge(category_id: other_cat.id), as: :json
+      body = response.parsed_body
+      expect(body["transactions"]).to eq([])
+      expect(body["total"].to_f).to eq(0.0)
+    end
+
+    # Empty/garbled params: missing from/to falls back to the #show default window (no
+    # error); a non-existent category_id → count 0, total "0.0" (string), empty rows.
+    it "degrades safely for missing params and a stale category id" do
+      create(:account, bank_connection: bc, balance_amount: 1000)
+
+      get category_transactions_api_v1_statistics_path, params: { category_id: 999_999 }, as: :json
+      expect(response).to have_http_status(:ok)
+      body = response.parsed_body
+      expect(body["count"]).to eq(0)
+      expect(body["total"]).to eq("0.0")
+      expect(body["transactions"]).to eq([])
+      expect(body["category"]).to eq("id" => 999_999, "name" => nil)
+    end
+  end
+
+  describe "merchants (Ausgaben nach Empfänger)" do
+    # Shape + ranking: two creditors with several debits each → items + total, sorted
+    # most-negative first; each item carries name/amount/count/share.
+    it "ranks merchants by spend, most-negative first" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      create(:transaction_record, account: account, amount: -30, booking_date: Date.current, creditor_name: "REWE GmbH")
+      create(:transaction_record, account: account, amount: -12.5, booking_date: Date.current, creditor_name: "REWE GmbH")
+      create(:transaction_record, account: account, amount: -200, booking_date: Date.current, creditor_name: "Lufthansa")
+
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      expect(response).to have_http_status(:ok)
+      body = response.parsed_body
+
+      expect(body["items"].map { |i| i["name"] }).to eq(["Lufthansa", "REWE GmbH"]) # -200 before -42.5
+      rewe = body["items"].find { |i| i["name"] == "REWE GmbH" }
+      expect(rewe["count"]).to eq(2)
+      expect(rewe["amount"].to_f).to eq(-42.5)
+      expect(rewe).to include("share")
+      expect(body["total"].to_f).to eq(-242.5)
+    end
+
+    # MI1: with NO person-transfers, Σ(items.amount) == kpis.expenses for the same period.
+    it "reconciles to kpis.expenses with no person-transfers (MI1)" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      create(:transaction_record, account: account, amount: -30, booking_date: Date.current, creditor_name: "REWE GmbH")
+      create(:transaction_record, account: account, amount: -70, booking_date: Date.current, creditor_name: "Lufthansa")
+      create(:transaction_record, :credit, account: account, amount: 500, booking_date: Date.current)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      expenses = response.parsed_body["kpis"]["expenses"].to_f
+
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      body = response.parsed_body
+      summed = body["items"].sum { |i| i["amount"].to_f }
+      expect(summed).to be_within(0.001).of(expenses)
+      expect(body["total"].to_f).to be_within(0.001).of(expenses)
+    end
+
+    # Null fallback bucket: creditor_name nil debits collapse into one name == nil item.
+    it "folds no-creditor debits into one null-name bucket" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      create(:transaction_record, account: account, amount: -20, booking_date: Date.current, creditor_name: nil)
+      create(:transaction_record, account: account, amount: -38, booking_date: Date.current, creditor_name: "  ") # blank → null bucket
+
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      body = response.parsed_body
+      nullb = body["items"].find { |i| i["name"].nil? }
+      expect(nullb["count"]).to eq(2)
+      expect(nullb["amount"].to_f).to eq(-58.0)
+    end
+
+    # Whitespace normalisation: names differing only by run-length whitespace merge.
+    it "merges names that differ only by run-length whitespace" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      create(:transaction_record, account: account, amount: -10, booking_date: Date.current, creditor_name: "REWE  GMBH")
+      create(:transaction_record, account: account, amount: -15, booking_date: Date.current, creditor_name: "REWE GMBH")
+
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      items = response.parsed_body["items"]
+      expect(items.size).to eq(1)
+      expect(items.first).to include("name" => "REWE GMBH", "count" => 2)
+      expect(items.first["amount"].to_f).to eq(-25.0)
+    end
+
+    # Person-transfer exclusion (MI1 caveat): a debit with transfer_group_id is ABSENT, and
+    # total is smaller than kpis.expenses by exactly that amount.
+    it "excludes person-to-person transfers and is smaller than kpis.expenses by them" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      create(:transaction_record, account: account, amount: -60, booking_date: Date.current, creditor_name: "REWE GmbH")
+      # a person-transfer (group id set, but no in-scope counterpart so in_scope keeps it).
+      create(:transaction_record, account: account, amount: -100, booking_date: Date.current,
+                                  creditor_name: "Vera Laube", transfer_group_id: SecureRandom.uuid)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      expenses = response.parsed_body["kpis"]["expenses"].to_f # -160
+
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      body = response.parsed_body
+      expect(body["items"].map { |i| i["name"] }).to eq(["REWE GmbH"])
+      expect(body["total"].to_f).to eq(-60.0)
+      expect(body["total"].to_f).to be_within(0.001).of(expenses + 100.0) # smaller by the transfer
+    end
+
+    # Matched internal transfer (both legs in scope) contributes nothing (netted by in_scope).
+    it "excludes matched internal transfers via in_scope" do
+      a1 = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
+      a2 = create(:account, bank_connection: bc, balance_amount: 500, shared: false)
+      create(:transaction_record, account: a1, amount: -40, booking_date: Date.current, creditor_name: "REWE GmbH")
+      g = SecureRandom.uuid
+      create(:transaction_record, account: a1, amount: -300, booking_date: Date.current,
+                                  creditor_name: "Transfer", transfer_group_id: g, transfer_counterpart_account: a2)
+      create(:transaction_record, :credit, account: a2, amount: 300, booking_date: Date.current,
+                                  transfer_group_id: g, transfer_counterpart_account: a1)
+
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      body = response.parsed_body
+      expect(body["items"].map { |i| i["name"] }).to eq(["REWE GmbH"])
+      expect(body["total"].to_f).to eq(-40.0)
+    end
+
+    # Scope-awareness: ?scope=privat aggregates only personal-account debits.
+    it "is scope-aware" do
+      privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
+      gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
+      create(:transaction_record, account: privat, amount: -100, booking_date: Date.current, creditor_name: "REWE GmbH")
+      create(:transaction_record, account: gemein, amount: -300, booking_date: Date.current, creditor_name: "REWE GmbH")
+
+      get merchants_api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
+      expect(response.parsed_body["total"].to_f).to eq(-100.0)
+
+      get merchants_api_v1_statistics_path, params: this_month_params.merge(scope: "familie"), as: :json
+      expect(response.parsed_body["total"].to_f).to eq(-400.0)
+    end
+
+    # MI2: the drill over a NON-m6 window (this_month) reconciles to the list row over the
+    # SAME from/to. A drill with no from/to would hit the trailing-6-months default → mismatch.
+    it "drills one merchant reconciling to its list row over the same window (MI2)" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      older = create(:transaction_record, account: account, amount: -30, booking_date: Date.current - 3, creditor_name: "REWE GmbH")
+      newer = create(:transaction_record, account: account, amount: -12.5, booking_date: Date.current, creditor_name: "REWE GmbH")
+      create(:transaction_record, account: account, amount: -200, booking_date: Date.current, creditor_name: "Lufthansa")
+
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      row = response.parsed_body["items"].find { |i| i["name"] == "REWE GmbH" }
+
+      get merchants_api_v1_statistics_path,
+          params: this_month_params.merge(name: "REWE GmbH"), as: :json
+      body = response.parsed_body
+      expect(body["count"]).to eq(2)
+      expect(body["transactions"].map { |t| t["id"] }).to eq([newer.id, older.id]) # newest first
+      expect(body["total"].to_f).to be_within(0.001).of(row["amount"].to_f)
+      expect(body["transactions"].sum { |t| t["amount"].to_f }).to be_within(0.001).of(body["total"].to_f)
+      expect(body["transactions"].first).to include("id", "amount", "currency", "booking_date", "creditor_name", "category")
+    end
+
+    # The null-bucket drill (name="") returns the no-creditor rows.
+    it "drills the null bucket via name=''" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      create(:transaction_record, account: account, amount: -25, booking_date: Date.current, creditor_name: nil)
+      create(:transaction_record, account: account, amount: -40, booking_date: Date.current, creditor_name: "REWE GmbH")
+
+      get merchants_api_v1_statistics_path, params: this_month_params.merge(name: ""), as: :json
+      body = response.parsed_body
+      expect(body["count"]).to eq(1)
+      expect(body["total"].to_f).to eq(-25.0)
+    end
+
+    # A creditor literally named "unnamed" routes to its OWN row + drill, NOT the null
+    # bucket (which the name="" drill owns). Guards the id-sentinel collision (review m1).
+    it "keeps a creditor literally named 'unnamed' as its own merchant" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      create(:transaction_record, account: account, amount: -33, booking_date: Date.current, creditor_name: "unnamed")
+      create(:transaction_record, account: account, amount: -17, booking_date: Date.current, creditor_name: nil)
+
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      names = response.parsed_body["items"].map { |i| i["name"] }
+      expect(names).to include("unnamed")
+      expect(names).to include(nil) # the genuine null bucket is separate
+
+      get merchants_api_v1_statistics_path, params: this_month_params.merge(name: "unnamed"), as: :json
+      body = response.parsed_body
+      expect(body["count"]).to eq(1)
+      expect(body["total"].to_f).to eq(-33.0)
+    end
+
+    it "requires authentication" do
+      delete session_path, as: :json
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    it "never returns another user's merchant rows" do
+      other = create(:user, password: "password123")
+      other_acc = create(:account, bank_connection: create(:bank_connection, user: other), balance_amount: 999)
+      create(:transaction_record, account: other_acc, amount: -500, booking_date: Date.current, creditor_name: "Geheim GmbH")
+
+      get merchants_api_v1_statistics_path, params: this_month_params, as: :json
+      expect(response.parsed_body["items"]).to eq([])
+      expect(response.parsed_body["total"]).to eq("0.0")
+    end
+
+    # Empty scope → 200 with items [] and total "0.0" (string, not Integer — the 0.to_d seed).
+    it "degrades safely with no in-scope accounts" do
+      get merchants_api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
+      expect(response).to have_http_status(:ok)
+      body = response.parsed_body
+      expect(body["items"]).to eq([])
+      expect(body["total"]).to eq("0.0")
+    end
+  end
+
+  # "Dieser Monat vs. dein Schnitt" (plan §3b): the selected window's per-month rate vs. the
+  # SAME trailing forecast window the Vorschau averages over. Rides on #show — no new route.
+  describe "vs_average (Monat vs. Schnitt)" do
+    # §5.1 — shape: income/expenses/net, each current/baseline/delta/pct.
+    it "includes the vs_average section with all three metric pairs" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      create(:transaction_record, :credit, account: account, amount: 2000, booking_date: Date.current.beginning_of_month - 10.days)
+      create(:transaction_record, account: account, amount: -300, booking_date: Date.current.beginning_of_month - 10.days)
+      create(:transaction_record, account: account, amount: -50, booking_date: Date.current)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      va = response.parsed_body["vs_average"]
+
+      expect(va).to include("baseline_months", "income", "expenses", "net")
+      %w[income expenses net].each do |k|
+        expect(va[k]).to include("current", "baseline", "delta", "pct")
+      end
+    end
+
+    # §5.2 (VA1) — the baseline reuses the forecast window: baseline_months ==
+    # forecast.avg_window_months for the same scope (one trailing average in the app).
+    it "reuses the forecast window — baseline_months == forecast.avg_window_months" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      bom = Date.current.beginning_of_month
+      # two FULL prior months with data + the current partial month.
+      create(:transaction_record, account: account, amount: -300, booking_date: bom.prev_month(1) + 9.days)
+      create(:transaction_record, account: account, amount: -200, booking_date: bom.prev_month(2) + 9.days)
+      create(:transaction_record, account: account, amount: -50, booking_date: Date.current)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      body = response.parsed_body
+
+      expect(body["vs_average"]["baseline_months"]).to eq(body["forecast"]["avg_window_months"])
+      expect(body["vs_average"]["baseline_months"]).to eq(2)
+    end
+
+    # §5.2b (m5) — one "current" average: vs_average.{income,expenses}.current ==
+    # kpis.{income,expenses} / range.months — so the chip and the Ø/Mt hero sub agree by
+    # construction (can never disagree).
+    it "computes current as the SAME total ÷ month_span as the Ø/Mt hero sub" do
+      privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
+      bom = Date.current.beginning_of_month
+      # a multi-month display window so range.months > 1 (exercises the divisor).
+      create(:transaction_record, :credit, account: privat, amount: 1500, booking_date: bom)
+      create(:transaction_record, account: privat, amount: -600, booking_date: bom.prev_month(1) + 3.days)
+
+      get api_v1_statistics_path, params: { from: bom.prev_month(1).iso8601, to: Date.current.iso8601 }, as: :json
+      body = response.parsed_body
+      months = body["range"]["months"].to_f
+      va = body["vs_average"]
+
+      expect(months).to be > 1
+      expect(va["income"]["current"].to_f).to be_within(0.001).of(body["kpis"]["income"].to_f / months)
+      expect(va["expenses"]["current"].to_f).to be_within(0.001).of(body["kpis"]["expenses"].to_f / months)
+    end
+
+    # §5.3 — the current partial month is excluded from the baseline. A big credit ONLY in
+    # the current month must not inflate the baseline, which reflects the prior FULL months.
+    it "excludes the current partial month from the baseline" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      bom = Date.current.beginning_of_month
+      # steady prior full months: 1000 income each, two months → baseline income 1000/mo.
+      create(:transaction_record, :credit, account: account, amount: 1000, booking_date: bom.prev_month(1) + 5.days)
+      create(:transaction_record, :credit, account: account, amount: 1000, booking_date: bom.prev_month(2) + 5.days)
+      # a huge credit ONLY in the current partial month — must NOT touch the baseline.
+      create(:transaction_record, :credit, account: account, amount: 99_999, booking_date: Date.current)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      va = response.parsed_body["vs_average"]
+
+      expect(va["income"]["baseline"].to_f).to be_within(0.001).of(1000.0)
+    end
+
+    # §5.4 (VA3) — net is derived: net.delta == income.delta + expenses.delta (the same
+    # cdiv/bdiv apply to all three pairs, so this holds within rounding).
+    it "derives net.delta from income.delta + expenses.delta" do
+      account = create(:account, bank_connection: bc, balance_amount: 5000)
+      bom = Date.current.beginning_of_month
+      create(:transaction_record, :credit, account: account, amount: 1800, booking_date: bom.prev_month(1) + 5.days)
+      create(:transaction_record, account: account, amount: -700, booking_date: bom.prev_month(1) + 6.days)
+      create(:transaction_record, :credit, account: account, amount: 2100, booking_date: Date.current)
+      create(:transaction_record, account: account, amount: -400, booking_date: Date.current)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      va = response.parsed_body["vs_average"]
+
+      expect(va["net"]["delta"].to_f).to be_within(0.011).of(va["income"]["delta"].to_f + va["expenses"]["delta"].to_f)
+    end
+
+    # §5.5 (VA2) — scope-aware netting: a both-legs-in-scope transfer is netted out of the
+    # baseline under FAMILIE (counterpart in scope) but counts under PRIVAT (counterpart out
+    # of scope) — the baseline tracks the hero figures per scope. Reuses the rent-share shape.
+    it "nets a both-legs-in-scope transfer out of the baseline under familie, counts it under privat" do
+      privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
+      gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
+      bom = Date.current.beginning_of_month
+      g = SecureRandom.uuid
+      # a rent-share privat → joint in a PRIOR full month (so it lands in the baseline window).
+      create(:transaction_record, account: privat, amount: -445, booking_date: bom.prev_month(1) + 5.days,
+                                  transfer_group_id: g, transfer_counterpart_account: gemein)
+      create(:transaction_record, account: gemein, amount: 445, booking_date: bom.prev_month(1) + 5.days,
+                                  transfer_group_id: g, transfer_counterpart_account: privat)
+
+      get api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
+      expect(response.parsed_body["vs_average"]["expenses"]["baseline"].to_f).to be_within(0.001).of(-445.0)
+
+      get api_v1_statistics_path, params: this_month_params.merge(scope: "familie"), as: :json
+      expect(response.parsed_body["vs_average"]["expenses"]["baseline"].to_f).to eq(0.0) # both legs netted
+    end
+
+    # §5.6 — empty scope → zeros, no 500. baseline_months 0; the three pairs present with
+    # "0.0" current/baseline/delta and null pct.
+    it "degrades to zeros (no 500) with no in-scope accounts" do
+      get api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
+      expect(response).to have_http_status(:ok)
+      va = response.parsed_body["vs_average"]
+
+      expect(va["baseline_months"]).to eq(0)
+      %w[income expenses net].each do |k|
+        expect(va[k]["current"].to_f).to eq(0.0)
+        expect(va[k]["baseline"].to_f).to eq(0.0)
+        expect(va[k]["delta"].to_f).to eq(0.0)
+        expect(va[k]["pct"]).to be_nil
+      end
+    end
+
+    # §5.7 — zero baseline → pct null, delta == current. A brand-new income source this
+    # month (none in the trailing window) can't divide by a zero baseline.
+    it "returns pct null and delta == current when the baseline is zero" do
+      account = create(:account, bank_connection: bc, balance_amount: 1000)
+      # income only in the current partial month → trailing-window income baseline is zero.
+      create(:transaction_record, :credit, account: account, amount: 1234, booking_date: Date.current)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      inc = response.parsed_body["vs_average"]["income"]
+
+      expect(inc["baseline"].to_f).to eq(0.0)
+      expect(inc["pct"]).to be_nil
+      expect(inc["delta"].to_f).to be_within(0.001).of(inc["current"].to_f)
     end
   end
 end
