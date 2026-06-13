@@ -66,7 +66,9 @@ namespace :snapshots do
 
     written = 0
 
-    Account.where.not(balance_amount: nil).order(:id).find_each do |account|
+    # find_each already yields in ascending-id batches; an explicit .order would just trip
+    # Rails' "Scoped order is ignored" warning, so we don't add one (output stays id-ordered).
+    Account.where.not(balance_amount: nil).find_each do |account|
       current = account.balance_amount
       by_day  = account.transaction_records.where.not(booking_date: nil).group(:booking_date).sum(:amount)
       has_tx  = by_day.any?
