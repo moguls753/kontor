@@ -28,7 +28,7 @@ function rangeFrom(r: NwRange): string | undefined {
 // a [Gesamt | Liquide] toggle, one line at a time, never overlaid.
 export default function NetWorthPanel({ scope, locale, t }: { scope: Scope; locale: string; t: T }) {
   const [range, setRange] = useState<NwRange>('max')
-  const [lens, setLens] = useState<NwLens>('total')
+  const [lens, setLens] = useState<NwLens>('liquid')
   const [data, setData] = useState<NetWorthData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
