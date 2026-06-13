@@ -286,12 +286,13 @@ export default {
     },
     networth: {
       heading: 'Net worth over time',
+      total: 'Total',
+      liquid: 'Liquid',
       empty_title: 'No balance history yet',
-      empty_body: 'Recorded daily from your first sync.',
+      empty_body: 'Reconstructed from your transactions and snapshots.',
       range: { label: 'Range', m3: '3M', m6: '6M', m12: '12M', max: 'Max' },
-      lens: { label: 'View', both: 'Both', liquid: 'Liquid', total: 'Total' },
-      isolate: { label: 'Accounts', all: 'All' },
-      kpi: { today: 'Net worth today', change: 'Change', liquid_today: 'Liquid today' },
+      kpi: { today: 'Net worth today', change: 'Change' },
+      composition_label: 'Made up of',
       caveat: { investment_flat: 'Investment value before tracking began is assumed constant — updated continuously going forward.' },
     },
     summary: {

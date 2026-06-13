@@ -286,12 +286,13 @@ export default {
     },
     networth: {
       heading: 'Vermögensverlauf',
+      total: 'Gesamt',
+      liquid: 'Liquide',
       empty_title: 'Noch kein Vermögensverlauf',
-      empty_body: 'Wird ab dem ersten Sync täglich erfasst.',
+      empty_body: 'Wird aus deinen Umsätzen und Snapshots rekonstruiert.',
       range: { label: 'Zeitraum', m3: '3M', m6: '6M', m12: '12M', max: 'Max' },
-      lens: { label: 'Ansicht', both: 'Beide', liquid: 'Liquide', total: 'Gesamt' },
-      isolate: { label: 'Konten', all: 'Alle' },
-      kpi: { today: 'Vermögen heute', change: 'Veränderung', liquid_today: 'Liquide heute' },
+      kpi: { today: 'Vermögen heute', change: 'Veränderung' },
+      composition_label: 'Zusammensetzung',
       caveat: { investment_flat: 'Investmentwert vor Erfassungsbeginn als konstant angenommen — wird laufend aktualisiert.' },
     },
     summary: {

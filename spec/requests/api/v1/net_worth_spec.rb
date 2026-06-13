@@ -5,163 +5,118 @@ RSpec.describe "Api::V1::NetWorth", type: :request do
   let(:bc) { create(:bank_connection, user: user) }
   before { post session_path, params: { email_address: user.email_address, password: "password123" }, as: :json }
 
-  def snapshot(account, days_ago, amount)
-    create(:balance_snapshot, account: account, snapshot_on: Date.current - days_ago, balance_amount: amount)
+  # role_locked so the after_commit role-inferrer doesn't override the role under test.
+  def giro(balance:, shared: false, name: "Giro")
+    create(:account, bank_connection: bc, role: "giro", role_locked: true, shared: shared, name: name, balance_amount: balance)
   end
 
-  it "returns one per-account series with the documented shape" do
-    acct = create(:account, bank_connection: bc, name: "Giro", role: "giro", role_locked: true, balance_amount: 100)
-    snapshot(acct, 2, 80)
-    snapshot(acct, 1, 90)
-    snapshot(acct, 0, 100)
+  def tx(account, days_ago, amount)
+    create(:transaction_record, account: account, amount: amount, booking_date: Date.current - days_ago, status: "booked")
+  end
+
+  it "returns Liquide + Gesamt aggregate lines reconstructed from transactions" do
+    g = giro(balance: 100)
+    tx(g, 5, 50)  # +50 five days ago
+    tx(g, 2, -30) # −30 two days ago
 
     get api_v1_net_worth_path, as: :json
     expect(response).to have_http_status(:ok)
     body = response.parsed_body
-
-    expect(body).to include("range", "accounts", "summary")
-    expect(body["range"]).to include("from" => (Date.current - 2).iso8601, "to" => Date.current.iso8601)
-    expect(body["accounts"].size).to eq(1)
-
-    a = body["accounts"].first
-    expect(a).to include("id" => acct.id, "name" => "Giro", "role" => "giro", "investment" => false)
-    expect(a["earliest"]).to eq((Date.current - 2).iso8601)
-    expect(a["series"].last).to include("date" => Date.current.iso8601)
-    expect(a["series"].last["balance"]).to be_a(String) # money serialised as a decimal string
-    expect(a["series"].last["balance"].to_f).to eq(100.0)
+    expect(body).to include("range", "series", "latest", "composition")
+    expect(body["series"].first).to include("date", "liquid", "total")
+    # window starts at the earliest transaction (reconstruction depth)
+    expect(body["range"]["from"]).to eq((Date.current - 5).iso8601)
+    # opening (before the +50) = 100 − (50 − 30) = 80; today = current balance = 100
+    expect(body["series"].first["total"].to_f).to eq(80.0)
+    expect(body["series"].last["total"].to_f).to eq(100.0)
+    # single account, no investment → Liquide == Gesamt
+    expect(body["series"].last["liquid"].to_f).to eq(100.0)
   end
 
-  # NW1 — the latest total must equal the dashboard's total balance for the same scope
-  # (the trust anchor), compared as BigDecimal both sides.
-  it "matches the dashboard total balance (NW1) under familie and privat" do
-    privat = create(:account, bank_connection: bc, balance_amount: 300, shared: false)
-    gemein = create(:account, bank_connection: bc, balance_amount: 200, shared: true)
-    snapshot(privat, 0, 300)
-    snapshot(gemein, 0, 200)
+  it "ends the line at the live balance, not the start-of-day value, on a same-day-tx day" do
+    g = giro(balance: 100)
+    tx(g, 5, 20)
+    tx(g, 0, -15) # booked TODAY — start-of-day would be 115, the live balance is 100
+
+    get api_v1_net_worth_path, as: :json
+    body = response.parsed_body
+    # the chart's right edge must equal the "today" headline (current balance), not start-of-day
+    expect(body["latest"]["total"].to_f).to eq(100.0)
+    expect(body["series"].last["total"].to_f).to eq(body["latest"]["total"].to_f)
+  end
+
+  # NW1: latest == the dashboard's total balance for the scope; scope = account membership.
+  it "matches the dashboard total (NW1) and is scope-aware" do
+    privat = giro(balance: 300, shared: false)
+    tx(privat, 3, 10)
+    gemein = giro(balance: 200, shared: true, name: "Joint")
+    tx(gemein, 3, 10)
 
     get api_v1_net_worth_path, as: :json
     nw = response.parsed_body
+    expect(BigDecimal(nw["latest"]["total"])).to eq(BigDecimal("500"))
     get api_v1_dashboard_path, as: :json
-    dash = response.parsed_body
-    expect(BigDecimal(nw["summary"]["latest"]["total"])).to eq(BigDecimal("500"))
-    expect(nw["summary"]["latest"]["total"].to_f).to eq(dash["total_balance"].to_f)
+    expect(nw["latest"]["total"].to_f).to eq(response.parsed_body["total_balance"].to_f)
 
     get api_v1_net_worth_path, params: { scope: "privat" }, as: :json
-    expect(BigDecimal(response.parsed_body["summary"]["latest"]["total"])).to eq(BigDecimal("300"))
+    privat_body = response.parsed_body
+    expect(BigDecimal(privat_body["latest"]["total"])).to eq(BigDecimal("300"))
+    expect(privat_body["composition"].map { |c| c["name"] }).not_to include("Joint")
   end
 
-  it "omits the shared account entirely under privat scope (membership, not netting)" do
-    privat = create(:account, bank_connection: bc, balance_amount: 300, shared: false, name: "Privat")
-    gemein = create(:account, bank_connection: bc, balance_amount: 200, shared: true, name: "Gemein")
-    snapshot(privat, 0, 300)
-    snapshot(gemein, 0, 200)
-
-    get api_v1_net_worth_path, params: { scope: "privat" }, as: :json
-    ids = response.parsed_body["accounts"].map { |a| a["id"] }
-    expect(ids).to contain_exactly(privat.id)
-  end
-
-  it "preserves each account's own depth and clamps the combined start to the shallowest" do
-    deep = create(:account, bank_connection: bc, name: "easybank")
-    shallow = create(:account, bank_connection: bc, name: "giro")
-    snapshot(deep, 100, 10)
-    snapshot(deep, 0, 20)
-    snapshot(shallow, 20, 5)
-    snapshot(shallow, 0, 8)
-
-    get api_v1_net_worth_path, as: :json
-    body = response.parsed_body
-    by_id = body["accounts"].index_by { |a| a["id"] }
-    expect(by_id[deep.id]["earliest"]).to eq((Date.current - 100).iso8601)
-    expect(by_id[shallow.id]["earliest"]).to eq((Date.current - 20).iso8601)
-    # clamped_from = max(earliest) = where the all-accounts line can start
-    expect(body["summary"]["clamped_from"]).to eq((Date.current - 20).iso8601)
-    # range.from = min(earliest) = the deepest single-account history
-    expect(body["range"]["from"]).to eq((Date.current - 100).iso8601)
-  end
-
-  it "carries the last known balance forward across a missed day" do
-    acct = create(:account, bank_connection: bc, balance_amount: 50)
-    snapshot(acct, 3, 30)
-    # no snapshot on -2 / -1
-    snapshot(acct, 0, 50)
-
-    get api_v1_net_worth_path, as: :json
-    by_date = response.parsed_body["accounts"].first["series"].index_by { |p| p["date"] }
-    expect(by_date[(Date.current - 2).iso8601]["balance"].to_f).to eq(30.0)
-    expect(by_date[(Date.current - 1).iso8601]["balance"].to_f).to eq(30.0)
-    expect(by_date[Date.current.iso8601]["balance"].to_f).to eq(50.0)
-  end
-
-  it "windows the series to ?from= and seeds the first day via carry-forward" do
-    acct = create(:account, bank_connection: bc, balance_amount: 50)
-    snapshot(acct, 10, 10)
-    snapshot(acct, 5, 30)
-    snapshot(acct, 0, 50)
-
-    get api_v1_net_worth_path, params: { from: (Date.current - 3).iso8601 }, as: :json
-    series = response.parsed_body["accounts"].first["series"]
-    expect(series.first["date"]).to eq((Date.current - 3).iso8601)
-    expect(series.first["balance"].to_f).to eq(30.0) # latest snapshot ≤ (today-3) = the -5 row
-    expect(series.last["date"]).to eq(Date.current.iso8601)
-  end
-
-  # Clamp AND window together: ?from inside both accounts' history must drive range.from,
-  # clamped_from, and every series' first date to `from` — not to either account's own
-  # (deeper) earliest snapshot. Guards against computing the clamp from unwindowed data.
-  it "windows and clamps together for accounts of differing depth" do
-    deep = create(:account, bank_connection: bc, name: "deep")
-    shallow = create(:account, bank_connection: bc, name: "shallow")
-    snapshot(deep, 100, 10); snapshot(deep, 0, 20)
-    snapshot(shallow, 20, 5); snapshot(shallow, 0, 8)
-    from = (Date.current - 10).iso8601
-
-    get api_v1_net_worth_path, params: { from: from }, as: :json
-    body = response.parsed_body
-    expect(body["range"]["from"]).to eq(from)
-    expect(body["summary"]["clamped_from"]).to eq(from)
-    body["accounts"].each { |a| expect(a["series"].first["date"]).to eq(from) }
-  end
-
-  it "flags investment/sparkonto accounts and excludes them from the liquid summary" do
-    # role_locked so the after_commit role-inferrer doesn't override the role under test.
-    giro = create(:account, bank_connection: bc, role: "giro", role_locked: true, balance_amount: 100)
+  it "splits Liquide (excludes investment) from Gesamt" do
+    g = giro(balance: 100)
+    tx(g, 4, 10)
     depot = create(:account, bank_connection: bc, role: "investment", role_locked: true, balance_amount: 1000)
-    spar = create(:account, bank_connection: bc, role: "sparkonto", role_locked: true, balance_amount: 500)
-    [giro, depot, spar].each { |a| snapshot(a, 0, a.balance_amount) }
+    create(:balance_snapshot, account: depot, snapshot_on: Date.current, balance_amount: 1000)
 
     get api_v1_net_worth_path, as: :json
-    body = response.parsed_body
-    by_id = body["accounts"].index_by { |a| a["id"] }
-    expect(by_id[giro.id]["investment"]).to be(false)
-    expect(by_id[depot.id]["investment"]).to be(true)
-    expect(by_id[spar.id]["investment"]).to be(true)
-
-    expect(BigDecimal(body["summary"]["latest"]["total"])).to eq(BigDecimal("1600"))
-    expect(BigDecimal(body["summary"]["latest"]["liquid"])).to eq(BigDecimal("100")) # giro only
+    last = response.parsed_body["series"].last
+    expect(last["total"].to_f).to eq(1100.0) # giro + depot
+    expect(last["liquid"].to_f).to eq(100.0)  # giro only — investment excluded
   end
 
-  it "returns empty accounts and a zero summary for an empty scope (no 500)" do
-    gemein = create(:account, bank_connection: bc, balance_amount: 200, shared: true)
-    snapshot(gemein, 0, 200)
+  it "flat-fills a broker from snapshots and does NOT reconstruct it from transactions" do
+    g = giro(balance: 100)
+    tx(g, 10, 5)
+    depot = create(:account, bank_connection: bc, role: "investment", role_locked: true, balance_amount: 1200)
+    # an investment account is never reconstructed, even with a transaction present:
+    create(:transaction_record, account: depot, amount: -999, booking_date: Date.current - 1, status: "booked")
+    create(:balance_snapshot, account: depot, snapshot_on: Date.current - 2, balance_amount: 1200)
+
+    get api_v1_net_worth_path, as: :json
+    last = response.parsed_body["series"].last
+    expect(last["total"].to_f - last["liquid"].to_f).to eq(1200.0) # flat 1200, the −999 ignored
+  end
+
+  it "clamps the window to the latest-starting reconstructable account" do
+    deep = giro(balance: 50, name: "deep")
+    tx(deep, 100, 5)
+    shallow = giro(balance: 50, name: "shallow")
+    tx(shallow, 20, 5)
+
+    get api_v1_net_worth_path, as: :json
+    expect(response.parsed_body["range"]["from"]).to eq((Date.current - 20).iso8601)
+  end
+
+  it "returns an empty payload for an empty scope (no 500)" do
+    gemein = giro(balance: 200, shared: true)
+    tx(gemein, 2, 5)
 
     get api_v1_net_worth_path, params: { scope: "privat" }, as: :json
     expect(response).to have_http_status(:ok)
     body = response.parsed_body
-    expect(body["accounts"]).to eq([])
-    expect(body["summary"]["latest"]["total"].to_f).to eq(0.0)
-    expect(body["summary"]["latest"]["liquid"].to_f).to eq(0.0)
-    expect(body["summary"]["clamped_from"]).to be_nil
+    expect(body["series"]).to eq([])
+    expect(body["latest"]["total"].to_f).to eq(0.0)
   end
 
   it "does not leak another user's accounts" do
-    mine = create(:account, bank_connection: bc, name: "Mine", balance_amount: 100)
-    snapshot(mine, 0, 100)
-    other = create(:account, name: "Theirs", balance_amount: 999) # different user via factory's default bc
-    create(:balance_snapshot, account: other, snapshot_on: Date.current, balance_amount: 999)
+    mine = giro(balance: 100, name: "Mine")
+    tx(mine, 2, 5)
+    other = create(:account, role: "giro", role_locked: true, balance_amount: 999) # different user (factory's own bc)
+    create(:transaction_record, account: other, amount: 5, booking_date: Date.current - 2, status: "booked")
 
     get api_v1_net_worth_path, as: :json
-    ids = response.parsed_body["accounts"].map { |a| a["id"] }
-    expect(ids).to contain_exactly(mine.id)
+    expect(BigDecimal(response.parsed_body["latest"]["total"])).to eq(BigDecimal("100"))
   end
 end

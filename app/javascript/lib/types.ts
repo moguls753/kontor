@@ -241,30 +241,25 @@ export interface StatisticsData {
   forecast: StatForecast
 }
 
-// Net-worth-over-time (GET /api/v1/net_worth). One daily balance series PER account;
-// the frontend composes scope/lens/isolation by summing whichever subset it shows and
-// clamping the combined line to max(earliest) over that subset.
-export interface NetWorthPoint {
+// Net-worth-over-time (GET /api/v1/net_worth?scope&from&to). Two aggregate daily lines —
+// Liquide (excl. investment/savings) and Gesamt — reconstructed server-side from the
+// in-scope accounts' transactions; plus today's composition for a context line. Scope
+// (Familie/Privat) is the global switch; the chart just renders what the scope returns.
+export interface NetWorthSeriesPoint {
   date: string
-  balance: string
+  liquid: string
+  total: string
 }
 
-export interface NetWorthAccount {
-  id: number
+export interface NetWorthCompositionItem {
   name: string
   role: AccountRole | null
-  investment: boolean
-  earliest: string
-  series: NetWorthPoint[]
-}
-
-export interface NetWorthSummary {
-  latest: { total: string; liquid: string }
-  clamped_from: string | null
+  balance: string
 }
 
 export interface NetWorthData {
   range: { from: string; to: string }
-  accounts: NetWorthAccount[]
-  summary: NetWorthSummary
+  series: NetWorthSeriesPoint[]
+  latest: { total: string; liquid: string } // current balances → NW1 dashboard parity
+  composition: NetWorthCompositionItem[]
 }

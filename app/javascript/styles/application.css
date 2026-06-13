@@ -818,29 +818,21 @@ table.fc-proj { width: 100%; max-width: 560px; border-collapse: collapse; margin
    flip for dark mode; the draw-in/fade is neutralised by the reduced-motion block above. */
 .nw-state { min-height: 220px; display: flex; align-items: center; justify-content: center; gap: 14px; color: var(--ink-muted); font-size: 13.5px; }
 
-.nw-kpis { display: flex; flex-wrap: wrap; gap: 12px 40px; align-items: baseline; margin-bottom: 20px; }
-.nw-kpi { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.nw-kpi-fig { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 600; font-size: clamp(22px, 3vw, 28px); letter-spacing: -0.02em; line-height: 1; color: var(--ink); }
-.nw-kpi-muted { font-weight: 550; color: var(--ink-muted); font-size: clamp(19px, 2.4vw, 23px); }
-.nw-delta { display: inline-flex; align-items: baseline; gap: 8px; font-size: clamp(18px, 2.2vw, 21px); }
+/* panel-head right group (legend + range), so the head matches the other tabs' layout */
+.panel-head-side { display: inline-flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+
+/* inline Δ in the stat-context summary line (mono, ▲/▼ green/red) */
+.nw-delta { display: inline-flex; align-items: baseline; gap: 5px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .nw-delta.pos { color: var(--income); }
 .nw-delta.neg { color: var(--danger); }
-.nw-delta-arrow { font-size: 11px; }
-.nw-delta-pct { font-size: 12.5px; color: var(--ink-faint); font-weight: 500; }
 
-.nw-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 12px; }
-.nw-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.nw-chip {
-  font-size: 12px; font-weight: 550; color: var(--ink-muted);
-  padding: 5px 12px; border: 1.5px solid var(--line); border-radius: 999px;
-  background: var(--surface); white-space: nowrap;
-  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
-}
-.nw-chip:hover { color: var(--ink); border-color: var(--line-strong); }
-.nw-chip.on { color: var(--brass-ink); border-color: var(--brass); background: var(--brass-soft); }
-.nw-chip:focus-visible { outline: none; box-shadow: var(--ring); }
+/* today's composition — a muted, wrapping context line under the chart */
+.nw-compose { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font-size: 12px; color: var(--ink-muted); }
+.nw-compose-lead { color: var(--ink-faint); }
+.nw-compose-item { white-space: nowrap; }
+.nw-compose-item .mono { color: var(--ink); font-variant-numeric: tabular-nums; }
 
-.nw-caveat { margin-top: 13px; font-size: 12px; color: var(--ink-faint); line-height: 1.5; max-width: 64ch; }
+.nw-caveat { margin-top: 11px; font-size: 12px; color: var(--ink-faint); line-height: 1.5; max-width: 64ch; }
 
 .nw-chart { position: relative; width: 100%; }
 .nw-svg { display: block; overflow: visible; }
@@ -868,8 +860,7 @@ table.fc-proj { width: 100%; max-width: 560px; border-collapse: collapse; margin
 @keyframes nwDraw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 
 @media (max-width: 680px) {
-  .nw-controls { gap: 10px 12px; }
-  .nw-range { width: 100%; }
+  .panel-head-side { width: 100%; justify-content: space-between; gap: 10px; }
 }
 
 /* Variable-flows drill-down modal — a receipt: month sections, a till total. */

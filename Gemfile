@@ -25,6 +25,10 @@ gem "bcrypt", "~> 3.1.7"
 # JWT for Enable Banking API authentication
 gem "jwt"
 
+# CSV parsing (no longer a default gem since Ruby 3.4) — used by the one-time
+# Tomorrow CSV importer (lib/tasks/import_tomorrow_csv.rake)
+gem "csv"
+
 # Windows does not include zoneinfo files, so bundle the tzinfo-data gem
 gem "tzinfo-data", platforms: %i[ windows jruby ]
 
