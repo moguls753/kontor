@@ -25,4 +25,18 @@ module ScopedAccounts
     scope.where(account_id: ids)
          .where("transfer_counterpart_account_id IS NULL OR transfer_counterpart_account_id NOT IN (?)", ids)
   end
+
+  # Investment/savings accounts (role-based). Excluded from the "liquid" lens — the
+  # spendable runway — by both the statistics forecast and the net-worth chart.
+  def investment_account_ids
+    Current.user.accounts.where(role: %w[investment sparkonto]).pluck(:id)
+  end
+
+  # Parse an ISO date param, falling back to `default` on blank/invalid input. Shared by the
+  # statistics + net-worth controllers, which both read `?from`/`?to` date windows.
+  def parse_date(value, default)
+    value.present? ? Date.iso8601(value.to_s) : default
+  rescue ArgumentError, TypeError
+    default
+  end
 end

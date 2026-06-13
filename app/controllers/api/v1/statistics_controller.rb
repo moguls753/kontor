@@ -116,12 +116,6 @@ module Api
 
       private
 
-      def parse_date(value, default)
-        value.present? ? Date.iso8601(value.to_s) : default
-      rescue ArgumentError, TypeError
-        default
-      end
-
       # Inclusive count of calendar months in [from, to], min 1 (review S4 — the
       # denominator for avg_monthly_expenses / fixed_monthly).
       def month_span(from, to)
@@ -235,11 +229,6 @@ module Api
           recurring_items: rec_items,
           upcoming: upcoming_payments(series, buckets)
         }.tap { |f| f[:upcoming_total] = f[:upcoming].sum(0.to_d) { |u| u[:amount] } }
-      end
-
-      # Investment/savings accounts (role-based) — excluded from the liquid runway lens.
-      def investment_account_ids
-        Current.user.accounts.where(role: %w[investment sparkonto]).pluck(:id)
       end
 
       # Numeric projection (current balance + monthly net = recurring run-rate + variable

@@ -240,3 +240,31 @@ export interface StatisticsData {
   categories: StatCategories
   forecast: StatForecast
 }
+
+// Net-worth-over-time (GET /api/v1/net_worth). One daily balance series PER account;
+// the frontend composes scope/lens/isolation by summing whichever subset it shows and
+// clamping the combined line to max(earliest) over that subset.
+export interface NetWorthPoint {
+  date: string
+  balance: string
+}
+
+export interface NetWorthAccount {
+  id: number
+  name: string
+  role: AccountRole | null
+  investment: boolean
+  earliest: string
+  series: NetWorthPoint[]
+}
+
+export interface NetWorthSummary {
+  latest: { total: string; liquid: string }
+  clamped_from: string | null
+}
+
+export interface NetWorthData {
+  range: { from: string; to: string }
+  accounts: NetWorthAccount[]
+  summary: NetWorthSummary
+}

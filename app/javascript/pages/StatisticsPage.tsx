@@ -8,6 +8,7 @@ import { BarChart, RankedBars, Legend } from '../components/charts'
 import type { BarDatum, RankedItem } from '../components/charts'
 import type { StatisticsData, StatRange, StatForecast } from '../lib/types'
 import VariableFlowsModal from '../components/VariableFlowsModal'
+import NetWorthPanel from '../components/NetWorthPanel'
 import ScenarioEditor from '../components/ScenarioEditor'
 import { type ScenarioAdjustment, loadScenario, saveScenario, projectBalance } from '../lib/scenario'
 import { PERIOD_KEYS, periodRange, formatMonth, readPeriod, type PeriodKey } from '../lib/period'
@@ -16,12 +17,14 @@ const TOP_CATEGORIES = 8
 const UPCOMING_PREVIEW = 7
 const PROJ_ROWS = [0, 3, 6, 12] as const // projection table rows: Heute + the horizons
 
-const TABS = ['trends', 'categories', 'forecast'] as const
+// Net worth leads (the headline view) and is the default for users with no saved tab;
+// a saved choice is respected (NW-D4).
+const TABS = ['networth', 'trends', 'categories', 'forecast'] as const
 type Tab = (typeof TABS)[number]
 const readTab = (): Tab => {
-  if (typeof localStorage === 'undefined') return 'trends'
+  if (typeof localStorage === 'undefined') return 'networth'
   const saved = localStorage.getItem('stats-tab') ?? ''
-  return (TABS as readonly string[]).includes(saved) ? (saved as Tab) : 'trends'
+  return (TABS as readonly string[]).includes(saved) ? (saved as Tab) : 'networth'
 }
 
 export default function StatisticsPage() {
@@ -87,9 +90,25 @@ export default function StatisticsPage() {
         <div className="text-ink-muted text-[13px]">{t('statistics.subtitle')}</div>
         <h1 className="page-title mt-0.5">{t('statistics.title')}</h1>
       </div>
-      <Select value={period} onChange={e => changePeriod(e.target.value as PeriodKey)} ariaLabel={t('statistics.title')} className="w-[176px]">
-        {PERIOD_KEYS.map(k => <option key={k} value={k}>{t(`statistics.period.${k}`)}</option>)}
-      </Select>
+      {/* The period selector drives the cashflow tabs; net worth owns its own range control. */}
+      {tab !== 'networth' && (
+        <Select value={period} onChange={e => changePeriod(e.target.value as PeriodKey)} ariaLabel={t('statistics.title')} className="w-[176px]">
+          {PERIOD_KEYS.map(k => <option key={k} value={k}>{t(`statistics.period.${k}`)}</option>)}
+        </Select>
+      )}
+    </div>
+  )
+
+  // One WAI-ARIA tablist, shared by the empty-period branch and the main render (so the
+  // markup — and the aria-controls="stat-tabpanel" target — stays in a single place).
+  const renderTabs = () => (
+    <div className="stat-tabs" role="tablist" aria-label={t('statistics.title')} onKeyDown={onTabKey}>
+      {TABS.map(k => (
+        <button key={k} id={`stat-tab-${k}`} role="tab" aria-selected={tab === k} aria-controls="stat-tabpanel"
+          tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => changeTab(k)}>
+          {t(`statistics.tab.${k}`)}
+        </button>
+      ))}
     </div>
   )
 
@@ -112,11 +131,16 @@ export default function StatisticsPage() {
   const nf1 = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 })
   const fmtAbs = (v: string) => formatAmount(Math.abs(parseFloat(v)))
 
-  if (data.transaction_count === 0) {
+  // The net-worth tab is window-independent (it reads balance_snapshots, not the period's
+  // transactions), so it stays reachable even when the chosen period has no activity.
+  if (data.transaction_count === 0 && tab !== 'networth') {
     return (
       <div className="page">{head}
         {range.clamped && <ClampHint range={range} locale={locale} t={t} />}
-        <div className="panel"><Empty icon="statistics" title={t('statistics.empty_title')} body={t('statistics.no_data_period')} /></div>
+        {renderTabs()}
+        <div className="panel" id="stat-tabpanel" role="tabpanel" aria-labelledby={`stat-tab-${tab}`}>
+          <Empty icon="statistics" title={t('statistics.empty_title')} body={t('statistics.no_data_period')} />
+        </div>
       </div>
     )
   }
@@ -179,37 +203,37 @@ export default function StatisticsPage() {
       {head}
       {range.clamped && <ClampHint range={range} locale={locale} t={t} />}
 
-      {/* Hero — was rein / raus / übrig */}
-      <div className="panel stat-hero">
-        <div className="stat-hero-col">
-          <Eyebrow>{t('statistics.summary.income')}</Eyebrow>
-          <div className="stat-hero-fig"><Amount value={kpis.income} /></div>
-          {perMonth(income) && <div className="stat-hero-sub">{perMonth(income)}</div>}
+      {/* Hero — was rein / raus / übrig (cashflow summary). Hidden on the net-worth tab,
+          which carries its own KPI strip and would otherwise show a 0/0/0 hero for an
+          empty period (a realistic first screen for a freshly-connected / balance-only account). */}
+      {tab !== 'networth' && (
+        <div className="panel stat-hero">
+          <div className="stat-hero-col">
+            <Eyebrow>{t('statistics.summary.income')}</Eyebrow>
+            <div className="stat-hero-fig"><Amount value={kpis.income} /></div>
+            {perMonth(income) && <div className="stat-hero-sub">{perMonth(income)}</div>}
+          </div>
+          <div className="stat-hero-col">
+            <Eyebrow>{t('statistics.summary.expenses')}</Eyebrow>
+            <div className="stat-hero-fig"><Amount value={kpis.expenses} /></div>
+            {perMonth(expenses) && <div className="stat-hero-sub">{perMonth(expenses)}</div>}
+          </div>
+          <div className="stat-hero-col">
+            <Eyebrow>{t('statistics.summary.net')}</Eyebrow>
+            <div className="stat-hero-fig"><Amount value={net} /></div>
+            {perMonth(net) && <div className="stat-hero-sub">{perMonth(net)}</div>}
+            {rate != null && <div className="stat-hero-rate">{t('statistics.summary.savings_rate', { value: nf1.format(rate) })}</div>}
+          </div>
         </div>
-        <div className="stat-hero-col">
-          <Eyebrow>{t('statistics.summary.expenses')}</Eyebrow>
-          <div className="stat-hero-fig"><Amount value={kpis.expenses} /></div>
-          {perMonth(expenses) && <div className="stat-hero-sub">{perMonth(expenses)}</div>}
-        </div>
-        <div className="stat-hero-col">
-          <Eyebrow>{t('statistics.summary.net')}</Eyebrow>
-          <div className="stat-hero-fig"><Amount value={net} /></div>
-          {perMonth(net) && <div className="stat-hero-sub">{perMonth(net)}</div>}
-          {rate != null && <div className="stat-hero-rate">{t('statistics.summary.savings_rate', { value: nf1.format(rate) })}</div>}
-        </div>
-      </div>
+      )}
 
       {/* Tabs — named by the question you're asking; keep everything to one screen */}
-      <div className="stat-tabs" role="tablist" aria-label={t('statistics.title')} onKeyDown={onTabKey}>
-        {TABS.map(k => (
-          <button key={k} id={`stat-tab-${k}`} role="tab" aria-selected={tab === k} aria-controls="stat-tabpanel"
-            tabIndex={tab === k ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => changeTab(k)}>
-            {t(`statistics.tab.${k}`)}
-          </button>
-        ))}
-      </div>
+      {renderTabs()}
 
       <div className="stat-tab-panel" key={tab} id="stat-tabpanel" role="tabpanel" aria-labelledby={`stat-tab-${tab}`} tabIndex={0}>
+        {tab === 'networth' && (
+          <NetWorthPanel scope={scope} locale={locale} t={t} />
+        )}
         {tab === 'trends' && (
           <div className="stat-grid stat-grid-even">
             <div className="panel">

@@ -48,6 +48,10 @@ Rails.application.routes.draw do
       resource :statistics, only: %i[ show ] do
         get :variable_transactions
       end
+      # Net-worth-over-time: per-account daily balance series from balance_snapshots.
+      # Explicit controller so the singular resource maps to NetWorthController (not the
+      # default pluralised NetWorthsController).
+      resource :net_worth, only: %i[ show ], controller: "net_worth"
     end
   end
 
