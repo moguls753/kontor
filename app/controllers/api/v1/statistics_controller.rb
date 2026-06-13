@@ -28,9 +28,10 @@ module Api
       # NEVER this flat number (see variable_averages).
       FORECAST_WINDOW_MONTHS = 6
 
-      # Server-side cap for the top-merchants list (plan §2.2): the UI shows the first 8
-      # and reveals the rest with "+N weitere". Capping breaks strict Σitems == total, so
-      # the response returns the UN-capped `total` for the footer (invariant MI1).
+      # Server-side cap for the per-category Empfänger list (plan §2.2): the UI shows the
+      # first 8 and reveals the rest with "+N weitere". Capping breaks strict Σitems ==
+      # total, so the response returns the UN-capped per-category `total` for the drill
+      # footer (invariant CM1).
       TOP_MERCHANTS = 12
 
       def show
@@ -58,6 +59,7 @@ module Api
         total_fixed = fixed_scope.sum(:amount).to_d
         cats        = category_items(window)
         top         = cats[:items].first
+        month_keys  = build_series(clamped_from, to) { |m| m }   # the chart's "%Y-%m" order (§3b.3)
 
         render json: {
           range: { from: clamped_from, to: to, months: months, clamped: clamped_from != from },
@@ -83,11 +85,10 @@ module Api
             { month: m, fixed: fixed, variable: total - fixed }
           },
           categories: cats,
-          # "Dieser Monat vs. dein Schnitt" — the selected window's per-month rate vs. the
-          # trailing forecast window (§3b). `income`/`expenses` are the window sums above;
-          # `months` is month_span(clamped_from, to). No extra account/category queries beyond
-          # the one shared variable_window call.
-          vs_average: vs_average(ids, income, expenses, months),
+          # Verlauf Ø-reference (§3b) — the trailing Ø + last-completed-month delta the
+          # Verlauf chart draws, computed from the display-window per-month series #show
+          # already built (income_by_month/expense_by_month + month_keys). No extra query.
+          vs_average: vs_average(month_keys, income_by_month, expense_by_month),
           forecast: forecast(ids)
         }
       end
@@ -115,9 +116,11 @@ module Api
         }
       end
 
-      # Drill-down for the Kategorien tab: the individual transactions behind ONE
-      # category bar, over the SAME clamped display window/scope as #show's
-      # category_items (so Σ tx.amount == the bar's amount — invariant CI1). Read-only.
+      # Leaf of the Ausgaben drill: the individual transactions behind ONE category bar
+      # (invariant CI1) — and, when `creditor` is present, narrowed to ONE Empfänger
+      # within that category (CM2), so it reconciles to that payee's row in the level-1
+      # list (#merchants, §2.2). Same clamped display window/scope as #show's
+      # category_items (so Σ tx.amount == the bar's amount). Read-only.
       #
       # NB §2.1/n1: this deliberately does NOT consume stats_window — it must use the
       # RAW passed-in `from` WITHOUT the I4 earliest-tx re-clamp, because the frontend
@@ -135,8 +138,28 @@ module Api
         uncategorized = params[:uncategorized] == "1"
         category_id   = uncategorized ? nil : params[:category_id].presence
 
-        rel  = window.debits.where(category_id: category_id)
-        rows = rel.includes(:account, :category).order(booking_date: :desc, id: :desc)
+        rel = window.debits.where(category_id: category_id)
+
+        # Optional payee leaf (CM2). When `creditor` is present we are drilling INTO the
+        # per-category Empfänger ranking (§2.2), which (a) drops person-to-person transfers
+        # and (b) groups by the NORMALISED creditor_name — so the leaf MUST mirror both, or
+        # Σ(leaf) ≠ the payee row. `creditor=""`/blank ⇒ that category's null/no-creditor
+        # bucket. EAGER-LOAD BEFORE the Ruby filter (review m1): `.select { … }` materialises
+        # an Array, so a later `.includes` would be a no-op and transaction_json would N+1 on
+        # tx.account/tx.category (violating §1.2) — include here, while `rel` is a relation.
+        if params.key?(:creditor)
+          want = normalize_merchant(params[:creditor])         # nil for the "" / blank bucket
+          rel  = rel.where(transfer_group_id: nil)             # mirror §2.2's person-transfer drop
+                    .includes(:account, :category)
+                    .order(booking_date: :desc, id: :desc)
+                    .select { |tx| normalize_merchant(tx.creditor_name) == want }
+        end
+
+        # When `creditor` filtered, `rel` is already an eager-loaded Array (account+category
+        # preloaded above) → the ternary falls through to it; the no-`creditor` path is still a
+        # relation and gets `.includes` here. `total`/`count` below handle both via Enumerable.
+        rows = (rel.respond_to?(:includes) ? rel.includes(:account, :category) : rel)
+                 .sort_by { |tx| [ tx.booking_date, tx.id ] }.reverse   # DESC for groupByMonth
 
         category_name =
           (uncategorized || category_id.nil?) ? nil
@@ -145,43 +168,31 @@ module Api
         render json: {
           category: { id: category_id&.to_i, name: category_name },
           range: { from: from, to: to },
-          total: rel.sum(:amount).to_d,
-          count: rel.count,
+          total: rows.sum(0.to_d) { |tx| tx.amount.to_d },
+          count: rows.size,
           transactions: rows.map { |tx| transaction_json(tx) }
         }
       end
 
-      # Spending grouped by counterparty (creditor_name on debits), distinct from the
-      # category breakdown. Two modes over the SAME scoped, internal-transfer-excluded
-      # display window as #show (so the list reconciles to the same period — invariants
-      # MI1/MI2):
-      #  • LIST mode (no `name` param) — the ranked merchants + the un-capped total.
-      #  • DRILL mode (`name` present; "" / blank ⇒ the null/no-creditor bucket via
-      #    .presence) — one merchant's transactions for VariableFlowsModal, newest first
-      #    (groupByMonth needs DESC).
-      # Person-to-person transfers (transfer_group_id present) are dropped — a person name
-      # is not a merchant (the intentional MI1 divergence from the categories list). The
-      # drill passes the SAME from/to as the list (both via stats_window), or Σ(drill) would
-      # mismatch the row for every preset but the no-from/to default (review B1). Read-only.
+      # Level-1 drill of the Ausgaben hierarchy: the top Empfänger WITHIN one category,
+      # ranked by spend, over the SAME clamped display window/scope as #show's category bar
+      # (so Σ items == that category's bar minus its person-transfers — invariant CM1).
+      # `category_id` selects the category; `uncategorized=1` ⇒ the null-category bar's
+      # Empfänger. Absent-both deliberately resolves to nil → the uncategorized bucket (NOT a
+      # global all-merchants list, which is gone, and NOT a 400 — every UI caller always sends
+      # category_id or uncategorized=1; review m2). Person-to-person transfers
+      # (transfer_group_id present) are dropped — a person name is not a merchant (the
+      # intentional CM1 divergence from the category bar). The leaf is now
+      # #category_transactions?creditor=… (§2.1), not a `name` drill here. Read-only.
       def merchants
-        window = stats_window(params)[:window]
-        debits = window.debits.where(transfer_group_id: nil)   # drop person-to-person transfers
+        window        = stats_window(params)[:window]
+        uncategorized = params[:uncategorized] == "1"
+        category_id   = uncategorized ? nil : params[:category_id].presence
 
-        if params.key?(:name)
-          # DRILL MODE — rows for ONE normalised merchant ("" / blank ⇒ the null bucket).
-          name = params[:name].to_s
-          rows = debits.includes(:account, :category).order(booking_date: :desc, id: :desc).select do |tx|
-            normalize_merchant(tx.creditor_name) == name.presence    # nil-key ↔ "" / blank
-          end
-          total = rows.sum(0.to_d) { |tx| tx.amount.to_d }
-          render json: {
-            transactions: rows.map { |tx| transaction_json(tx) },
-            total: total,
-            count: rows.size
-          }
-        else
-          render json: merchant_items(debits)                  # LIST MODE
-        end
+        debits = window.debits
+                       .where(category_id: category_id)        # scope to ONE category (CM1)
+                       .where(transfer_group_id: nil)          # drop person-to-person transfers
+        render json: merchant_items(debits)
       end
 
       private
@@ -273,11 +284,12 @@ module Api
         raw.to_s.strip.gsub(/\s+/, " ").presence
       end
 
-      # One ranked list of in-scope debit spend grouped by NORMALISED creditor_name (plan
-      # §2.2). Grouped in Ruby (not SQL) because the whitespace-squeeze rule is a Ruby method;
-      # pull the two columns we need and fold — bounded for one user's window. Mirrors
-      # category_items minus `id`: BigDecimal discipline (I2), most-negative first, the
-      # UN-capped `total` for the footer, capped at TOP_MERCHANTS.
+      # One ranked list of (already category-scoped) debit spend grouped by NORMALISED
+      # creditor_name (plan §2.2). Grouped in Ruby (not SQL) because the whitespace-squeeze
+      # rule is a Ruby method; pull the two columns we need and fold — bounded for one
+      # category's window. Mirrors category_items minus `id`: BigDecimal discipline (I2),
+      # most-negative first, the UN-capped per-category `total` for the footer, capped at
+      # TOP_MERCHANTS.
       def merchant_items(debits)
         rows = debits.pluck(:creditor_name, :amount)        # [[name, BigDecimal], ...]
         acc  = Hash.new { |h, k| h[k] = { amount: 0.to_d, count: 0 } }
@@ -400,31 +412,44 @@ module Api
         s.expected_amount.abs * 30.0 / cd
       end
 
-      # "Dieser Monat vs. dein Schnitt" (plan §3b): compares the SELECTED display window's
-      # per-month rate against the SAME trailing forecast window the Vorschau averages over
-      # (variable_window — trailing FORECAST_WINDOW_MONTHS full calendar months, current
-      # partial month EXCLUDED, scope-aware). Rides on #show — no second fetch, no new route.
+      # Verlauf Ø-reference (plan §3.3b/§3b — "ist dieser Monat normal?", answered in the
+      # Verlauf chart, NOT on the hero). For each series (income, expenses) over the DISPLAY
+      # window's per-month buckets: the trailing Ø = mean of the COMPLETED months (month <
+      # current calendar month), and the LAST COMPLETED month's total + their delta. The
+      # current (in-progress) month is EXCLUDED from the Ø and is NOT the comparison point —
+      # the chart draws it visibly partial (invariants VR1/VR3). Like-for-like
+      # full-month-vs-full-month-mean ⇒ no partial-month divisor asymmetry, no salary-timing
+      # income noise. Money via .to_d / .round(2) (I2/S2-safe — typed-decimal sums, not raw
+      # Arel); scope-aware because the buckets come from the in_scope window (VR2).
       #
-      # ⚠️ The baseline averages the FULL `scoped` relation (recurring + variable), NOT
-      # `nonrec` — the hero income/expenses/net are all-flows, so the comparison must be too
-      # (§1.6). `baseline_months` = months-WITH-data (may be < 6) so a short-history account
-      # self-adjusts; the frontend hides the chip when it's 0 (invariants VA1/VA2/VA3).
-      def vs_average(ids, cur_income, cur_expenses, cur_months)
-        w    = variable_window(ids)
-        bdiv = [ w[:months], 1 ].max
-        base_income   = w[:scoped].credits.sum(:amount).to_d / bdiv
-        base_expenses = w[:scoped].debits.sum(:amount).to_d / bdiv
-        base_net      = base_income + base_expenses
-        cdiv = [ cur_months, 1 ].max
-        cur_income_m   = cur_income   / cdiv
-        cur_expenses_m = cur_expenses / cdiv
-        cur_net_m      = cur_income_m + cur_expenses_m
+      # `months` = the chart's month keys in order (build_series(clamped_from, to)'s "%Y-%m"
+      # list); income_by_month / expense_by_month = the existing #show hashes (signed:
+      # expenses ≤ 0). Rides on #show — no second fetch, no new query.
+      def vs_average(months, income_by_month, expense_by_month)
+        cur_key   = Date.current.strftime("%Y-%m")
+        completed = months.reject { |m| m >= cur_key }            # months strictly before this one
+        last_done = completed.last                                # the like-for-like comparison month
+
+        inc_ref = avg_over(completed, income_by_month)            # mean of completed-month income (≥ 0)
+        exp_ref = avg_over(completed, expense_by_month)           # mean of completed-month expenses (≤ 0)
+        inc_cur = last_done ? (income_by_month[last_done]  || 0).to_d : 0.to_d
+        exp_cur = last_done ? (expense_by_month[last_done] || 0).to_d : 0.to_d
         {
-          baseline_months: w[:months],                     # months WITH data (may be < 6) — VA1
-          income:   delta_pair(cur_income_m,   base_income),
-          expenses: delta_pair(cur_expenses_m, base_expenses),
-          net:      delta_pair(cur_net_m,      base_net)    # VA3: derived, not separately summed
+          baseline_months: completed.size,                        # completed months averaged (VR1/VR3)
+          last_complete_month: last_done,                         # 'YYYY-MM' or nil — the delta's month
+          income:   delta_pair(inc_cur, inc_ref),
+          expenses: delta_pair(exp_cur, exp_ref),
+          net:      delta_pair(inc_cur + exp_cur, inc_ref + exp_ref)   # derived, not separately summed
         }
+      end
+
+      # Mean of a series over the given month keys (BigDecimal; 0 when no months). A month
+      # present in the chart but absent from the bucket hash is a real €0 month and counts in
+      # the divisor.
+      def avg_over(keys, by_month)
+        return 0.to_d if keys.empty?
+
+        keys.sum(0.to_d) { |m| (by_month[m] || 0).to_d } / keys.size
       end
 
       # {current:, baseline:, delta:, pct:} — pct nil when the baseline is zero (no
@@ -485,11 +510,10 @@ module Api
         scoped = in_scope(Current.user.transaction_records.in_period(from, to), ids)
         months = scoped.distinct.count(MONTH) # months WITH data in the (clamped) window
         # `scoped` is the ALL-flows trailing relation (recurring + variable); `nonrec`
-        # drops recurring (the forecast averages variable only, taken at run-rate). The
-        # vs-average baseline (§3b) reuses `scoped` because the hero is all-flows — purely
-        # additive, the forecast/drill callers still read :nonrec/:from/:to/:months (VA1).
+        # drops recurring (the forecast averages variable only, taken at run-rate). Only the
+        # forecast + the variable-flows drill read this — the Verlauf Ø-reference (§3b) uses
+        # the DISPLAY window's per-month series instead, so vs_average no longer reads here.
         { from: from, to: to, months: months,
-          scoped: scoped,
           nonrec: scoped.where(recurring_series_id: nil) }
       end
 

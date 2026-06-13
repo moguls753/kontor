@@ -281,7 +281,7 @@ export default {
     tab: {
       networth: 'Vermögen',
       trends: 'Verlauf',
-      categories: 'Kategorien',
+      categories: 'Ausgaben',
       forecast: 'Vorschau',
     },
     networth: {
@@ -313,7 +313,7 @@ export default {
     chart: {
       cashflow: 'Cashflow',
       fixed_vs_variable: 'Fix vs. variabel',
-      by_category: 'Ausgaben nach Kategorie',
+      by_category: 'Ausgaben',
     },
     legend: {
       income: 'Ein',
@@ -333,19 +333,16 @@ export default {
       error: 'Buchungen konnten nicht geladen werden.',
     },
     merchant: {
-      by_category: 'nach Kategorie',
-      by_merchant: 'nach Empfänger',
       unnamed: 'Ohne Empfänger',
-      count: '{{n}} Buchungen',
       payee_total: 'Ausgaben mit Empfänger',
       empty: 'Keine Buchungen in diesem Zeitraum.',
     },
-    vs: {
-      baseline: 'ggü. Ø {{n}} Mt.',
-      baseline_partial: 'anteilig · ggü. Ø {{n}} Mt.',
-      aria_income: 'Veränderung Einnahmen gegenüber Durchschnitt',
-      aria_expenses: 'Veränderung Ausgaben gegenüber Durchschnitt',
-      aria_net: 'Veränderung Netto gegenüber Durchschnitt',
+    trend: {
+      typical: 'Ø typischer Monat',
+      now: 'jetzt',
+      vs_typical: '{{month}} ggü. typischem Monat',
+      aria_income: 'Einnahmen {{month}} gegenüber typischem Monat',
+      aria_expenses: 'Ausgaben {{month}} gegenüber typischem Monat',
     },
     forecast: {
       heading: 'Ausblick',

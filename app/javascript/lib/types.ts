@@ -241,24 +241,22 @@ export interface StatCategoryFlows {
   transactions: Transaction[]
 }
 
-// Top-merchants list (GET /api/v1/statistics/merchants). Mirrors StatCategoryItem minus
-// `id`; `name` is null for the no-creditor bucket. `total` is the UN-capped figure (the
-// `items` may sum to less because of the server-side cap — invariant MI1).
+// Level-1 of the Ausgaben drill: a category's top Empfänger (GET /api/v1/statistics/merchants
+// ?category_id|uncategorized). Mirrors StatCategoryItem minus `id`; `name` is null for the
+// no-creditor bucket. `total` is the UN-capped PER-CATEGORY figure (the `items` may sum to
+// less because of the server-side cap; it also drops person-transfers — invariant CM1).
 export interface StatMerchantItem { name: string | null; amount: string; count: number; share: number | null }
 export interface StatMerchants { items: StatMerchantItem[]; total: string }
 
-// Merchant DRILL response (review M1): an EXPLICIT, non-optional shape — NOT
-// "StatVariableFlows-shaped" (which would falsely promise months/average/kind/range that the
-// merchant response never sends). VariableFlowsModal's `data` is the discriminated union
-// StatVariableFlows | StatMerchantFlows so tsc forces the `merchant == null` guards.
-export interface StatMerchantFlows { transactions: Transaction[]; total: string; count: number }
-
-// "Dieser Monat vs. dein Schnitt" (rides on #show). Per metric: the selected window's
-// per-month rate (`current`), the trailing-window baseline, their `delta`, and `pct`
-// (null when the baseline is zero — no divide-by-zero). All money as BigDecimal strings.
+// Verlauf Ø-reference (rides on #show — §3b). Per metric: the LAST COMPLETED month's total
+// (`current`), the trailing Ø = mean of the displayed COMPLETED months (`baseline`), their
+// `delta`, and `pct` (null when the Ø is zero — no divide-by-zero). `baseline_months` =
+// count of completed months averaged; `last_complete_month` = the 'YYYY-MM' the delta is for
+// (null when the window has no completed month). All money as BigDecimal strings.
 export interface StatDeltaPair { current: string; baseline: string; delta: string; pct: number | null }
 export interface StatVsAverage {
   baseline_months: number
+  last_complete_month: string | null
   income: StatDeltaPair
   expenses: StatDeltaPair
   net: StatDeltaPair

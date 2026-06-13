@@ -6,24 +6,39 @@
 import { useState, useRef, useEffect, useMemo, type CSSProperties, type ReactNode, type MouseEvent } from 'react'
 
 export interface BarSegment { key: string; value: number; color: string; opacity?: number }
-export interface BarDatum { label: string; segments: BarSegment[]; tooltip?: ReactNode }
+// `partial` marks an in-progress month (the current bar): the column renders hatched/lighter
+// with a `now` marker under its axis label — so partialness is VISUAL, not a prose caveat.
+export interface BarDatum { label: string; segments: BarSegment[]; tooltip?: ReactNode; partial?: boolean }
+// A faint horizontal "Ø typical month" reference line drawn per series at `value` (same scale
+// as the bars), with a small tick label. Inert/absent on charts that pass nothing.
+export interface BarRef { value: number; color: string; label?: string }
 
-/** Vertical bars — `grouped` (side-by-side, e.g. in/out) or `stacked` (e.g. fixed/variable). */
-export function BarChart({ data, mode, height = 168 }: { data: BarDatum[]; mode: 'grouped' | 'stacked'; height?: number }) {
+/** Vertical bars — `grouped` (side-by-side, e.g. in/out) or `stacked` (e.g. fixed/variable).
+ *  Optional per-series Ø `refs` (faint hairlines) + a per-datum `partial` flag (visibly
+ *  partial current bar + a `nowLabel` marker) — both inert when absent (§3.3b). */
+export function BarChart({ data, mode, height = 168, refs, nowLabel }: {
+  data: BarDatum[]
+  mode: 'grouped' | 'stacked'
+  height?: number
+  refs?: BarRef[]
+  nowLabel?: string
+}) {
   const max = Math.max(
     1,
     ...data.map(d =>
       mode === 'stacked'
         ? d.segments.reduce((sum, seg) => sum + Math.abs(seg.value), 0)
         : Math.max(0, ...d.segments.map(seg => Math.abs(seg.value)))
-    )
+    ),
+    // The Ø lines share the bars' scale — let a reference above every bar still fit on-chart.
+    ...(refs ?? []).map(r => Math.abs(r.value)),
   )
 
   return (
     <div className="stat-chart">
       <div className="stat-bars" style={{ height }}>
         {data.map((d, i) => (
-          <div className="stat-col" key={d.label + i}>
+          <div className={'stat-col' + (d.partial ? ' is-partial' : '')} key={d.label + i}>
             {d.tooltip && <div className="stat-tip">{d.tooltip}</div>}
             <div className={'stat-stack' + (mode === 'grouped' ? ' grouped' : '')}>
               {d.segments
@@ -38,9 +53,23 @@ export function BarChart({ data, mode, height = 168 }: { data: BarDatum[]; mode:
             </div>
           </div>
         ))}
+        {(refs ?? []).filter(r => Math.abs(r.value) > 0).map((r, i) => (
+          <div
+            key={'ref' + i}
+            className="stat-ref-line"
+            style={{ bottom: `${(Math.abs(r.value) / max) * 100}%`, '--ref': r.color } as CSSProperties}
+          >
+            {r.label && <span className="stat-ref-tick">{r.label}</span>}
+          </div>
+        ))}
       </div>
       <div className="stat-axis">
-        {data.map((d, i) => <div key={d.label + i} className="stat-axis-label mono">{d.label}</div>)}
+        {data.map((d, i) => (
+          <div key={d.label + i} className="stat-axis-label mono">
+            {d.label}
+            {d.partial && nowLabel && <span className="stat-now">{nowLabel}</span>}
+          </div>
+        ))}
       </div>
     </div>
   )

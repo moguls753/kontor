@@ -47,8 +47,8 @@ Rails.application.routes.draw do
       resource :dashboard, only: %i[ show ]
       resource :statistics, only: %i[ show ] do
         get :variable_transactions
-        get :category_transactions   # category drill-through (plan §2.1)
-        get :merchants               # top merchants + merchant drill (plan §2.2)
+        get :category_transactions   # leaf: category → (optional payee) → transactions (§2.1)
+        get :merchants               # level-1: a category's top Empfänger (§2.2)
       end
       # Net-worth-over-time: per-account daily balance series from balance_snapshots.
       # Explicit controller so the singular resource maps to NetWorthController (not the

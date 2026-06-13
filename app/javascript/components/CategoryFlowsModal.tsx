@@ -38,15 +38,18 @@ function groupByMonth(txs: Transaction[]): MonthGroup[] {
   return groups
 }
 
-// Drill-through behind ONE Kategorien-tab bar: the individual transactions for the
-// given category over the SAME clamped display window/scope as #show (so the footer
-// total reconciles to the bar — invariant CI1). A focused near-clone of
-// VariableFlowsModal, but the footer is a count+total tally (no average for a category).
-export default function CategoryFlowsModal({ categoryId, uncategorized, categoryName, from, to, scope, locale, t, onClose }: {
+// Leaf of the Ausgaben drill: the individual transactions for ONE category over the SAME
+// clamped display window/scope as #show (so the footer total reconciles to the bar — CI1) —
+// and, when `creditor` is present, narrowed to ONE Empfänger within the category (the
+// level-2 leaf, reconciling to that payee's row in CategoryMerchantsModal — CM2). A focused
+// near-clone of VariableFlowsModal, but the footer is a count+total tally (no average).
+export default function CategoryFlowsModal({ categoryId, uncategorized, categoryName, creditor, payeeLabel, from, to, scope, locale, t, onClose }: {
   categoryId: number | null
   uncategorized: boolean
-  categoryName: string | null   // straight from the bar; endpoint also returns it as fallback
-  from: string                  // data.range.from (CLAMPED — plan §1.5 CI1 / §1.6)
+  categoryName: string | null   // the category bar's name (also the modal title at level-0)
+  creditor?: string | null      // undefined ⇒ whole category (CI1); string|null ⇒ one payee (CM2)
+  payeeLabel?: string           // modal title when drilling a payee (the Empfänger label)
+  from: string                  // data.range.from (CLAMPED — plan §1.5 CI1/CM2 / §1.6)
   to: string                    // data.range.to
   scope: Scope
   locale: string
@@ -61,6 +64,7 @@ export default function CategoryFlowsModal({ categoryId, uncategorized, category
     const qs = new URLSearchParams({ from, to })
     if (uncategorized) qs.set('uncategorized', '1')
     else if (categoryId != null) qs.set('category_id', String(categoryId))
+    if (creditor !== undefined) qs.set('creditor', creditor ?? '')   // null bucket ⇒ ""
     api(`/api/v1/statistics/category_transactions?${withScope(qs, scope).toString()}`)
       .then(async res => {
         if (!res.ok) { if (alive) setStatus('error'); return }
@@ -71,9 +75,13 @@ export default function CategoryFlowsModal({ categoryId, uncategorized, category
       })
       .catch(() => { if (alive) setStatus('error') })
     return () => { alive = false }
-  }, [categoryId, uncategorized, from, to, scope])
+  }, [categoryId, uncategorized, creditor, from, to, scope])
 
-  const title = categoryName ?? t('statistics.cat.uncategorized')
+  // At the leaf the receipt is titled by the Empfänger (payee_label, or "Ohne Empfänger" for
+  // the null bucket); at level-0 (the whole-category path) it stays the category name.
+  const title = creditor !== undefined
+    ? (payeeLabel ?? t('statistics.merchant.unnamed'))
+    : (categoryName ?? t('statistics.cat.uncategorized'))
   const groups = data ? groupByMonth(data.transactions) : []
 
   // Receipt foot — a single reconciling tally (count + Σ), NOT the Σ÷N÷Ø of the
