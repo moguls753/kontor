@@ -2,13 +2,17 @@ import { useState, useEffect, useMemo } from 'react'
 import { api } from '../lib/api'
 import { withScope, type Scope } from '../lib/scope'
 import { formatAmount } from '../lib/format'
-import { AreaSeries, Legend, type LineSeries } from './charts'
+import { AreaSeries, type LineSeries } from './charts'
 import { Empty, Btn } from './ui'
 import type { NetWorthData } from '../lib/types'
 
 type T = (k: string, o?: Record<string, unknown>) => string
 type NwRange = 'm3' | 'm6' | 'm12' | 'max'
+type NwLens = 'total' | 'liquid'
 const RANGES: NwRange[] = ['m3', 'm6', 'm12', 'max']
+// Roles excluded from "Liquide" — mirrors ScopedAccounts#investment_account_ids on the server,
+// so the composition list under the Liquide lens shows exactly the accounts that sum to it.
+const ILLIQUID_ROLES = new Set(['investment', 'sparkonto'])
 
 function rangeFrom(r: NwRange): string | undefined {
   if (r === 'max') return undefined
@@ -18,11 +22,13 @@ function rangeFrom(r: NwRange): string | undefined {
   return d.toISOString().slice(0, 10)
 }
 
-// Net-worth-over-time. Two aggregate lines (Liquide + Gesamt) for whichever scope the
-// global Familie/Privat switch selects; no per-account isolation (PayPal ≈ €0, the broker
-// is a flat pedestal, the card is a liability — none carries a standalone trend worth a line).
+// Net-worth-over-time for whichever scope the global Familie/Privat switch selects; no
+// per-account isolation (PayPal ≈ €0, the broker is a flat pedestal, the card is a liability).
+// Liquide (cash you can spend) and Gesamt (incl. investments/savings) are shown SEPARATELY —
+// a [Gesamt | Liquide] toggle, one line at a time, never overlaid.
 export default function NetWorthPanel({ scope, locale, t }: { scope: Scope; locale: string; t: T }) {
   const [range, setRange] = useState<NwRange>('max')
+  const [lens, setLens] = useState<NwLens>('total')
   const [data, setData] = useState<NetWorthData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -54,36 +60,50 @@ export default function NetWorthPanel({ scope, locale, t }: { scope: Scope; loca
   const signed = (v: number) => (v >= 0 ? '+ ' : '− ') + formatAmount(Math.abs(v))
 
   const series = data?.series ?? []
-  // Liquide differs from Gesamt only when an investment/savings account is in scope.
+  // Liquide differs from Gesamt only when an investment/savings account is in scope. When they
+  // coincide, the toggle is meaningless — hide it and pin the (single) Gesamt line.
   const hasSplit = series.some(p => p.total !== p.liquid)
-  const lines: LineSeries[] = useMemo(() => {
-    const total = series.map(p => ({ date: p.date, value: parseFloat(p.total) }))
-    if (!hasSplit) return [{ key: 'total', label: t('statistics.networth.heading'), color: 'var(--brass)', emphasis: true, points: total }]
-    const liquid = series.map(p => ({ date: p.date, value: parseFloat(p.liquid) }))
-    return [
-      { key: 'total', label: t('statistics.networth.total'), color: 'var(--brass)', emphasis: true, points: total },
-      { key: 'liquid', label: t('statistics.networth.liquid'), color: 'var(--ink)', points: liquid },
-    ]
-  }, [series, hasSplit, t])
+  const activeLens: NwLens = hasSplit ? lens : 'total'
+  const isLiquid = activeLens === 'liquid'
 
-  const latestTotal = parseFloat(data?.latest.total ?? '0')
-  const totalPts = lines[0]?.points ?? []
-  const first = totalPts[0]?.value ?? 0
-  const last = totalPts[totalPts.length - 1]?.value ?? latestTotal
+  // One line at a time — Gesamt in brass, Liquide in ink. Never both at once.
+  const line: LineSeries = useMemo(() => ({
+    key: activeLens,
+    label: t(isLiquid ? 'statistics.networth.liquid' : 'statistics.networth.total'),
+    color: isLiquid ? 'var(--ink)' : 'var(--brass)',
+    emphasis: true,
+    points: series.map(p => ({ date: p.date, value: parseFloat(isLiquid ? p.liquid : p.total) })),
+  }), [series, activeLens, isLiquid, t])
+
+  const latest = parseFloat((isLiquid ? data?.latest.liquid : data?.latest.total) ?? '0')
+  const pts = line.points
+  const first = pts[0]?.value ?? 0
+  const last = pts[pts.length - 1]?.value ?? latest
   const delta = last - first
   const deltaPct = first !== 0 ? (delta / Math.abs(first)) * 100 : null
+
   const composition = (data?.composition ?? [])
     .filter(c => parseFloat(c.balance) !== 0)
+    .filter(c => !isLiquid || !ILLIQUID_ROLES.has(c.role ?? '')) // Liquide lists only the liquid accounts
     .sort((a, b) => Math.abs(parseFloat(b.balance)) - Math.abs(parseFloat(a.balance)))
-  // Only the broker (investment) is flat-filled/assumed-constant; a sparkonto is reconstructed.
-  const hasInvestment = composition.some(c => c.role === 'investment')
+  // The "investment held flat" caveat only applies to Gesamt — Liquide excludes the broker.
+  const showInvestmentCaveat = !isLiquid && composition.some(c => c.role === 'investment')
 
   return (
     <div className="panel">
       <div className="panel-head">
         <h2 className="section-title">{t('statistics.networth.heading')}</h2>
         <div className="panel-head-side">
-          {hasSplit && <Legend items={lines.map(l => ({ label: l.label, color: l.color }))} />}
+          {!loading && !error && series.length > 0 && hasSplit && (
+            <div className="segmented" role="group" aria-label={t('statistics.networth.lens.label')}>
+              <button className={!isLiquid ? 'on' : ''} aria-pressed={!isLiquid} onClick={() => setLens('total')}>
+                {t('statistics.networth.total')}
+              </button>
+              <button className={isLiquid ? 'on' : ''} aria-pressed={isLiquid} onClick={() => setLens('liquid')}>
+                {t('statistics.networth.liquid')}
+              </button>
+            </div>
+          )}
           {!loading && !error && series.length > 0 && (
             <div className="segmented nw-range" role="group" aria-label={t('statistics.networth.range.label')}>
               {RANGES.map(r => (
@@ -107,10 +127,10 @@ export default function NetWorthPanel({ scope, locale, t }: { scope: Scope; loca
           <Empty icon="statistics" title={t('statistics.networth.empty_title')} body={t('statistics.networth.empty_body')} />
         ) : (
           <>
-            <AreaSeries series={lines} locale={locale} formatValue={fmt} formatAxis={fmtAxis} />
+            <AreaSeries series={[line]} locale={locale} formatValue={fmt} formatAxis={fmtAxis} />
             <div className="stat-context">
-              <span>{t('statistics.networth.kpi.today')}</span>
-              <span className="stat-context-fig">{fmt(latestTotal)}</span>
+              <span>{t(isLiquid ? 'statistics.networth.kpi.today_liquid' : 'statistics.networth.kpi.today_total')}</span>
+              <span className="stat-context-fig">{fmt(latest)}</span>
               <span className={'nw-delta ' + (delta >= 0 ? 'pos' : 'neg')} aria-label={t('statistics.networth.kpi.change')}>
                 <span aria-hidden="true">{delta >= 0 ? '▲' : '▼'}</span> {signed(delta)}{deltaPct != null && ` · ${nf1.format(Math.abs(deltaPct))} %`}
               </span>
@@ -123,7 +143,7 @@ export default function NetWorthPanel({ scope, locale, t }: { scope: Scope; loca
                 ))}
               </div>
             )}
-            {hasInvestment && <p className="nw-caveat">{t('statistics.networth.caveat.investment_flat')}</p>}
+            {showInvestmentCaveat && <p className="nw-caveat">{t('statistics.networth.caveat.investment_flat')}</p>}
           </>
         )}
       </div>

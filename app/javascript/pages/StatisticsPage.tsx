@@ -90,12 +90,10 @@ export default function StatisticsPage() {
         <div className="text-ink-muted text-[13px]">{t('statistics.subtitle')}</div>
         <h1 className="page-title mt-0.5">{t('statistics.title')}</h1>
       </div>
-      {/* The period selector drives the cashflow tabs; net worth owns its own range control. */}
-      {tab !== 'networth' && (
-        <Select value={period} onChange={e => changePeriod(e.target.value as PeriodKey)} ariaLabel={t('statistics.title')} className="w-[176px]">
-          {PERIOD_KEYS.map(k => <option key={k} value={k}>{t(`statistics.period.${k}`)}</option>)}
-        </Select>
-      )}
+      {/* Period selector drives the Einnahmen/Ausgaben/Netto hero (shown on every tab). */}
+      <Select value={period} onChange={e => changePeriod(e.target.value as PeriodKey)} ariaLabel={t('statistics.title')} className="w-[176px]">
+        {PERIOD_KEYS.map(k => <option key={k} value={k}>{t(`statistics.period.${k}`)}</option>)}
+      </Select>
     </div>
   )
 
@@ -131,20 +129,6 @@ export default function StatisticsPage() {
   const nf1 = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 })
   const fmtAbs = (v: string) => formatAmount(Math.abs(parseFloat(v)))
 
-  // The net-worth tab is window-independent (it reads balance_snapshots, not the period's
-  // transactions), so it stays reachable even when the chosen period has no activity.
-  if (data.transaction_count === 0 && tab !== 'networth') {
-    return (
-      <div className="page">{head}
-        {range.clamped && <ClampHint range={range} locale={locale} t={t} />}
-        {renderTabs()}
-        <div className="panel" id="stat-tabpanel" role="tabpanel" aria-labelledby={`stat-tab-${tab}`}>
-          <Empty icon="statistics" title={t('statistics.empty_title')} body={t('statistics.no_data_period')} />
-        </div>
-      </div>
-    )
-  }
-
   // ---- Hero: Einnahmen / Ausgaben / Netto (+ Ø/Mt + Sparquote%) ----
   const income = parseFloat(kpis.income)
   const expenses = parseFloat(kpis.expenses) // already signed (≤ 0)
@@ -153,6 +137,44 @@ export default function StatisticsPage() {
   const months = range.months
   const perMonth = (total: number) =>
     months > 1 ? t('statistics.summary.per_month', { value: formatAmount(Math.abs(total) / months) }) : null
+
+  // The hero is the page-level banner: it appears on EVERY tab (net worth included) and
+  // even for an empty period — then it honestly reads 0 / 0 / 0. Built once, rendered below.
+  const heroPanel = (
+    <div className="panel stat-hero">
+      <div className="stat-hero-col">
+        <Eyebrow>{t('statistics.summary.income')}</Eyebrow>
+        <div className="stat-hero-fig"><Amount value={kpis.income} /></div>
+        {perMonth(income) && <div className="stat-hero-sub">{perMonth(income)}</div>}
+      </div>
+      <div className="stat-hero-col">
+        <Eyebrow>{t('statistics.summary.expenses')}</Eyebrow>
+        <div className="stat-hero-fig"><Amount value={kpis.expenses} /></div>
+        {perMonth(expenses) && <div className="stat-hero-sub">{perMonth(expenses)}</div>}
+      </div>
+      <div className="stat-hero-col">
+        <Eyebrow>{t('statistics.summary.net')}</Eyebrow>
+        <div className="stat-hero-fig"><Amount value={net} /></div>
+        {perMonth(net) && <div className="stat-hero-sub">{perMonth(net)}</div>}
+        {rate != null && <div className="stat-hero-rate">{t('statistics.summary.savings_rate', { value: nf1.format(rate) })}</div>}
+      </div>
+    </div>
+  )
+
+  // The net-worth tab is window-independent (it reconstructs from transactions, not the
+  // period), so it stays reachable even when the chosen period has no activity.
+  if (data.transaction_count === 0 && tab !== 'networth') {
+    return (
+      <div className="page">{head}
+        {range.clamped && <ClampHint range={range} locale={locale} t={t} />}
+        {heroPanel}
+        {renderTabs()}
+        <div className="panel" id="stat-tabpanel" role="tabpanel" aria-labelledby={`stat-tab-${tab}`}>
+          <Empty icon="statistics" title={t('statistics.empty_title')} body={t('statistics.no_data_period')} />
+        </div>
+      </div>
+    )
+  }
 
   // ---- chart data ----
   const cashflowData: BarDatum[] = data.cashflow.map(p => {
@@ -203,29 +225,8 @@ export default function StatisticsPage() {
       {head}
       {range.clamped && <ClampHint range={range} locale={locale} t={t} />}
 
-      {/* Hero — was rein / raus / übrig (cashflow summary). Hidden on the net-worth tab,
-          which carries its own KPI strip and would otherwise show a 0/0/0 hero for an
-          empty period (a realistic first screen for a freshly-connected / balance-only account). */}
-      {tab !== 'networth' && (
-        <div className="panel stat-hero">
-          <div className="stat-hero-col">
-            <Eyebrow>{t('statistics.summary.income')}</Eyebrow>
-            <div className="stat-hero-fig"><Amount value={kpis.income} /></div>
-            {perMonth(income) && <div className="stat-hero-sub">{perMonth(income)}</div>}
-          </div>
-          <div className="stat-hero-col">
-            <Eyebrow>{t('statistics.summary.expenses')}</Eyebrow>
-            <div className="stat-hero-fig"><Amount value={kpis.expenses} /></div>
-            {perMonth(expenses) && <div className="stat-hero-sub">{perMonth(expenses)}</div>}
-          </div>
-          <div className="stat-hero-col">
-            <Eyebrow>{t('statistics.summary.net')}</Eyebrow>
-            <div className="stat-hero-fig"><Amount value={net} /></div>
-            {perMonth(net) && <div className="stat-hero-sub">{perMonth(net)}</div>}
-            {rate != null && <div className="stat-hero-rate">{t('statistics.summary.savings_rate', { value: nf1.format(rate) })}</div>}
-          </div>
-        </div>
-      )}
+      {/* Hero — was rein / raus / übrig (cashflow summary). On EVERY tab (net worth too). */}
+      {heroPanel}
 
       {/* Tabs — named by the question you're asking; keep everything to one screen */}
       {renderTabs()}
