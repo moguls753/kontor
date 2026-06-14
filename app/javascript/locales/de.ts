@@ -340,10 +340,8 @@ export default {
     trend: {
       typical_income: 'Ø Einnahmen',
       typical_expenses: 'Ø Ausgaben',
-      now: 'jetzt',
-      vs_typical: '{{month}} ggü. typischem Monat',
-      aria_income: 'Einnahmen {{month}} gegenüber typischem Monat',
-      aria_expenses: 'Ausgaben {{month}} gegenüber typischem Monat',
+      vs_income: 'Einnahmen ggü. Ø',
+      vs_expenses: 'Ausgaben ggü. Ø',
     },
     forecast: {
       heading: 'Ausblick',

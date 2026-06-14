@@ -30,6 +30,10 @@ const pages: Record<View, PageComponent> = {
   settings: SettingsPage,
 }
 
+// Views whose data actually responds to the Familie/Privat scope — the switch is shown only
+// here (hidden on categories/settings, where it reads nothing and would be a no-op).
+const SCOPE_VIEWS = new Set<View>(['dashboard', 'transactions', 'accounts', 'recurring', 'statistics'])
+
 function readTheme(): 'light' | 'dark' {
   if (typeof document !== 'undefined' && document.documentElement.classList.contains('dark')) return 'dark'
   return localStorage.getItem('theme') === 'dark' ? 'dark' : 'light'
@@ -144,6 +148,7 @@ export default function AuthenticatedLayout({ user, onLogout }: AuthenticatedLay
           pageTitle={t(`nav.${currentView}`)}
           theme={theme}
           onToggleTheme={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+          showScope={SCOPE_VIEWS.has(currentView)}
         />
 
         {notification && (

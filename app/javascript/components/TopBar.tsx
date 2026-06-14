@@ -10,9 +10,10 @@ interface TopBarProps {
   pageTitle: string
   theme: 'light' | 'dark'
   onToggleTheme: () => void
+  showScope: boolean
 }
 
-export default function TopBar({ email, onLogout, onMenuToggle, pageTitle, theme, onToggleTheme }: TopBarProps) {
+export default function TopBar({ email, onLogout, onMenuToggle, pageTitle, theme, onToggleTheme, showScope }: TopBarProps) {
   const { t } = useTranslation()
 
   const handleLogout = async () => {
@@ -34,8 +35,14 @@ export default function TopBar({ email, onLogout, onMenuToggle, pageTitle, theme
       <div className="page-title desktop-only text-base">{pageTitle}</div>
       <div className="flex-1" />
 
-      <ScopeSwitch />
-      <div className="hairline-v desktop-only h-[26px] mx-1" />
+      {/* Scope (Familie/Privat) is a global lens, but only rendered where the page actually
+          reads it — hidden on Kategorien/Einstellungen, where it would be a no-op. */}
+      {showScope && (
+        <>
+          <ScopeSwitch />
+          <div className="hairline-v desktop-only h-[26px] mx-1" />
+        </>
+      )}
 
       {/* theme */}
       <button className="ibtn" onClick={onToggleTheme} aria-label={t('shell.toggle_theme')} title={t('shell.toggle_theme')}>

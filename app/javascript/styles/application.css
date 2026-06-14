@@ -674,20 +674,12 @@ html.dark {
 .stat-col.is-partial .stat-bar { opacity: 0.78; background-image: repeating-linear-gradient(135deg, transparent 0 3px, var(--paper) 3px 4px); }
 .stat-axis { display: flex; gap: 7px; margin-top: 9px; }
 .stat-axis-label { flex: 1; min-width: 0; text-align: center; font-size: 10.5px; color: var(--ink-faint); }
-.stat-now { display: block; margin-top: 1px; font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--brass); }
 
 /* Ø "typischer Monat" reference — a dashed hairline per series across the chart, drawn at the
    bar scale (bottom = value/max). `--ref` is the series colour passed inline, so it flips for
    dark mode. The tick label rides at the right edge. */
 .stat-ref-line { position: absolute; left: 0; right: 0; height: 0; border-top: 1.5px dashed var(--ref, var(--ink-faint)); opacity: 0.5; pointer-events: none; }
 .stat-ref-tick { position: absolute; right: 0; top: -14px; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.02em; color: var(--ref, var(--ink-faint)); opacity: 0.9; background: var(--paper); padding: 0 3px; }
-
-/* Last-completed-month ▲/▼% strip under the cashflow chart — same hairline voice as
-   .stat-context; the lead is faint mono, the chips reuse the .delta-tag rule. */
-.stat-trend-delta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; margin-top: 16px; font-size: 12px; }
-.stat-trend-delta-lead { color: var(--ink-faint); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.stat-trend-delta-item { display: inline-flex; align-items: baseline; gap: 6px; }
-.stat-trend-delta-tag { color: var(--ink-muted); }
 
 .stat-tip {
   position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);

@@ -7,21 +7,20 @@ import { useState, useRef, useEffect, useMemo, type CSSProperties, type ReactNod
 
 export interface BarSegment { key: string; value: number; color: string; opacity?: number }
 // `partial` marks an in-progress month (the current bar): the column renders hatched/lighter
-// with a `now` marker under its axis label — so partialness is VISUAL, not a prose caveat.
+// than the completed bars — so partialness is VISUAL, not a prose caveat.
 export interface BarDatum { label: string; segments: BarSegment[]; tooltip?: ReactNode; partial?: boolean }
 // A faint horizontal "Ø typical month" reference line drawn per series at `value` (same scale
 // as the bars), with a small tick label. Inert/absent on charts that pass nothing.
 export interface BarRef { value: number; color: string; label?: string }
 
 /** Vertical bars — `grouped` (side-by-side, e.g. in/out) or `stacked` (e.g. fixed/variable).
- *  Optional per-series Ø `refs` (faint hairlines) + a per-datum `partial` flag (visibly
- *  partial current bar + a `nowLabel` marker) — both inert when absent (§3.3b). */
-export function BarChart({ data, mode, height = 168, refs, nowLabel }: {
+ *  Optional per-series Ø `refs` (faint hairlines) + a per-datum `partial` flag (a visibly
+ *  hatched/lighter current bar) — both inert when absent (§3.3b). */
+export function BarChart({ data, mode, height = 168, refs }: {
   data: BarDatum[]
   mode: 'grouped' | 'stacked'
   height?: number
   refs?: BarRef[]
-  nowLabel?: string
 }) {
   const max = Math.max(
     1,
@@ -67,7 +66,6 @@ export function BarChart({ data, mode, height = 168, refs, nowLabel }: {
         {data.map((d, i) => (
           <div key={d.label + i} className="stat-axis-label mono">
             {d.label}
-            {d.partial && nowLabel && <span className="stat-now">{nowLabel}</span>}
           </div>
         ))}
       </div>

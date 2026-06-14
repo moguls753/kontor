@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useScope, withScope, type Scope } from '../lib/scope'
 import { formatAmount } from '../lib/format'
-import { catColor, hueFor, Amount, DeltaTag, Empty, Eyebrow, Btn, Select } from '../components/ui'
+import { catColor, hueFor, Amount, Empty, Eyebrow, Btn, Select } from '../components/ui'
 import { BarChart, RankedBars, Legend } from '../components/charts'
 import type { BarDatum, BarRef, RankedItem } from '../components/charts'
 import type { StatisticsData, StatRange, StatForecast, StatCashflowPoint } from '../lib/types'
@@ -206,11 +206,33 @@ export default function StatisticsPage() {
   if (incomeRef != null && incomeRef > 0) cashflowRefs.push({ value: incomeRef, color: 'var(--income)', label: t('statistics.trend.typical_income') })
   if (expenseRef != null && expenseRef > 0) cashflowRefs.push({ value: expenseRef, color: 'var(--ink)', label: t('statistics.trend.typical_expenses') })
 
+  // Compact "vs Ø" string for a completed month's hover tooltip: arrow + signed € + %. The
+  // comparison lives on hover now (no permanent strip) — the dashed Ø line shows the gap at a
+  // glance; hovering a bar reveals the exact number. null when there's no Ø to compare against.
+  const vsTypical = (cur: number, ref: number | null): string | null => {
+    if (ref == null || ref === 0) return null
+    const d = cur - ref
+    return `${d >= 0 ? '▲ +' : '▼ −'} ${formatAmount(Math.abs(d))} · ${nf1.format(Math.abs((d / Math.abs(ref)) * 100))} %`
+  }
+  const hasTypical = completedMonths.length >= 2 // only meaningful with ≥ 2 completed months to average
+
   const cashflowData: BarDatum[] = data.cashflow.map(p => {
     const inc = parseFloat(p.income); const exp = parseFloat(p.expenses); const n = parseFloat(p.net)
     // The current (in-progress) month is any bar past last_complete_month (or all of them when
-    // there is no completed month) — again keyed off the backend value, not a UTC nowKey (n1).
+    // there is no completed month) — keyed off the backend value, not a UTC nowKey (n1).
     const partial = !lastDone || p.month > lastDone
+    const rows: [string, string][] = [
+      [t('statistics.legend.income'), formatAmount(inc)],
+      [t('statistics.legend.expenses'), formatAmount(exp)],
+      [t('statistics.legend.net'), formatAmount(n)],
+    ]
+    // A COMPLETED month also carries its "vs Ø" comparison (income + spending magnitude).
+    if (!partial && hasTypical) {
+      const vi = vsTypical(inc, incomeRef)
+      const ve = vsTypical(Math.abs(exp), expenseRef)
+      if (vi) rows.push([t('statistics.trend.vs_income'), vi])
+      if (ve) rows.push([t('statistics.trend.vs_expenses'), ve])
+    }
     return {
       label: formatMonth(p.month, locale),
       partial,
@@ -218,11 +240,7 @@ export default function StatisticsPage() {
         { key: 'in', value: inc, color: 'var(--income)' },
         { key: 'out', value: Math.abs(exp), color: 'var(--ink)', opacity: 0.5 },
       ],
-      tooltip: <Tip title={formatMonth(p.month, locale)} rows={[
-        [t('statistics.legend.income'), formatAmount(inc)],
-        [t('statistics.legend.expenses'), formatAmount(exp)],
-        [t('statistics.legend.net'), formatAmount(n)],
-      ]} />,
+      tooltip: <Tip title={formatMonth(p.month, locale)} rows={rows} />,
     }
   })
 
@@ -285,33 +303,10 @@ export default function StatisticsPage() {
                 ]} />
               </div>
               <div className="panel-pad">
-                <BarChart data={cashflowData} mode="grouped" refs={cashflowRefs} nowLabel={t('statistics.trend.now')} />
-                {/* Last-completed-month vs. the Ø reference (VR3 — the only hard delta). Each
-                    delta is LABELLED (Einnahmen / Ausgaben) so it's unambiguous. Income: signed
-                    delta + good='up' → earned more → ▲ green, less → ▼ red. Expenses: shown in
-                    MAGNITUDE — negate the signed delta (= |cur|−|ref|, since both ≤ 0) and use
-                    good='down', so spending MORE → ▲ red and LESS → ▼ green (intuitive; the raw
-                    signed delta rendered "spent more" as a confusing ▼ −). Suppressed when < 2
-                    completed months (nothing to average). */}
-                {va.last_complete_month && va.baseline_months >= 2 && (
-                  <div className="stat-trend-delta">
-                    <span className="stat-trend-delta-lead">
-                      {t('statistics.trend.vs_typical', { month: formatMonth(va.last_complete_month, locale) })}
-                    </span>
-                    <span className="stat-trend-delta-item">
-                      <span className="stat-trend-delta-tag">{t('statistics.summary.income')}</span>
-                      <DeltaTag delta={parseFloat(va.income.delta)} pct={va.income.pct} good="up"
-                        formatValue={v => formatAmount(v)} locale={locale}
-                        ariaLabel={t('statistics.trend.aria_income', { month: formatMonth(va.last_complete_month, locale) })} />
-                    </span>
-                    <span className="stat-trend-delta-item">
-                      <span className="stat-trend-delta-tag">{t('statistics.summary.expenses')}</span>
-                      <DeltaTag delta={-parseFloat(va.expenses.delta)} pct={va.expenses.pct} good="down"
-                        formatValue={v => formatAmount(v)} locale={locale}
-                        ariaLabel={t('statistics.trend.aria_expenses', { month: formatMonth(va.last_complete_month, locale) })} />
-                    </span>
-                  </div>
-                )}
+                <BarChart data={cashflowData} mode="grouped" refs={cashflowRefs} />
+                {/* The "is this month normal?" comparison is now AMBIENT: the dashed Ø reference
+                    lines show each bar's gap to the typical month at a glance, and a completed
+                    bar's exact "vs Ø" delta is in its hover tooltip (see cashflowData). No strip. */}
               </div>
             </div>
 

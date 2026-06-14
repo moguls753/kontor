@@ -340,10 +340,8 @@ export default {
     trend: {
       typical_income: 'Avg income',
       typical_expenses: 'Avg spending',
-      now: 'now',
-      vs_typical: '{{month}} vs. typical month',
-      aria_income: 'Income {{month}} vs. typical month',
-      aria_expenses: 'Expenses {{month}} vs. typical month',
+      vs_income: 'Income vs avg',
+      vs_expenses: 'Spending vs avg',
     },
     forecast: {
       heading: 'Outlook',
