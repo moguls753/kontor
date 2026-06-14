@@ -31,8 +31,10 @@ const pages: Record<View, PageComponent> = {
 }
 
 // Views whose data actually responds to the Familie/Privat scope — the switch is shown only
-// here (hidden on categories/settings, where it reads nothing and would be a no-op).
-const SCOPE_VIEWS = new Set<View>(['dashboard', 'transactions', 'accounts', 'recurring', 'statistics'])
+// here. Hidden on categories/settings (read nothing) AND accounts: the accounts page only
+// re-detects whether a shared account EXISTS (refreshHasShared); it never reads the scope
+// value, and a management page must always list every account regardless of lens.
+const SCOPE_VIEWS = new Set<View>(['dashboard', 'transactions', 'recurring', 'statistics'])
 
 function readTheme(): 'light' | 'dark' {
   if (typeof document !== 'undefined' && document.documentElement.classList.contains('dark')) return 'dark'

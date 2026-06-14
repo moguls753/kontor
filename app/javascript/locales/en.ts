@@ -293,6 +293,7 @@ export default {
       range: { label: 'Range', m3: '3M', m6: '6M', m12: '12M', max: 'Max' },
       lens: { label: 'View' },
       kpi: { today_total: 'Net worth today', today_liquid: 'Liquid today', change: 'Change' },
+      since: 'since {{month}}',
       composition_label: 'Made up of',
       caveat: { investment_flat: 'Investment value before tracking began is assumed constant — updated continuously going forward.' },
     },

@@ -79,6 +79,12 @@ export default function NetWorthPanel({ scope, locale, t }: { scope: Scope; loca
   const last = pts[pts.length - 1]?.value ?? latest
   const delta = last - first
   const deltaPct = first !== 0 ? (delta / Math.abs(first)) * 100 : null
+  // Baseline month of the visible range (the first point) — labels the Gesamt delta so it is
+  // never an unlabelled number ("seit <Monat>"). The delta is shown only on Gesamt; on Liquide
+  // the change-over-range is cash-flow noise that just depends on where the window starts.
+  const sinceMonth = series.length
+    ? new Intl.DateTimeFormat(locale, { month: 'short', year: '2-digit' }).format(new Date(series[0].date))
+    : null
 
   const composition = (data?.composition ?? [])
     .filter(c => parseFloat(c.balance) !== 0)
@@ -129,7 +135,14 @@ export default function NetWorthPanel({ scope, locale, t }: { scope: Scope; loca
             <div className="stat-context">
               <span>{t(isLiquid ? 'statistics.networth.kpi.today_liquid' : 'statistics.networth.kpi.today_total')}</span>
               <span className="stat-context-fig">{fmt(latest)}</span>
-              <DeltaTag delta={delta} pct={deltaPct} good="up" formatValue={fmt} locale={locale} ariaLabel={t('statistics.networth.kpi.change')} />
+              {/* Change-over-range delta only on Gesamt (real net-worth trend); on Liquide it's
+                  cash-flow noise. Carries a "seit <Monat>" baseline so it's never unlabelled. */}
+              {!isLiquid && (
+                <>
+                  <DeltaTag delta={delta} pct={deltaPct} good="up" formatValue={fmt} locale={locale} ariaLabel={t('statistics.networth.kpi.change')} />
+                  {sinceMonth && <span className="nw-since">{t('statistics.networth.since', { month: sinceMonth })}</span>}
+                </>
+              )}
             </div>
             {composition.length > 1 && (
               <div className="nw-compose">

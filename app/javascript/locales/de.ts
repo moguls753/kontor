@@ -293,6 +293,7 @@ export default {
       range: { label: 'Zeitraum', m3: '3M', m6: '6M', m12: '12M', max: 'Max' },
       lens: { label: 'Ansicht' },
       kpi: { today_total: 'Vermögen heute', today_liquid: 'Liquide heute', change: 'Veränderung' },
+      since: 'seit {{month}}',
       composition_label: 'Zusammensetzung',
       caveat: { investment_flat: 'Investmentwert vor Erfassungsbeginn als konstant angenommen — wird laufend aktualisiert.' },
     },

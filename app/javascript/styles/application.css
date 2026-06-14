@@ -661,6 +661,7 @@ html.dark {
 .stat-grid-even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .stat-context { display: flex; align-items: baseline; gap: 8px; margin-top: 16px; font-size: 12.5px; color: var(--ink-muted); }
 .stat-context-fig { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 550; letter-spacing: -0.01em; }
+.nw-since { color: var(--ink-faint); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
 .stat-chart { width: 100%; }
 .stat-bars { position: relative; display: flex; align-items: flex-end; gap: 7px; }
