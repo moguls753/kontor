@@ -203,8 +203,8 @@ export default function StatisticsPage() {
   const incomeRef = meanOf(p => parseFloat(p.income))               // ≥ 0
   const expenseRef = meanOf(p => Math.abs(parseFloat(p.expenses)))  // magnitude, to match the ink bar
   const cashflowRefs: BarRef[] = []
-  if (incomeRef != null && incomeRef > 0) cashflowRefs.push({ value: incomeRef, color: 'var(--income)', label: t('statistics.trend.typical') })
-  if (expenseRef != null && expenseRef > 0) cashflowRefs.push({ value: expenseRef, color: 'var(--ink)', label: t('statistics.trend.typical') })
+  if (incomeRef != null && incomeRef > 0) cashflowRefs.push({ value: incomeRef, color: 'var(--income)', label: t('statistics.trend.typical_income') })
+  if (expenseRef != null && expenseRef > 0) cashflowRefs.push({ value: expenseRef, color: 'var(--ink)', label: t('statistics.trend.typical_expenses') })
 
   const cashflowData: BarDatum[] = data.cashflow.map(p => {
     const inc = parseFloat(p.income); const exp = parseFloat(p.expenses); const n = parseFloat(p.net)
@@ -286,21 +286,30 @@ export default function StatisticsPage() {
               </div>
               <div className="panel-pad">
                 <BarChart data={cashflowData} mode="grouped" refs={cashflowRefs} nowLabel={t('statistics.trend.now')} />
-                {/* Last-completed-month ▲/▼% vs. the Ø reference (VR3, the only hard delta).
-                    good='up' for BOTH: income up → ▲ green; expenses are signed-negative, so
-                    spending MORE → delta < 0 → ▼ red (the B2 trap). Suppressed when < 2 completed
-                    months (nothing to average) or no completed month at all. */}
+                {/* Last-completed-month vs. the Ø reference (VR3 — the only hard delta). Each
+                    delta is LABELLED (Einnahmen / Ausgaben) so it's unambiguous. Income: signed
+                    delta + good='up' → earned more → ▲ green, less → ▼ red. Expenses: shown in
+                    MAGNITUDE — negate the signed delta (= |cur|−|ref|, since both ≤ 0) and use
+                    good='down', so spending MORE → ▲ red and LESS → ▼ green (intuitive; the raw
+                    signed delta rendered "spent more" as a confusing ▼ −). Suppressed when < 2
+                    completed months (nothing to average). */}
                 {va.last_complete_month && va.baseline_months >= 2 && (
                   <div className="stat-trend-delta">
                     <span className="stat-trend-delta-lead">
                       {t('statistics.trend.vs_typical', { month: formatMonth(va.last_complete_month, locale) })}
                     </span>
-                    <DeltaTag delta={parseFloat(va.income.delta)} pct={va.income.pct} good="up"
-                      formatValue={v => formatAmount(v)} locale={locale}
-                      ariaLabel={t('statistics.trend.aria_income', { month: formatMonth(va.last_complete_month, locale) })} />
-                    <DeltaTag delta={parseFloat(va.expenses.delta)} pct={va.expenses.pct} good="up"
-                      formatValue={v => formatAmount(v)} locale={locale}
-                      ariaLabel={t('statistics.trend.aria_expenses', { month: formatMonth(va.last_complete_month, locale) })} />
+                    <span className="stat-trend-delta-item">
+                      <span className="stat-trend-delta-tag">{t('statistics.summary.income')}</span>
+                      <DeltaTag delta={parseFloat(va.income.delta)} pct={va.income.pct} good="up"
+                        formatValue={v => formatAmount(v)} locale={locale}
+                        ariaLabel={t('statistics.trend.aria_income', { month: formatMonth(va.last_complete_month, locale) })} />
+                    </span>
+                    <span className="stat-trend-delta-item">
+                      <span className="stat-trend-delta-tag">{t('statistics.summary.expenses')}</span>
+                      <DeltaTag delta={-parseFloat(va.expenses.delta)} pct={va.expenses.pct} good="down"
+                        formatValue={v => formatAmount(v)} locale={locale}
+                        ariaLabel={t('statistics.trend.aria_expenses', { month: formatMonth(va.last_complete_month, locale) })} />
+                    </span>
                   </div>
                 )}
               </div>

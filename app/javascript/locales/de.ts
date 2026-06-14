@@ -338,7 +338,8 @@ export default {
       empty: 'Keine Buchungen in diesem Zeitraum.',
     },
     trend: {
-      typical: 'Ø typischer Monat',
+      typical_income: 'Ø Einnahmen',
+      typical_expenses: 'Ø Ausgaben',
       now: 'jetzt',
       vs_typical: '{{month}} ggü. typischem Monat',
       aria_income: 'Einnahmen {{month}} gegenüber typischem Monat',

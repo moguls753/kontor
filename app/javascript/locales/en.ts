@@ -338,7 +338,8 @@ export default {
       empty: 'No transactions in this period.',
     },
     trend: {
-      typical: 'Ø typical month',
+      typical_income: 'Avg income',
+      typical_expenses: 'Avg spending',
       now: 'now',
       vs_typical: '{{month}} vs. typical month',
       aria_income: 'Income {{month}} vs. typical month',

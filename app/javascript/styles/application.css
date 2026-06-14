@@ -686,6 +686,8 @@ html.dark {
    .stat-context; the lead is faint mono, the chips reuse the .delta-tag rule. */
 .stat-trend-delta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; margin-top: 16px; font-size: 12px; }
 .stat-trend-delta-lead { color: var(--ink-faint); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.stat-trend-delta-item { display: inline-flex; align-items: baseline; gap: 6px; }
+.stat-trend-delta-tag { color: var(--ink-muted); }
 
 .stat-tip {
   position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);
