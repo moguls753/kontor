@@ -569,33 +569,41 @@ class RecurringDetector
     @user.recurring_series.active.find_each do |s|
       next if detected_series_ids.include?(s.id)
 
-      # Lever A cleanup: any still-active "irregular" series is a pre-Lever-A artifact
-      # (the detector no longer produces irregular ones) → end it regardless of staleness,
-      # unless the user confirmed it. Otherwise such leftovers linger when not yet stale.
+      # A series is a derived aggregate of its member transactions. With ZERO live members it
+      # represents nothing — there is no history to show and it leaks as a phantom into every
+      # scope (a memberless series slips through the scope filter and renders as bogus income).
+      # DELETE it outright. The SOLE exception is a user_confirmed series: preserve the user's
+      # explicit choice (keep it active, just sync the count to an honest 0). dismissed series
+      # never reach here (the iterated scope is .active); their row is retained on purpose to
+      # block re-detection by fingerprint.
+      if s.transaction_records.empty?
+        if s.user_confirmed
+          s.update_columns(occurrences_count: 0)
+        else
+          s.destroy!
+          ended += 1
+        end
+        next
+      end
+
+      # From here the series HAS members (real history). Lever A cleanup: a still-active
+      # "irregular" leftover is a pre-Lever-A artifact (the detector no longer produces
+      # irregular ones) → end it (retaining its members as history) unless the user confirmed it.
       if s.cadence == "irregular" && !s.user_confirmed
         s.update!(status: "ended")
         ended += 1
         next
       end
 
-      if s.last_seen_on.nil?
-        # kept (no last_seen to judge against) — honest count-sync only (see below)
-        s.update_columns(occurrences_count: s.transaction_records.count)
-        next
-      end
+      next if s.last_seen_on.nil?
 
+      # end-grace (B4′): a series with members that wasn't re-detected and whose latest charge
+      # is past the grace window has stopped recurring → end it (keeps its members as history).
       interval = (s.cadence_days || CADENCE_DAYS[s.cadence] || 30).to_i
       grace    = (interval * 1.5).round + 5
       if s.last_seen_on < (today - grace)
         s.update!(status: "ended")
         ended += 1
-      else
-        # KEEP path (grace protects it). Cosmetic count-sync ONLY: after the per-series-clear
-        # refactor a re-detected series keeps its members, so this fires solely for a genuinely
-        # memberless KEPT series (e.g. a low-frequency contract whose charges aged past LOOKBACK,
-        # or a user_confirmed series with no in-window tx). Show an honest live count (0 instead
-        # of a stale number) WITHOUT touching status and WITHOUT overriding user_confirmed.
-        s.update_columns(occurrences_count: s.transaction_records.count)
       end
     end
     ended

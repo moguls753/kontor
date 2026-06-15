@@ -370,9 +370,11 @@ RSpec.describe RecurringDetector do
         cadence: "monthly", cadence_days: 30,
         expected_amount: -10.00, amount_min: -10.00, amount_max: -10.00,
         occurrences_count: 3, last_seen_on: Date.current - 400)
+      # user_confirmed so the memberless decoy survives reconcile (a memberless unconfirmed
+      # series would be deleted) — keeps the test isolated to the B2′ matcher.
       far = create(:recurring_series, user: user, canonical_name: "Patreon",
         direction: "outflow", currency: "EUR", fingerprint: fp_patreon,
-        cadence: "monthly", cadence_days: 30,
+        cadence: "monthly", cadence_days: 30, user_confirmed: true,
         expected_amount: -11.00, amount_min: -11.00, amount_max: -11.00,
         occurrences_count: 3, last_seen_on: Date.current - 400)
 
@@ -386,7 +388,7 @@ RSpec.describe RecurringDetector do
       far.reload
       expect(near.occurrences_count).to eq(4)       # absorbed the new cluster
       expect(near.amount_min).to eq(-10.30)
-      expect(far.occurrences_count).to eq(3)        # untouched
+      expect(far.amount_min).to eq(-11.00)          # untouched (the -10.30 cluster went to `near`)
       expect(far.last_seen_on).to eq(Date.current - 400)
     end
 
@@ -397,9 +399,10 @@ RSpec.describe RecurringDetector do
         cadence: "monthly", cadence_days: 30,
         expected_amount: -10.00, amount_min: -10.00, amount_max: -10.00,
         occurrences_count: 3, last_seen_on: Date.current - 400)
+      # user_confirmed so the memberless decoy survives reconcile (see note above).
       higher_id = create(:recurring_series, user: user, canonical_name: "Patreon",
         direction: "outflow", currency: "EUR", fingerprint: fp_patreon,
-        cadence: "monthly", cadence_days: 30,
+        cadence: "monthly", cadence_days: 30, user_confirmed: true,
         expected_amount: -10.80, amount_min: -10.80, amount_max: -10.80,
         occurrences_count: 3, last_seen_on: Date.current - 400)
       expect(lower_id.id).to be < higher_id.id
@@ -412,7 +415,7 @@ RSpec.describe RecurringDetector do
       lower_id.reload
       higher_id.reload
       expect(lower_id.occurrences_count).to eq(4)   # lower id won the tie
-      expect(higher_id.occurrences_count).to eq(3)  # untouched
+      expect(higher_id.amount_min).to eq(-10.80)    # untouched (the -10.40 cluster went to lower_id)
     end
   end
 
@@ -563,25 +566,35 @@ RSpec.describe RecurringDetector do
   end
 
   describe "end-grace reconciliation (B4′)" do
-    it "keeps an active series whose latest charge is within cadence*1.5+grace" do
+    # A memberless active series is not a real recurring pattern (an aggregate of nothing) →
+    # it is DELETED outright, regardless of the grace window. Only a series that still HAS
+    # members goes through the grace-end (status: "ended") path so its history is preserved.
+    it "deletes a memberless active series even within the grace window" do
       series = create(:recurring_series, :monthly, user: user, status: "active",
         canonical_name: "Old Sub", last_seen_on: Date.current - 20, cadence_days: 30)
 
       described_class.new(user).detect
 
-      expect(series.reload.status).to eq("active")
+      expect(RecurringSeries.exists?(series.id)).to be(false)
     end
 
-    it "ends an active series whose latest charge is far past the grace window" do
+    it "ends (not deletes) a series WITH members whose latest charge is far past the grace window" do
       series = create(:recurring_series, :monthly, user: user, status: "active",
-        canonical_name: "Dead Sub", last_seen_on: Date.current - 120, cadence_days: 30)
+        canonical_name: "Old Gym", last_seen_on: Date.current - 120, cadence_days: 30)
+      # 2 real members (below MIN_OCCURRENCES, so the series is NOT re-detected this run) keep it
+      # from being deleted; the stale last_seen routes it through the grace-END path.
+      2.times do |i|
+        charge(name: "Old Gym", amount: -29.99, date: Date.current - 120 - (i * 30),
+          recurring_series: series)
+      end
 
       described_class.new(user).detect
 
       expect(series.reload.status).to eq("ended")
+      expect(TransactionRecord.where(recurring_series_id: series.id).count).to eq(2)
     end
 
-    it "ends a still-active 'irregular' leftover even when not stale (Lever A cleanup), but keeps a confirmed one" do
+    it "deletes a memberless 'irregular' leftover, but keeps a user_confirmed one" do
       leftover = create(:recurring_series, user: user, status: "active", cadence: "irregular",
         canonical_name: "Old Irregular", last_seen_on: Date.current - 10, cadence_days: 20)
       confirmed = create(:recurring_series, user: user, status: "active", cadence: "irregular",
@@ -589,8 +602,8 @@ RSpec.describe RecurringDetector do
 
       described_class.new(user).detect
 
-      expect(leftover.reload.status).to eq("ended")     # pre-Lever-A artifact swept
-      expect(confirmed.reload.status).to eq("active")   # user_confirmed protected
+      expect(RecurringSeries.exists?(leftover.id)).to be(false)  # memberless artifact deleted
+      expect(confirmed.reload.status).to eq("active")            # user_confirmed protected
     end
   end
 
@@ -640,26 +653,24 @@ RSpec.describe RecurringDetector do
 
       described_class.new(user).detect
 
-      old.reload
-      # the old identity is no longer re-detected → its members re-pointed away → 0 in scope.
-      expect(TransactionRecord.where(recurring_series_id: old.id).count).to eq(0)
-      expect(old.occurrences_count).to eq(0)            # honest count (cosmetic sync or end)
+      # the old identity is no longer re-detected → its members re-pointed away → it is now
+      # memberless → DELETED outright (no aggregate without members).
+      expect(RecurringSeries.exists?(old.id)).to be(false)
       # the tx now belong to the new per-merchant series
       openai = user.recurring_series.find_by(canonical_name: "Openai Ireland Limited")
       expect(openai).to be_present
       expect(TransactionRecord.where(recurring_series_id: openai.id).count).to eq(3)
     end
 
-    it "retains a low-frequency memberless active series within grace (guards against naive Fix 1)" do
-      # quarterly series, last charge within grace (91*1.5+5 ≈ 142d), ZERO live members
-      # (its 3rd charge aged past LOOKBACK). MUST stay active — mirrors B4′ line 566.
+    it "deletes a memberless active series regardless of cadence/grace (no aggregate without members)" do
+      # quarterly series, last charge within grace (91*1.5+5 ≈ 142d), ZERO live members.
+      # Memberless ⇒ not a real series ⇒ deleted (the prior 'retain within grace' behavior is gone).
       series = create(:recurring_series, user: user, status: "active", cadence: "quarterly",
         cadence_days: 91, canonical_name: "Quarterly Contract", last_seen_on: Date.current - 100)
 
       described_class.new(user).detect
 
-      expect(series.reload.status).to eq("active")
-      expect(series.occurrences_count).to eq(0)   # cosmetic count-sync to live members
+      expect(RecurringSeries.exists?(series.id)).to be(false)
     end
 
     it "moves a tx from series A to series B without a double link" do
@@ -696,19 +707,18 @@ RSpec.describe RecurringDetector do
       expect(TransactionRecord.where(recurring_series_id: series.id).count).to eq(4)
     end
 
-    it "converges: a second run is a no-op for ended ghosts and keeps real series intact" do
+    it "converges: a memberless ghost is deleted and real series stay intact across runs" do
       monthly_dates(4).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
       dead = create(:recurring_series, :monthly, user: user, status: "active",
         canonical_name: "Dead Sub", last_seen_on: Date.current - 200, cadence_days: 30)
 
       subject.detect
-      expect(dead.reload.status).to eq("ended")
+      expect(RecurringSeries.exists?(dead.id)).to be(false)   # memberless ghost deleted
       spotify = user.recurring_series.find_by(canonical_name: "Spotify")
       expect(spotify.occurrences_count).to eq(4)
 
       described_class.new(user).detect
 
-      expect(dead.reload.status).to eq("ended")       # stays ended
       expect(spotify.reload.occurrences_count).to eq(4)
       expect(TransactionRecord.where(recurring_series_id: spotify.id).count).to eq(4)
     end

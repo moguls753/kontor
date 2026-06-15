@@ -68,25 +68,23 @@ class RecurringSeries < ApplicationRecord
   scope :outflows,  -> { where(direction: "outflow") }
   scope :inflows,   -> { where(direction: "inflow") }
 
-  # §4b / A6 — series visible under a given account scope: keep a series that has
-  # ≥1 member booked on one of `account_ids`, OR has no members at all (nothing to
-  # place out of scope). Keyed on account MEMBERSHIP ONLY, NOT the §4a in_scope
-  # net-zero exclusion: a personal→personal transfer has BOTH legs in scope, so
-  # the net-zero rule would leave it zero in-scope members and wrongly hide the
-  # whole series — membership keeps it visible. Empty ids → none. Subqueries (not
-  # plucked arrays) so empty results never produce invalid `IN ()` SQL.
+  # §4b / A6 — series visible under a given account scope: keep ONLY a series that has
+  # ≥1 member booked on one of `account_ids`. Keyed on account MEMBERSHIP ONLY, NOT the
+  # §4a in_scope net-zero exclusion: a personal→personal transfer has BOTH legs in scope,
+  # so the net-zero rule would leave it zero in-scope members and wrongly hide the whole
+  # series — membership keeps it visible. A MEMBERLESS series is deliberately NOT kept: it
+  # cannot be attributed to any scope, so a scoped lens (Privat) and the scoped forecast must
+  # EXCLUDE it (the old "OR has no members" escape hatch let stale/ghost series leak into
+  # every scope as phantom income/run-rate; memberless ghosts are now deleted at detection).
+  # Empty ids → none. Subquery (not a plucked array) so an empty result never produces
+  # invalid `IN ()` SQL.
   scope :with_member_in, ->(account_ids) {
     return none if account_ids.blank?
 
     in_scope_series = TransactionRecord.where(account_id: account_ids)
                                        .where.not(recurring_series_id: nil)
                                        .select(:recurring_series_id)
-    any_member = TransactionRecord.where.not(recurring_series_id: nil)
-                                  .select(:recurring_series_id)
-    where(
-      "recurring_series.id IN (#{in_scope_series.to_sql}) " \
-      "OR recurring_series.id NOT IN (#{any_member.to_sql})"
-    )
+    where("recurring_series.id IN (#{in_scope_series.to_sql})")
   }
 
   # #9 — single source of truth for the series fingerprint. Both the detector and

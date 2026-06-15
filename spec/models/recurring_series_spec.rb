@@ -114,10 +114,10 @@ RSpec.describe RecurringSeries, type: :model do
       expect(described_class.with_member_in([ personal.id ])).not_to include(s)
     end
 
-    it "keeps a series that has no members at all" do
+    it "drops a series that has no members at all (can't be attributed to a scope)" do
       s = create(:recurring_series, user: user, canonical_name: "No Members")
 
-      expect(described_class.with_member_in([ personal.id ])).to include(s)
+      expect(described_class.with_member_in([ personal.id ])).not_to include(s)
     end
 
     # A personal→personal transfer has BOTH legs in scope; keying on membership (not
