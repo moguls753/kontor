@@ -594,6 +594,247 @@ RSpec.describe RecurringDetector do
     end
   end
 
+  # Root refactor (replaces the rejected naive Fix 1): clear-before-relink is now PER-SERIES
+  # inside persist_series, so a non-re-detected series KEEPS its members and reconcile_vanished
+  # judges it against real data — no "active but 0-member" ghost.
+  describe "per-series clear (root fix, replaces Fix 1)" do
+    PP_NAME = "PayPal Europe S.à r.l. et Cie S.C.A.".freeze
+
+    def paypal_charge(merchant:, amount:, date:, txcode: nil)
+      ref = txcode || rand(10**12..10**13 - 1)
+      remit = "#{ref}/PP.6150.PP/. #{merchant}, Ihr Einkauf bei #{merchant}"
+      charge(name: PP_NAME, amount: amount, date: date, remittance: remit)
+    end
+
+    it "self-heals the prod ghost: re-routes PayPal Europe charges to per-merchant series, old €23 cluster ends with 0 count" do
+      # 3 monthly -23.00 charges that BEFORE Fix 2 collapsed under the single PayPal Europe name.
+      # With Fix 2 they carry an OpenAI sub-merchant → re-route to an "OpenAI Ireland Limited"
+      # series. The bare PayPal Europe coincidence cannot re-form (no rows resolve to it).
+      dates = monthly_dates(3)
+      dates.each { |d| paypal_charge(merchant: "OpenAI Ireland Limited", amount: -23.00, date: d) }
+
+      subject.detect
+
+      paypal_europe = user.recurring_series.find_by(canonical_name: "Paypal Europe S.à R.l. Et Cie S.c.a.")
+      expect(paypal_europe).to be_nil   # ghost never formed
+      openai = user.recurring_series.find_by(canonical_name: "Openai Ireland Limited")
+      expect(openai).to be_present
+      expect(openai.occurrences_count).to eq(3)
+      expect(TransactionRecord.where(recurring_series_id: openai.id).count).to eq(3)
+    end
+
+    it "ends/zeroes a once-real series after its members re-route to a new merchant identity (ghost repro)" do
+      # Build + link a real -23.00 monthly series under a plain (non-PayPal) name first.
+      dates = monthly_dates(3)
+      txs = dates.map { |d| charge(name: "Mystery Vendor", amount: -23.00, date: d) }
+      subject.detect
+      old = user.recurring_series.find_by(canonical_name: "Mystery Vendor")
+      expect(old).to be_present
+      expect(TransactionRecord.where(recurring_series_id: old.id).count).to eq(3)
+
+      # Now mutate those same tx so Fix 2 re-routes them to a distinct PayPal sub-merchant.
+      txs.each do |t|
+        t.update!(creditor_name: PP_NAME,
+          remittance: "#{rand(10**12..10**13 - 1)}/PP.6150.PP/. OpenAI Ireland Limited, Ihr Einkauf bei OpenAI Ireland Limited")
+      end
+
+      described_class.new(user).detect
+
+      old.reload
+      # the old identity is no longer re-detected → its members re-pointed away → 0 in scope.
+      expect(TransactionRecord.where(recurring_series_id: old.id).count).to eq(0)
+      expect(old.occurrences_count).to eq(0)            # honest count (cosmetic sync or end)
+      # the tx now belong to the new per-merchant series
+      openai = user.recurring_series.find_by(canonical_name: "Openai Ireland Limited")
+      expect(openai).to be_present
+      expect(TransactionRecord.where(recurring_series_id: openai.id).count).to eq(3)
+    end
+
+    it "retains a low-frequency memberless active series within grace (guards against naive Fix 1)" do
+      # quarterly series, last charge within grace (91*1.5+5 ≈ 142d), ZERO live members
+      # (its 3rd charge aged past LOOKBACK). MUST stay active — mirrors B4′ line 566.
+      series = create(:recurring_series, user: user, status: "active", cadence: "quarterly",
+        cadence_days: 91, canonical_name: "Quarterly Contract", last_seen_on: Date.current - 100)
+
+      described_class.new(user).detect
+
+      expect(series.reload.status).to eq("active")
+      expect(series.occurrences_count).to eq(0)   # cosmetic count-sync to live members
+    end
+
+    it "moves a tx from series A to series B without a double link" do
+      # A real Spotify series exists and links its 4 tx.
+      monthly_dates(4).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
+      subject.detect
+      a = user.recurring_series.find_by(canonical_name: "Spotify")
+      stray = TransactionRecord.where(recurring_series_id: a.id).first
+
+      # Force the stray to point at a DIFFERENT pre-existing series B (simulate prior-run state),
+      # then re-run: it must end up linked ONLY to whatever series it actually clusters into.
+      b = create(:recurring_series, user: user, canonical_name: "Other", direction: "outflow",
+        currency: "EUR", expected_amount: -99.00)
+      stray.update!(recurring_series_id: b.id)
+
+      described_class.new(user).detect
+
+      stray.reload
+      expect(stray.recurring_series_id).to eq(a.id)   # back in its real cluster, only once
+      expect(TransactionRecord.where(recurring_series_id: b.id).count).to eq(0)
+    end
+
+    it "shrinks cleanly: a dropped tx ends with recurring_series_id nil (A4)" do
+      monthly_dates(4).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
+      subject.detect
+      series = user.recurring_series.find_by(canonical_name: "Spotify")
+
+      stray = charge(name: "Unrelated One-Off", amount: -7.77, date: Date.current - 2)
+      stray.update!(recurring_series_id: series.id)
+
+      described_class.new(user).detect
+
+      expect(stray.reload.recurring_series_id).to be_nil
+      expect(TransactionRecord.where(recurring_series_id: series.id).count).to eq(4)
+    end
+
+    it "converges: a second run is a no-op for ended ghosts and keeps real series intact" do
+      monthly_dates(4).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
+      dead = create(:recurring_series, :monthly, user: user, status: "active",
+        canonical_name: "Dead Sub", last_seen_on: Date.current - 200, cadence_days: 30)
+
+      subject.detect
+      expect(dead.reload.status).to eq("ended")
+      spotify = user.recurring_series.find_by(canonical_name: "Spotify")
+      expect(spotify.occurrences_count).to eq(4)
+
+      described_class.new(user).detect
+
+      expect(dead.reload.status).to eq("ended")       # stays ended
+      expect(spotify.reload.occurrences_count).to eq(4)
+      expect(TransactionRecord.where(recurring_series_id: spotify.id).count).to eq(4)
+    end
+
+    it "keeps a user_confirmed memberless series active and syncs its count to 0 (cosmetic)" do
+      series = create(:recurring_series, user: user, status: "active", cadence: "monthly",
+        cadence_days: 30, canonical_name: "Confirmed Sub", user_confirmed: true,
+        last_seen_on: Date.current - 20, occurrences_count: 4)
+
+      described_class.new(user).detect
+
+      series.reload
+      expect(series.status).to eq("active")        # user_confirmed protection intact
+      expect(series.occurrences_count).to eq(0)    # honest: 0 live members
+    end
+  end
+
+  describe "aggregator sub-merchant extraction (Fix 2)" do
+    PP_CREDITOR = "PayPal Europe S.à r.l. et Cie S.C.A.".freeze
+
+    it "resolves a PayPal sub-merchant from the remittance, not the aggregator name (a)" do
+      dates = monthly_dates(3)
+      dates.each do |d|
+        charge(name: PP_CREDITOR, amount: -23.00, date: d,
+          remittance: "1048683274758/PP.6150.PP/. OpenAI Ireland Limited, Ihr Einkauf bei OpenAI Ireland Limited")
+      end
+
+      subject.detect
+
+      expect(user.recurring_series.find_by(canonical_name: "Openai Ireland Limited")).to be_present
+      expect(user.recurring_series.where("canonical_name LIKE ?", "%Paypal Europe%")).to be_empty
+      expect(user.recurring_series.where("canonical_name LIKE ?", "%6150%")).to be_empty
+    end
+
+    it "falls back to 'PayPal' for an empty-merchant remittance (b)" do
+      # empty merchant → generic PayPal → too generic + irregular → no series, but no raise/blank key
+      dates = monthly_dates(3)
+      dates.each do |d|
+        charge(name: PP_CREDITOR, amount: -5.00, date: d, remittance: "1047204316922/PP.6150.PP/. , Ihr Einkauf bei ")
+      end
+
+      expect { subject.detect }.not_to raise_error
+      series = user.recurring_series.first
+      expect(series.canonical_name).to eq("Paypal") if series   # generic, never a numeric key
+      expect(MerchantAlias.where(user: user).pluck(:raw_key)).not_to include(a_string_matching(/\A\d/))
+    end
+
+    it "preserves a comma inside the merchant name up to the first delimiter (c)" do
+      detector = described_class.new(user)
+      tx = charge(name: PP_CREDITOR, amount: -50.00, date: Date.current - 5,
+        remittance: "1099/PP.6150.PP/. CTS Eventim AG & Co. KGaA, Ihr Einkauf bei CTS Eventim AG & Co. KGaA")
+      raw = detector.send(:counterparty_raw, tx.reload, "outflow")
+      expect(raw).to eq("CTS Eventim AG & Co. KGaA")
+    end
+
+    it "extracts the merchant from a remittance with no PP.NNN.PP token (d)" do
+      detector = described_class.new(user)
+      tx = charge(name: PP_CREDITOR, amount: -30.00, date: Date.current - 5,
+        remittance: "1047167713938/. LogPay Financial Services GmbH, Ihr Einkauf bei LogPay Financial Services GmbH")
+      raw = detector.send(:counterparty_raw, tx.reload, "outflow")
+      expect(raw).to eq("LogPay Financial Services GmbH")
+    end
+
+    it "does NOT parse the remittance for a non-PayPal creditor (e)" do
+      detector = described_class.new(user)
+      tx = charge(name: "Amazon Payments Europe S.C.A.", amount: -20.00, date: Date.current - 5,
+        remittance: "1234/PP.6150.PP/. Something, Ihr Einkauf bei Something")
+      raw = detector.send(:counterparty_raw, tx.reload, "outflow")
+      expect(raw).to eq("Amazon Payments Europe S.C.A.")   # creditor_name untouched
+    end
+
+    it "detects the real OpenAI monthly subscription across price drift as one variable series (f)" do
+      # gentle drift, small consecutive gaps (< max(0.15·amt, 0.50)) → ONE cluster, but the
+      # total span (4.00 / ~22 ≈ 0.18 > 0.15 tolerance) makes it amount_variable.
+      amounts = [ -20.00, -22.00, -23.00, -24.00 ]
+      monthly_dates(4).each_with_index do |d, i|
+        charge(name: PP_CREDITOR, amount: amounts[i], date: d,
+          remittance: "10480#{i}54003144/PP.6150.PP/. OpenAI Ireland Limited, Ihr Einkauf bei OpenAI Ireland Limited")
+      end
+
+      subject.detect
+
+      openai = user.recurring_series.find_by(canonical_name: "Openai Ireland Limited")
+      expect(openai).to be_present
+      expect(openai.cadence).to eq("monthly")
+      expect(openai.amount_variable).to be(true)
+      expect(openai.occurrences_count).to be >= 3
+      expect(TransactionRecord.where(recurring_series_id: openai.id).count).to be >= 3
+    end
+
+    it "leaves one-off PayPal sub-merchants undetected and out of the LLM batch (g)" do
+      # two irregular DB tickets → < MIN_OCCURRENCES → no series, and the singleton key is
+      # never persisted as a MerchantAlias (explosion gate).
+      [ Date.current - 5, Date.current - 40 ].each do |d|
+        charge(name: PP_CREDITOR, amount: -19.90, date: d,
+          remittance: "1099/PP.6150.PP/. DB Vertrieb GmbH, Ihr Einkauf bei DB Vertrieb GmbH")
+      end
+
+      subject.detect
+
+      expect(user.recurring_series.where("canonical_name LIKE ?", "%Db Vertrieb%")).to be_empty
+      expect(MerchantAlias.where(user: user).where("raw_key LIKE ?", "%db vertrieb%")).to be_empty
+    end
+
+    it "does not collapse distinct sub-merchants sharing one amount into a €23 coincidence (h)" do
+      # 3 different merchants, all -23.00, one each → each a singleton → no €23 series forms.
+      [ "Lotto24 AG", "Mullvad VPN AB", "DB Vertrieb GmbH" ].each_with_index do |merchant, i|
+        charge(name: PP_CREDITOR, amount: -23.00, date: Date.current - (i * 30 + 5),
+          remittance: "10#{i}99/PP.6150.PP/. #{merchant}, Ihr Einkauf bei #{merchant}")
+      end
+
+      subject.detect
+
+      expect(user.recurring_series.where(expected_amount: -23.00)).to be_empty
+      expect(user.recurring_series.count).to eq(0)
+    end
+
+    it "falls back to 'PayPal' for a refund inflow (PP prefix, no 'Ihr Einkauf bei') (10)" do
+      detector = described_class.new(user)
+      tx = credit(name: PP_CREDITOR, amount: 15.00, date: Date.current - 5,
+        remittance: "1050/PP.6150.PP/. Rückzahlung OpenAI Ireland Limited")
+      raw = detector.send(:counterparty_raw, tx.reload, "inflow")
+      expect(raw).to eq("PayPal")   # no suffix → generic fallback, stays irregular
+    end
+  end
+
   describe "canonical upgrade reconciliation" do
     let!(:credential) { create(:llm_credential, user: user) }
 

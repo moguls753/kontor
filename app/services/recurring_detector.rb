@@ -37,6 +37,21 @@ class RecurringDetector
     rows = candidates.map { |tx| build_row(tx) }.compact
     # only name-derived norm_keys go to the LLM; IBAN-only rows group internally (#5)
     norm_keys = rows.map { |r| r[:norm_key] }.compact.uniq
+
+    # Fix 2 explosion mitigation — gate LLM canonicalization on RECURRENCE for extracted PayPal
+    # sub-merchants. Without this, every one-off PayPal purchase (DB tickets, Eventim, …) would
+    # mint a permanent MerchantAlias + burn an LLM call forever. Drop SINGLETON PayPal-extracted
+    # keys (row-count < MIN_OCCURRENCES) from the batch; they titleize locally below (canonicals
+    # miss → r[:norm_key].titleize fallback). Only keys that ACTUALLY repeat (the OpenAI sub at
+    # 3+ occ) reach the LLM and resolve to a brand. Non-PayPal keys are unaffected (a normal
+    # singleton merchant still goes to the LLM, as before). Empty-merchant rows already mapped to
+    # "PayPal" upstream, so they aggregate and are not dropped.
+    paypal_key_counts = rows.each_with_object(Hash.new(0)) do |r, h|
+      h[r[:norm_key]] += 1 if r[:paypal_submerchant] && r[:norm_key].present?
+    end
+    drop_keys = paypal_key_counts.select { |_k, n| n < MIN_OCCURRENCES }.keys.to_set
+    norm_keys -= drop_keys.to_a
+
     res = MerchantCanonicalizer.new(@user).resolve(norm_keys)
     canonicals = res[:canonicals]
 
@@ -62,9 +77,17 @@ class RecurringDetector
         end
       end
 
-      # A4 — clear-before-relink: detach this user's stale links once
-      series_ids = @user.recurring_series.ids
-      TransactionRecord.where(recurring_series_id: series_ids).update_all(recurring_series_id: nil) if series_ids.any?
+      # A4 (root refactor) — clear-before-relink is now PER-SERIES inside persist_series,
+      # NOT a global wipe. WHY: the old global clear detached EVERY member up front, so a
+      # series that was no longer re-detected this run (e.g. its canonical changed under
+      # Fix 2's PayPal sub-merchant extraction) was left active with 0 members — a "ghost"
+      # showing a stale occurrences_count/confidence but "Keine verknüpften Transaktionen"
+      # (prod #67). A naive "end memberless active series" patch would regress B4′ (a genuine
+      # quarterly/yearly contract whose 3rd charge aged past the 540d LOOKBACK is legitimately
+      # active with 0 in-window members and grace MUST keep it). The per-series clear keeps a
+      # non-re-detected series' members intact, so reconcile_vanished decides keep-vs-end
+      # against REAL data and the ghost cannot form (its members re-point to the new
+      # per-merchant series in the SAME run). Atomicity is unchanged: still one outer tx.
 
       detected_series_ids = Set.new # #3 — key reconcile on SERIES ID, not fingerprint
 
@@ -168,6 +191,12 @@ class RecurringDetector
     direction = tx.amount.negative? ? "outflow" : "inflow"
     cp_iban   = (direction == "outflow" ? tx.creditor_iban : tx.debtor_iban)
     raw = counterparty_raw(tx, direction)
+    # Fix 2 — a PayPal row whose merchant was extracted from the remittance is a SUB-MERCHANT
+    # (the single "PayPal Europe" creditor name covers every PayPal debit). Tag it so the LLM
+    # batch can be gated on recurrence (explosion mitigation in #detect): a one-off DB/Eventim
+    # ticket must NOT become a permanent MerchantAlias/LLM call, while the recurring OpenAI sub
+    # (3+ occ) still resolves to its brand.
+    paypal_submerchant = paypal_aggregator?(tx, direction) && extract_paypal_merchant(tx).present?
     norm_key = MerchantNormalizer.call(raw)
 
     # #5 — no name-derived key: keep IBAN-only rows groupable internally via the
@@ -192,7 +221,8 @@ class RecurringDetector
       norm_key: norm_key.presence, # nil for IBAN-only rows → excluded from LLM batch
       group_key:,                  # internal grouping fallback (IBAN), never LLM-bound
       counterparty_iban: cp_iban,
-      category_id: tx.category_id
+      category_id: tx.category_id,
+      paypal_submerchant:          # Fix 2 explosion-gate flag (singletons skip the LLM)
     }
   end
 
@@ -202,8 +232,43 @@ class RecurringDetector
   def counterparty_raw(tx, direction)
     primary = direction == "outflow" ? tx.creditor_name : tx.debtor_name
     other   = direction == "outflow" ? tx.debtor_name : tx.creditor_name
+
+    # Fix 2 — payment-aggregator sub-merchant extraction. PayPal books EVERY debit/refund under
+    # the single creditor/debtor name "PayPal Europe S.à r.l. et Cie S.C.A.", so the real merchant
+    # (OpenAI, DB, Lotto24, …) lives in the remittance. Deriving it BEFORE MerchantNormalizer.call
+    # (a) dissolves the €23-coincidence false positive into distinct merchants, (b) surfaces the
+    # real recurring OpenAI/ChatGPT sub, and (c) keeps a junk numeric-prefix key from ever reaching
+    # the sticky MerchantAlias/LLM. Gate is PayPal-specific (NOT a broad /payments?/i): Amazon
+    # Payments Europe is a SEPARATE creditor_name and must keep its own identity. Blank capture →
+    # generic "PayPal" (the aggregator name), so empty-merchant/refund rows stay irregular.
+    if paypal_aggregator?(tx, direction)
+      return extract_paypal_merchant(tx).presence || "PayPal"
+    end
+
     primary.presence || other.presence ||
       tx.remittance.to_s.split(/\s+/).first.presence
+  end
+
+  # Small explicit aggregator gate. Only PayPal this pass: Klarna's layout differs and has no
+  # parseable sample, Amazon Payments is its own creditor. Matches the aggregator NAME on the
+  # relevant side per direction (creditor for outflow, debtor for inflow — the PP prefix rides
+  # on refund inflows too).
+  def paypal_aggregator?(tx, direction)
+    name = direction == "outflow" ? tx.creditor_name : tx.debtor_name
+    name.to_s.match?(/\bpaypal\b/i)
+  end
+
+  # Prefix-anchored merchant extraction from a PayPal remittance. Strips the optional
+  # "NNN/" and "PP.<digits>.PP/" (or "<digits>/") reference prefix, then captures up to the
+  # FIRST ", Ihr Einkauf bei" (commas INSIDE the name, e.g. "CTS Eventim AG & Co. KGaA", are
+  # preserved). Anchoring on the PP separator (not a bare leading dot) avoids over-capturing
+  # inside the "PP.6150.PP" token. Locale/direction robust: ", Ihr Einkauf bei" is only the END
+  # delimiter; the merchant is the prefix text. Returns nil when nothing matches (→ "PayPal").
+  def extract_paypal_merchant(tx)
+    r = tx.remittance.to_s
+    m = r[/PP\.\d+\.PP\/\.\s*(.*?)\s*,\s*Ihr Einkauf bei/, 1] ||
+        r[/\d+\/\.\s*(.*?)\s*,\s*Ihr Einkauf bei/, 1]
+    m && m.strip.presence
   end
 
   # ── §5.3 amount sub-clustering ────────────────────────────────────────────────
@@ -384,7 +449,17 @@ class RecurringDetector
     # one-claim-per-row tracking (within this run); @claimed reset in #detect (#1)
     @claimed << persisted.id
 
-    # link members
+    # Per-series clear-before-relink (root refactor; replaces the old global wipe). Two
+    # detaches THEN link, all inside #detect's single outer tx (A4/A7 atomicity intact):
+    #   1. drop THIS series' old membership — handles the SHRINK case (a tx that was a member
+    #      last run but no longer clusters in; A4 spec 550-562 / stray-member cleanup).
+    #   2. detach the incoming members from ANY OTHER series — handles the MOVE-BETWEEN-SERIES
+    #      case (a tx that pointed at series A last run now clusters into B).
+    # A series NOT re-detected this run is never touched here, so it KEEPS its members and
+    # reconcile_vanished judges it against real data (no ghost). The @claimed guard above
+    # still forces a second cluster sharing one fingerprint+amount to its own series.
+    TransactionRecord.where(recurring_series_id: persisted.id).update_all(recurring_series_id: nil)
+    TransactionRecord.where(id: series[:member_ids]).update_all(recurring_series_id: nil)
     TransactionRecord.where(id: series[:member_ids]).update_all(recurring_series_id: persisted.id)
 
     persisted
@@ -503,13 +578,24 @@ class RecurringDetector
         next
       end
 
-      next if s.last_seen_on.nil?
+      if s.last_seen_on.nil?
+        # kept (no last_seen to judge against) — honest count-sync only (see below)
+        s.update_columns(occurrences_count: s.transaction_records.count)
+        next
+      end
 
       interval = (s.cadence_days || CADENCE_DAYS[s.cadence] || 30).to_i
       grace    = (interval * 1.5).round + 5
       if s.last_seen_on < (today - grace)
         s.update!(status: "ended")
         ended += 1
+      else
+        # KEEP path (grace protects it). Cosmetic count-sync ONLY: after the per-series-clear
+        # refactor a re-detected series keeps its members, so this fires solely for a genuinely
+        # memberless KEPT series (e.g. a low-frequency contract whose charges aged past LOOKBACK,
+        # or a user_confirmed series with no in-window tx). Show an honest live count (0 instead
+        # of a stale number) WITHOUT touching status and WITHOUT overriding user_confirmed.
+        s.update_columns(occurrences_count: s.transaction_records.count)
       end
     end
     ended
