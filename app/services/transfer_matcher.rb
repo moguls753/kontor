@@ -105,6 +105,17 @@ class TransferMatcher
     @own_ibans ||= @user.accounts.pluck(:iban).filter_map { |i| normalize_iban(i) }.to_set
   end
 
+  # id→normalized-iban map of the user's OWN accounts. Powers the tie-break in
+  # best_inflow_for: an inflow whose debtor_iban equals the IBAN of the account
+  # that OWNS the outflow row (out.account_id) genuinely came FROM that account,
+  # so it is the true counterpart and must win over a same-day same-amount inflow
+  # from a foreign IBAN (the Eike +70 vs. Katja +70 collision). Memoized; mirrors
+  # own_ibans. IBAN-less accounts simply have no entry (nil).
+  def account_ibans_by_id
+    @account_ibans_by_id ||= @user.accounts.pluck(:id, :iban)
+                                  .to_h { |id, iban| [ id, normalize_iban(iban) ] }
+  end
+
   # The user's own account-holder names. A name alone ("Amazon") being equal on
   # both legs proves nothing — a −50/+50 Amazon expense+refund collides. So the
   # name path is only trusted when the matched name is one the user actually owns.
@@ -290,7 +301,28 @@ class TransferMatcher
     end
     return nil if eligible.empty?
 
-    eligible.min_by { |inn| [ (inn.booking_date - out.booking_date).to_i.abs, inn.id ] }
+    # Tie-break (the Eike-vs-Katja fix): date_distance FIRST — a closer genuine
+    # pair must never be lost. Among equally-close inflows, prefer the one that
+    # genuinely came FROM the outflow's own source account (its debtor_iban ==
+    # the IBAN of out.account_id) over a coincidental same-amount foreign inflow;
+    # id only breaks a remaining tie. corroborated? is one-sided (an own
+    # debtor_iban on the joint inflow satisfies it identically for BOTH the Eike
+    # and Katja +70), so without this the lower id won arbitrarily.
+    eligible.min_by do |inn|
+      [ (inn.booking_date - out.booking_date).to_i.abs, counterpart_score(out, inn), inn.id ]
+    end
+  end
+
+  # 0 when the inflow genuinely came FROM the outflow's OWN source account — i.e.
+  # the inflow's debtor_iban is exactly the IBAN of the account that owns the
+  # outflow row (out.account_id) — else 1. The true counterpart of a −X leaving
+  # account A is the +X whose payer IS account A; a foreign-IBAN +X of the same
+  # amount/day is third-party income, not the transfer's other leg.
+  def counterpart_score(out, inn)
+    source_iban = account_ibans_by_id[out.account_id]
+    return 1 if source_iban.blank?
+
+    normalize_iban(inn.debtor_iban) == source_iban ? 0 : 1
   end
 
   def within_window?(date_a, date_b)

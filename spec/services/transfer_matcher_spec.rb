@@ -84,6 +84,99 @@ RSpec.describe TransferMatcher do
     end
   end
 
+  # The Eike-vs-Katja tie-break fix. The joint Gemeinschaft account receives TWO
+  # same-day same-amount +70 "Ansparen" inflows: one from the user's OWN giro
+  # (debtor_iban = privat.iban) and one from the partner (foreign debtor_iban).
+  # The user's giro sends ONE −70. corroborated? is satisfied identically by both
+  # inflows (each carries an own debtor_iban), so before the fix the winner was
+  # purely the lower id — flip-flopping month to month. counterpart_score now
+  # disambiguates: the inflow whose debtor_iban == the outflow's OWN source IBAN
+  # is the genuine counterpart and must win in BOTH id orderings.
+  describe "tie-break by genuine counterpart (Eike vs. Katja, same day + amount)" do
+    let(:foreign_iban) { "DE99999999999999999999" }
+
+    # AC1 + AC2: pairs the debtor_iban==source one regardless of id order; the
+    # foreign-IBAN inflow stays unmatched (genuine third-party income).
+    it "pairs the source-IBAN inflow over the foreign one when EIKE has the LOWER id" do
+      out  = leg(account: privat, amount: -70.00, creditor_iban: gemeinschaft.iban)
+      eike = leg(account: gemeinschaft, amount: 70.00, debtor_iban: privat.iban, debtor_name: "Eike Rackwitz")
+      katja = leg(account: gemeinschaft, amount: 70.00, debtor_iban: foreign_iban, debtor_name: "Katja Stumpf")
+      expect(eike.id).to be < katja.id
+
+      subject.match
+
+      expect(out.reload.transfer_group_id).to eq(eike.reload.transfer_group_id)
+      expect(out.transfer_counterpart_account_id).to eq(gemeinschaft.id)
+      expect(eike.transfer_counterpart_account_id).to eq(privat.id)
+      expect(katja.reload.transfer_group_id).to be_nil
+      expect(katja.transfer_counterpart_account_id).to be_nil
+    end
+
+    it "pairs the source-IBAN inflow over the foreign one when KATJA has the LOWER id" do
+      # Create Katja first so she holds the lower id — the original prod failure mode.
+      out   = leg(account: privat, amount: -70.00, creditor_iban: gemeinschaft.iban)
+      katja = leg(account: gemeinschaft, amount: 70.00, debtor_iban: foreign_iban, debtor_name: "Katja Stumpf")
+      eike  = leg(account: gemeinschaft, amount: 70.00, debtor_iban: privat.iban, debtor_name: "Eike Rackwitz")
+      expect(katja.id).to be < eike.id
+
+      subject.match
+
+      expect(out.reload.transfer_group_id).to eq(eike.reload.transfer_group_id)
+      expect(out.transfer_counterpart_account_id).to eq(gemeinschaft.id)
+      expect(eike.transfer_counterpart_account_id).to eq(privat.id)
+      expect(katja.reload.transfer_group_id).to be_nil
+      expect(katja.transfer_counterpart_account_id).to be_nil
+    end
+
+    # AC3: date_distance still dominates the score. A genuine same-source inflow a
+    # day off must NOT beat a closer (same-day) counterpart with a worse score.
+    it "keeps date_distance first — a closer-date counterpart wins over a better score" do
+      out = leg(account: privat, amount: -70.00, date: Date.current, creditor_iban: gemeinschaft.iban)
+      # Same day, foreign debtor IBAN → score 1, distance 0.
+      near = leg(account: gemeinschaft, amount: 70.00, date: Date.current,
+        debtor_iban: foreign_iban, debtor_name: "Eike Rackwitz", creditor_iban: privat.iban)
+      # One day off, source debtor IBAN → score 0, distance 1.
+      far  = leg(account: gemeinschaft, amount: 70.00, date: Date.current + 1, debtor_iban: privat.iban)
+
+      subject.match
+
+      expect(out.reload.transfer_group_id).to eq(near.reload.transfer_group_id)
+      expect(far.reload.transfer_group_id).to be_nil
+    end
+
+    # AC4: the tie-break must not CREATE a match where corroboration would not have
+    # allowed one. A −70 expense whose ONLY same-amount candidate is a foreign,
+    # uncorroborated inflow stays unmatched (score does not lower the bar).
+    it "creates no new match — an uncorroborated foreign inflow still does not pair" do
+      expense = leg(account: privat, amount: -70.00, creditor_name: "REWE Markt GmbH",
+        creditor_iban: foreign_iban)
+      income  = leg(account: gemeinschaft, amount: 70.00, debtor_iban: foreign_iban,
+        debtor_name: "Katja Stumpf")
+
+      subject.match
+
+      expect(expense.reload.transfer_group_id).to be_nil
+      expect(income.reload.transfer_group_id).to be_nil
+    end
+
+    # AC5: idempotent — re-running produces the SAME pairing (no flip-flop).
+    it "is stable across re-runs (no flip-flop)" do
+      out   = leg(account: privat, amount: -70.00, creditor_iban: gemeinschaft.iban)
+      katja = leg(account: gemeinschaft, amount: 70.00, debtor_iban: foreign_iban, debtor_name: "Katja Stumpf")
+      eike  = leg(account: gemeinschaft, amount: 70.00, debtor_iban: privat.iban, debtor_name: "Eike Rackwitz")
+
+      subject.match
+      group_id = out.reload.transfer_group_id
+      expect(group_id).to eq(eike.reload.transfer_group_id)
+
+      described_class.new(user).match
+
+      expect(out.reload.transfer_group_id).to eq(group_id)
+      expect(eike.reload.transfer_group_id).to eq(group_id)
+      expect(katja.reload.transfer_group_id).to be_nil
+    end
+  end
+
   describe "one-sided contributions (Katja)" do
     it "does not pair an inflow that has no corroborated counter-outflow" do
       inn = leg(account: gemeinschaft, amount: 70.00, debtor_name: "Katja Externa")
