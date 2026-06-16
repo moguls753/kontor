@@ -69,6 +69,16 @@ def test_amount_bare_integer_still_parses():
     assert str(normalize.parse_amount("79 \u20ac")) == "79.00"
 
 
+def test_has_explicit_sign():
+    # PayPal signs real cashflow: income '+', spending '-' (incl. U+2212). A pay-in-30
+    # ORDER is sign-less -> not a real cashflow -> must be skipped (see normalize()).
+    assert normalize.has_explicit_sign("+72,00 \u20ac") is True
+    assert normalize.has_explicit_sign("\u22128,15 \u20ac") is True   # U+2212 minus
+    assert normalize.has_explicit_sign("-8,15 \u20ac") is True
+    assert normalize.has_explicit_sign("79,00 \u20ac") is False       # sign-less pay-in-30
+    assert normalize.has_explicit_sign("") is False
+
+
 # --- balance (PayPal-Guthaben card) ------------------------------------------
 def test_parse_balance_zero_euro_card_fragment():
     # The card fragment uses the nbsp + the heading/Verfügbar copy around it.
@@ -215,6 +225,25 @@ def test_unparseable_date_raises():
         _norm([_row(description_text="kein Datum . Zahlung")])
 
 
+def test_signless_payin30_order_is_skipped_signed_rows_kept():
+    # PayPal lists a 'Bezahlung nach 30 Tagen' (pay-in-30) ORDER sign-less ("79,00 €");
+    # importing it booked phantom +income. It must be SKIPPED. Explicitly-signed rows
+    # (a "+" income, the "-" settlement) are kept.
+    rows = [
+        _row(id="ORDER1", amount_text="79,00 €", merchant="Thomann GmbH",
+             description_text="3. Juni . Bezahlung nach 30 Tagen"),
+        _row(id="INCOME1", amount_text="+72,00 €", merchant="Katja Stumpf",
+             description_text="3. Juni . Geld erhalten"),
+        _row(id="SETTLE1", amount_text="−79,00 €", merchant="Bezahlung nach 30 Tagen",
+             description_text="3. Juni . Zahlung"),
+    ]
+    recs = _norm(rows)
+    ids = {r["id"] for r in recs}
+    assert ids == {"INCOME1", "SETTLE1"}          # the sign-less order is gone
+    assert next(r for r in recs if r["id"] == "INCOME1")["amount"] == "72.00"
+    assert next(r for r in recs if r["id"] == "SETTLE1")["amount"] == "-79.00"
+
+
 def test_date_outside_window_is_skipped_not_fatal():
     # "6. Juni" -> 2026-06-06 but the window ends 2026-06-05 => out of bounds.
     # It is SKIPPED (logged), NOT fatal: one out-of-window row must never abort the
@@ -236,8 +265,9 @@ def test_unparseable_currency_raises():
 
 
 def test_bare_euro_symbol_defaults_to_eur_not_dropped():
-    # The bare "\u20ac" case maps to EUR (not None), so the row survives.
-    [rec] = _norm([_row(amount_text="8,15 \u20ac", description_text="6. Juni . Zahlung")])
+    # The bare "\u20ac" case maps to EUR (not None), so the row survives. (Signed amount so
+    # the sign-less pay-in-30 skip doesn't drop it \u2014 here we're testing the currency default.)
+    [rec] = _norm([_row(amount_text="\u22128,15 \u20ac", description_text="6. Juni . Zahlung")])
     assert rec["currency"] == "EUR"
 
 

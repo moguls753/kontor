@@ -98,6 +98,16 @@ def _normalize_minus(text: str) -> str:
     )
 
 
+def has_explicit_sign(amount_text: str) -> bool:
+    """True iff the amount carries an explicit '+' or '-' sign. PayPal signs every
+    real cashflow (income '+', spending '-'); a SIGN-LESS amount is a non-cash
+    placeholder — specifically a 'Bezahlung nach 30 Tagen' (pay-in-30) ORDER, which
+    PayPal lists without a sign while the real money is the separately-listed,
+    explicitly-signed settlement ~30 days later. Used to SKIP the order row:
+    importing it booked phantom +income (parse_amount maps 'no minus' -> positive)."""
+    return bool(amount_text) and any(c in _normalize_minus(amount_text) for c in "+-")
+
+
 def parse_amount(amount_text: str) -> Decimal | None:
     """Signed Decimal from a PayPal amount string, e.g. '−8,15 €'
     -> Decimal('-8.15'); '79,00 €' -> Decimal('79.00');
@@ -288,6 +298,14 @@ def normalize(rows: list[dict], date_from: str, date_to: str, *, today: date | N
         # via _SYMBOL_ISO, so this only fires on a genuinely unknown token).
         if currency is None:
             raise ValueError(f"unparseable currency: {amount_text!r}")
+        # AFTER the fail-loud parse guards: skip a VALID but SIGN-LESS amount. PayPal omits
+        # the +/- on a 'Bezahlung nach 30 Tagen' (pay-in-30) ORDER — a non-cash placeholder.
+        # Importing it booked phantom +income (parse_amount treats 'no minus' as positive).
+        # The real expense is the separately-listed, explicitly-signed settlement ~30 days
+        # later, which is kept. (Unparseable amount/currency already raised above.)
+        if not has_explicit_sign(amount_text):
+            log.warning("skipping sign-less amount %r (pay-in-30 order; settlement carries the cost)", amount_text)
+            continue
 
         date_part, type_part = split_description(row.get("description_text") or "")
         dm = parse_day_month(date_part)
