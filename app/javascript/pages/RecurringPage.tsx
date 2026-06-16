@@ -478,9 +478,14 @@ function SeriesMembers({ seriesId, open }: { seriesId: number; open: boolean }) 
       ) : (
         <div className="mt-1">
           {members.map(tx => (
-            <div key={tx.id} className="flex items-center justify-between py-1">
-              <span className="mono text-ink-faint text-[12px]">{formatDate(tx.booking_date)}</span>
-              <Amount value={tx.amount} currency={tx.currency} className="text-[12.5px]" />
+            <div key={tx.id} className="flex items-center justify-between gap-3 py-1">
+              <span className="mono text-ink-faint text-[12px] shrink-0">{formatDate(tx.booking_date)}</span>
+              {tx.remittance && (
+                <span className="text-ink-faint text-[12px] truncate flex-1 min-w-0 text-left" title={tx.remittance}>
+                  {tx.remittance}
+                </span>
+              )}
+              <Amount value={tx.amount} currency={tx.currency} className="text-[12.5px] shrink-0" />
             </div>
           ))}
         </div>
