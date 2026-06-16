@@ -36,19 +36,19 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     create(:transaction_record, account: shared_acct, amount: 70, remittance: "Ansparen in",
                                 transfer_group_id: group, transfer_counterpart_account: personal_acct)
 
-    # Gemeinsam (default): only the shared account in scope → the joint-side +70 leg's
-    # counterpart is out of scope → it shows as a real inflow; the personal leg is hidden.
+    # Gemeinsam (default): only the shared account is in scope (membership) → its +70 booking
+    # shows; the personal-account leg is out of scope.
     get api_v1_transactions_path, as: :json
     expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Ansparen in"])
 
-    # Privat: shared account out of scope → the personal leg becomes a real flow.
+    # Privat: only the personal accounts are in scope → the personal-account leg shows.
     get api_v1_transactions_path, params: { scope: "privat" }, as: :json
     expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Ansparen"])
   end
 
-  # Direction composes with scope: it is applied AFTER in_scope, so it filters the surviving
-  # cross-scope legs by their REAL sign without bypassing the §4a exclusion.
-  it "composes direction with scope=privat (filters surviving cross-scope legs by sign)" do
+  # Direction composes with scope: only the in-scope (personal) account's legs appear, filtered
+  # by amount sign. The shared-account legs are out of scope by membership.
+  it "composes direction with scope=privat (filters in-scope legs by sign)" do
     personal = create(:account, bank_connection: bc, shared: false)
     shared   = create(:account, bank_connection: bc, shared: true)
     g_out = SecureRandom.uuid
@@ -71,11 +71,10 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Raus privat"])
   end
 
-  # §4a fix — an orphaned transfer leg (transfer_group_id still set, but the counterpart
-  # account was deleted ⇒ transfer_counterpart_account_id NULL) is a real flow, not a
-  # net-zero internal transfer, and must stay visible. The exclusion keys on the
-  # counterpart id, never on transfer_group_id (NULL NOT IN → NULL → would silently drop it).
-  it "keeps an orphaned transfer leg (counterpart account deleted) visible as a real flow" do
+  # Every booking on an in-scope account appears in the ledger — including an orphaned transfer
+  # leg (transfer_group_id set, counterpart account deleted ⇒ counterpart_id NULL). (The §4a
+  # NULL-safety that this used to guard now only matters for the netted dashboard/statistics.)
+  it "keeps an orphaned transfer leg (counterpart account deleted) visible" do
     create(:transaction_record, account: account, amount: -90, remittance: "Orphaned leg",
                                 transfer_group_id: SecureRandom.uuid, transfer_counterpart_account: nil)
 
@@ -83,7 +82,10 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to include("Orphaned leg")
   end
 
-  it "still excludes a genuinely-matched in-scope internal transfer (both legs visible)" do
+  # The list is a faithful LEDGER, not netted: an internal transfer between two in-scope
+  # accounts shows BOTH legs (each is a real booking on its account, as on the bank statement).
+  # The net-zero exclusion lives in the dashboard/statistics aggregates, not here.
+  it "shows BOTH legs of an in-scope internal transfer (ledger, not netted)" do
     other_acct = create(:account, bank_connection: bc)
     group = SecureRandom.uuid
     create(:transaction_record, account: account, amount: -90, remittance: "Matched out",
@@ -93,7 +95,23 @@ RSpec.describe "Api::V1::Transactions", type: :request do
 
     get api_v1_transactions_path, as: :json
     remittances = response.parsed_body["transactions"].map { |t| t["remittance"] }
-    expect(remittances).not_to include("Matched out", "Matched in")
+    expect(remittances).to include("Matched out", "Matched in")
+  end
+
+  # The reported case: a PayPal funding Lastschrift on the giro is conduit-matched to the
+  # PayPal account. Both accounts are in the privat scope, so the list shows the giro
+  # Lastschrift AND the real purchase on the PayPal account (each appears on its own statement).
+  it "shows a PayPal-conduit funding leg on the giro alongside the purchase on the PayPal account" do
+    giro   = create(:account, bank_connection: bc, shared: false, role: "giro")
+    paypal = create(:account, bank_connection: bc, shared: false, role: "zahlung")
+    group  = SecureRandom.uuid
+    create(:transaction_record, account: giro, amount: -23, remittance: "PayPal Lastschrift",
+                                creditor_name: "PayPal Europe", transfer_group_id: group, transfer_counterpart_account: paypal)
+    create(:transaction_record, account: paypal, amount: -23, remittance: "OpenAI purchase", creditor_name: "OpenAI")
+
+    get api_v1_transactions_path, params: { scope: "privat" }, as: :json
+    remittances = response.parsed_body["transactions"].map { |t| t["remittance"] }
+    expect(remittances).to include("PayPal Lastschrift", "OpenAI purchase")
   end
 
   it "filters by date range and account" do

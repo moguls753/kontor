@@ -5,10 +5,15 @@ module Api
       include TransactionSerialization
 
       def index
-        # §4b: restrict to the in-scope accounts and apply the §4a internal-transfer
-        # exclusion (matched transfer whose counterpart is also in scope ⇒ net zero ⇒
-        # hidden; counterpart out of scope ⇒ real flow ⇒ stays).
-        scope = in_scope(Current.user.transaction_records.includes(:account, :category))
+        # The Transactions list is a faithful per-account LEDGER: scope by account MEMBERSHIP
+        # only and do NOT apply the §4a internal-transfer net-zero exclusion — every real
+        # booking on an in-scope account stays visible (transfer legs AND PayPal-conduit funding
+        # Lastschriften included), matching the user's bank statements. Netting belongs to the
+        # cashflow ANALYTICS (dashboard/statistics keep in_scope); the dashboard "recent" feed
+        # (§4c) already scopes by account only too, so this makes the list consistent with it.
+        ids = scoped_account_ids
+        scope = ids.empty? ? Current.user.transaction_records.none
+                           : Current.user.transaction_records.includes(:account, :category).where(account_id: ids)
 
         scope = scope.where(account_id: params[:account_id]) if params[:account_id].present?
         scope = scope.where(category_id: params[:category_id]) if params[:category_id].present?
@@ -16,8 +21,7 @@ module Api
         scope = scope.where(booking_date: ..params[:to]) if params[:to].present?
         scope = scope.uncategorized if params[:uncategorized] == "true"
         # Ein/Aus direction by amount sign (credits = income/Ein, debits = expense/Aus).
-        # Unknown/"all"/absent ⇒ no filter. Applied after in_scope so a surviving
-        # cross-scope transfer leg's real sign classifies it correctly.
+        # Unknown/"all"/absent ⇒ no filter.
         scope = scope.credits if params[:direction] == "in"
         scope = scope.debits if params[:direction] == "out"
         scope = scope.where("remittance LIKE ? OR creditor_name LIKE ? OR debtor_name LIKE ?",
