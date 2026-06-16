@@ -314,15 +314,23 @@ module Api
       def forecast(ids)
         # Two parts (redesigned with the user 2026-06-10):
         #  • RECURRING (both directions) — reliable, taken at RUN-RATE (current contract
-        #    amount), never averaged. flow_bucket(scope_ids:) nets in-scope transfers, so a
-        #    Privat→joint outflow counts but a Familie internal move doesn't. "expense" here
+        #    amount), never averaged. flow_bucket(scope_ids:) nets transfers between two
+        #    in-scope accounts; with a single-account lens (Gemeinsam = the joint pot) there
+        #    are none, so a giro→joint contribution's joint-side inflow leg counts as real
+        #    income, and under Privat the giro-side outflow counts as an expense. "expense" here
         #    is ALL recurring outflow incl. Sparen — it's CASHFLOW, not the Fixkosten KPI.
         #  • VARIABLE — the unpredictable one-offs — averaged SYMMETRICALLY (income AND
         #    expenses) over the last months, so a one-off (vacation) and its offset (refund)
         #    net out. Clean partition, NO double-count: recurring_series_id present →
         #    run-rate here; NULL → the variable average. (Preloading members alone is
         #    N+1-free — flow_bucket reads only the FK columns.)
-        scope_ids = params[:scope] == "privat" ? ids : nil
+        # scope_ids == ids for BOTH lenses (never nil): under "gemeinsam" the joint-side
+        # inflow leg of a contribution (counterpart = the out-of-scope personal giro) must
+        # count as recurring income, not be netted to a transfer — nil would re-net it and
+        # erase the contribution from rec_income (mirrors bucket_scope_ids in the recurring
+        # controller). flow_bucket with these ids nets only transfers between two in-scope
+        # accounts; with a single-account scope there are none, so nothing is wrongly netted.
+        scope_ids = ids
         series = Current.user.recurring_series.active
                         .merge(RecurringSeries.with_member_in(ids))
                         .includes(:transaction_records)

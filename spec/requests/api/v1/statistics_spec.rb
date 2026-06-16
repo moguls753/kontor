@@ -307,9 +307,10 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     end
 
     # Scope-awareness: a recurring rent-share (personal→joint) is a recurring expense under
-    # Privat (counterpart out of scope) but netted away under Familie (both legs in scope) —
-    # symmetric with the dashboard/statistics treatment.
-    it "counts a cross-scope rent-share in recurring_expenses under privat but nets it under familie" do
+    # Privat (the giro-side outflow leg's counterpart is out of scope → a real flow). Under
+    # Gemeinsam the giro-side leg is out of scope entirely (its only member sits on the
+    # personal giro), so it does not appear as a recurring expense in the joint-pot lens.
+    it "counts a cross-scope rent-share in recurring_expenses under privat, drops it under gemeinsam" do
       privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
       gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
       wohnen = create(:category, user: user, name: "Wohnen & Miete")
@@ -324,8 +325,25 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       get api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
       expect(response.parsed_body["forecast"]["recurring_expenses"].to_f).to eq(-445.0)
 
-      get api_v1_statistics_path, params: this_month_params.merge(scope: "familie"), as: :json
-      expect(response.parsed_body["forecast"]["recurring_expenses"].to_f).to eq(0.0) # netted → transfer bucket
+      # Gemeinsam (default): the giro-side leg has no member in the shared account → excluded.
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      expect(response.parsed_body["forecast"]["recurring_expenses"].to_f).to eq(0.0)
+    end
+
+    # Gemeinsam landmine: the joint-side INFLOW leg of a recurring contribution (counterpart =
+    # the personal giro, OUT of the gemeinsam scope) must count as recurring_income — it is NOT
+    # netted away. Regression guard for the forecast's scope_ids (must be `ids`, never nil).
+    it "counts a joint-side recurring contribution leg as recurring_income under gemeinsam" do
+      privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
+      gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
+      in_leg = create(:recurring_series, :inflow, user: user, canonical_name: "Eike Ansparen",
+                                         expected_amount: 70)
+      g = SecureRandom.uuid
+      create(:transaction_record, :credit, account: gemein, amount: 70, recurring_series: in_leg,
+                                  booking_date: Date.current - 3, transfer_group_id: g, transfer_counterpart_account: privat)
+
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      expect(response.parsed_body["forecast"]["recurring_income"].to_f).to eq(70.0)
     end
 
     # Under Privat, the inflow leg of an own-account transfer is a `transfer` bucket
@@ -413,12 +431,14 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       privat = create(:account, bank_connection: bc, balance_amount: 1234.56, shared: false)
       gemein = create(:account, bank_connection: bc, balance_amount: 800.00, shared: true)
 
-      get api_v1_dashboard_path, params: { scope: "familie" }, as: :json
-      dash_familie = response.parsed_body["total_balance"].to_f
-      get api_v1_statistics_path, params: this_month_params.merge(scope: "familie"), as: :json
-      expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(dash_familie)
-      expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(2034.56)
+      # Gemeinsam (default): the joint account only.
+      get api_v1_dashboard_path, as: :json
+      dash_gemeinsam = response.parsed_body["total_balance"].to_f
+      get api_v1_statistics_path, params: this_month_params, as: :json
+      expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(dash_gemeinsam)
+      expect(response.parsed_body["forecast"]["current_balance"].to_f).to eq(800.0)
 
+      # Privat: the personal account only.
       get api_v1_dashboard_path, params: { scope: "privat" }, as: :json
       dash_privat = response.parsed_body["total_balance"].to_f
       get api_v1_statistics_path, params: this_month_params.merge(scope: "privat"), as: :json
@@ -547,8 +567,9 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       expect(body["kind"]).to eq("expenses")
       expect(body["transactions"].map { |t| t["amount"].to_f }).to eq([-100.0])
 
+      # Gemeinsam (default): only the shared account's flows.
       get variable_transactions_api_v1_statistics_path, as: :json
-      expect(response.parsed_body["transactions"].map { |t| t["amount"].to_f }).to contain_exactly(-100.0, -400.0)
+      expect(response.parsed_body["transactions"].map { |t| t["amount"].to_f }).to eq([-400.0])
     end
 
     it "requires authentication" do
@@ -715,8 +736,9 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       expect(body["total"].to_f).to eq(0.0)
     end
 
-    # Scope-awareness: default (familie) includes shared + personal AND nets a matched
-    # transfer whose counterpart is also in scope; ?scope=privat narrows to personal-only.
+    # Scope-awareness: the lenses partition the accounts — Gemeinsam (default) is the shared
+    # account only; ?scope=privat is personal-only AND nets a matched transfer whose
+    # counterpart is also in (personal) scope.
     it "is scope-aware and nets in-scope internal transfers" do
       privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
       gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
@@ -724,17 +746,18 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       cat = create(:category, user: user, name: "Reisen")
       create(:transaction_record, account: privat, amount: -100, booking_date: Date.current, category: cat)
       create(:transaction_record, account: gemein, amount: -300, booking_date: Date.current, category: cat)
-      # a matched transfer between two PERSONAL accounts (both legs in scope under either
-      # familie or privat) tagged with the same category must net out.
+      # a matched transfer between two PERSONAL accounts (both legs in the privat scope)
+      # tagged with the same category must net out under ?scope=privat.
       g = SecureRandom.uuid
       create(:transaction_record, account: privat, amount: -50, booking_date: Date.current, category: cat,
                                   transfer_group_id: g, transfer_counterpart_account: privat2)
       create(:transaction_record, :credit, account: privat2, amount: 50, booking_date: Date.current,
                                   transfer_group_id: g, transfer_counterpart_account: privat)
 
+      # Gemeinsam (default): only the shared account's debit.
       get category_transactions_api_v1_statistics_path,
           params: this_month_params.merge(category_id: cat.id), as: :json
-      expect(response.parsed_body["total"].to_f).to eq(-400.0) # both real debits, transfer netted
+      expect(response.parsed_body["total"].to_f).to eq(-300.0)
 
       get category_transactions_api_v1_statistics_path,
           params: this_month_params.merge(category_id: cat.id, scope: "privat"), as: :json
@@ -965,8 +988,9 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       get merchants_api_v1_statistics_path, params: this_month_params.merge(category_id: food.id, scope: "privat"), as: :json
       expect(response.parsed_body["total"].to_f).to eq(-100.0)
 
-      get merchants_api_v1_statistics_path, params: this_month_params.merge(category_id: food.id, scope: "familie"), as: :json
-      expect(response.parsed_body["total"].to_f).to eq(-400.0)
+      # Gemeinsam (default): only the shared account's debit in the category.
+      get merchants_api_v1_statistics_path, params: this_month_params.merge(category_id: food.id), as: :json
+      expect(response.parsed_body["total"].to_f).to eq(-300.0)
     end
 
     it "requires authentication" do
@@ -1104,10 +1128,12 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       expect(va["net"]["current"].to_f).to be_within(0.011).of(va["income"]["current"].to_f + va["expenses"]["current"].to_f)
     end
 
-    # §5.5 (VR2) — scope-aware: a both-legs-in-scope transfer is netted out of the Ø under
-    # FAMILIE (counterpart in scope) but counts under PRIVAT (counterpart out of scope) — the Ø
-    # comes from the scoped window. The transfer lands in a PRIOR (completed) month.
-    it "nets a both-legs-in-scope transfer out of the baseline under familie, counts it under privat" do
+    # §5.5 (VR2) — scope-aware: the Ø comes from the scoped window. A contribution
+    # (personal → joint) lands in a PRIOR (completed) month. Under Privat the giro-side
+    # OUTFLOW leg is a real expense (counterpart out of scope). Under Gemeinsam the joint-side
+    # INFLOW leg is a real income (counterpart — the personal giro — out of THAT scope), and
+    # there are no shared-account debits → the expenses baseline is 0.
+    it "reflects a cross-scope contribution per lens in the baseline" do
       privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
       gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
       bom = Date.current.beginning_of_month
@@ -1122,8 +1148,11 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       get api_v1_statistics_path, params: params.merge(scope: "privat"), as: :json
       expect(response.parsed_body["vs_average"]["expenses"]["baseline"].to_f).to be_within(0.001).of(-445.0)
 
-      get api_v1_statistics_path, params: params.merge(scope: "familie"), as: :json
-      expect(response.parsed_body["vs_average"]["expenses"]["baseline"].to_f).to eq(0.0) # both legs netted
+      # Gemeinsam (default): the joint-side leg is a real income; no shared debits → expenses Ø is 0.
+      get api_v1_statistics_path, params: params, as: :json
+      va = response.parsed_body["vs_average"]
+      expect(va["expenses"]["baseline"].to_f).to eq(0.0)
+      expect(va["income"]["baseline"].to_f).to be_within(0.001).of(445.0)
     end
 
     # §5.6 — < 2 completed months → the frontend suppresses the ▲/▼% chips. A window with

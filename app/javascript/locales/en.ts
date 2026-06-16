@@ -33,7 +33,7 @@ export default {
   },
   scope: {
     label: 'Scope',
-    familie: 'Family',
+    gemeinsam: 'Shared',
     privat: 'Personal',
   },
   auth: {
@@ -234,8 +234,6 @@ export default {
     occurrences: '{{count}} occurrences',
     occurrences_one: '{{count}} occurrence',
     variable_amount: 'Variable amount',
-    confirm: 'Confirm',
-    confirmed: 'Confirmed',
     dismiss: 'Dismiss',
     not_recurring: 'Not recurring',
     not_recurring_hint: 'False match · won’t be suggested again',

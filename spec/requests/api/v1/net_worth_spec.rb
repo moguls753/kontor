@@ -46,18 +46,22 @@ RSpec.describe "Api::V1::NetWorth", type: :request do
   end
 
   # NW1: latest == the dashboard's total balance for the scope; scope = account membership.
+  # The lenses partition the accounts (privat = personal, gemeinsam = the shared joint pot).
   it "matches the dashboard total (NW1) and is scope-aware" do
-    privat = giro(balance: 300, shared: false)
+    privat = giro(balance: 300, shared: false, name: "Giro")
     tx(privat, 3, 10)
     gemein = giro(balance: 200, shared: true, name: "Joint")
     tx(gemein, 3, 10)
 
+    # Gemeinsam (default): only the shared (joint) account → 200, and it matches the dashboard.
     get api_v1_net_worth_path, as: :json
     nw = response.parsed_body
-    expect(BigDecimal(nw["latest"]["total"])).to eq(BigDecimal("500"))
+    expect(BigDecimal(nw["latest"]["total"])).to eq(BigDecimal("200"))
+    expect(nw["composition"].map { |c| c["name"] }).to contain_exactly("Joint")
     get api_v1_dashboard_path, as: :json
     expect(nw["latest"]["total"].to_f).to eq(response.parsed_body["total_balance"].to_f)
 
+    # Privat: only the personal account → 300, joint excluded.
     get api_v1_net_worth_path, params: { scope: "privat" }, as: :json
     privat_body = response.parsed_body
     expect(BigDecimal(privat_body["latest"]["total"])).to eq(BigDecimal("300"))

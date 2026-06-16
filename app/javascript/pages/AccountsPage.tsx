@@ -208,7 +208,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     try {
       const r = await api(`/api/v1/accounts/${acctId}`, { method: 'PATCH', body: attrs })
       if (!r.ok) fetchConnections()
-      // Toggling the shared flag can flip whether the Familie/Privat switch is
+      // Toggling the shared flag can flip whether the Gemeinsam/Privat switch is
       // meaningful — re-detect so the scope switch appears/hides immediately.
       else if ('shared' in attrs) refreshHasShared()
     } catch {

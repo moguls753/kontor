@@ -33,7 +33,7 @@ export default {
   },
   scope: {
     label: 'Ansicht',
-    familie: 'Familie',
+    gemeinsam: 'Gemeinsam',
     privat: 'Privat',
   },
   auth: {
@@ -234,8 +234,6 @@ export default {
     occurrences: '{{count}} Vorkommen',
     occurrences_one: '{{count}} Vorkommen',
     variable_amount: 'Variabler Betrag',
-    confirm: 'Bestätigen',
-    confirmed: 'Bestätigt',
     dismiss: 'Verwerfen',
     not_recurring: 'Nicht wiederkehrend',
     not_recurring_hint: 'Fehltreffer · wird nicht mehr vorgeschlagen',

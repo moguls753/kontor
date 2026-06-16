@@ -1,13 +1,26 @@
 # Resolves the set of in-scope account ids for the current user and applies the
 # §4a internal-transfer exclusion rule. `?scope=privat` narrows to the user's
-# personal (non-shared) accounts; the default (familie) is ALL of their accounts.
+# personal (non-shared) accounts; the default ("gemeinsam") is the shared
+# Gemeinschaftskonto(s). The two lenses PARTITION the accounts (personal vs shared),
+# so the same money is never summed across both within one view.
 module ScopedAccounts
   extend ActiveSupport::Concern
 
-  # The set `S` of in-scope account ids. Default = all accounts.
+  # The set `S` of in-scope account ids.
+  #   • privat    → the personal (non-shared) accounts.
+  #   • gemeinsam → the shared account(s) — the joint household pot.
+  # Fallback: when the user has NO shared account the gemeinsam lens would be empty,
+  # but the frontend hides the switch and pins to it (ScopeSwitch returns null when
+  # !hasShared), so a single-account install would then see an empty dashboard. In
+  # that case the lens collapses to ALL accounts (== personal, since none are shared).
   def scoped_account_ids
     accts = Current.user.accounts
-    (params[:scope] == "privat" ? accts.personal : accts).pluck(:id)
+    return accts.personal.pluck(:id) if params[:scope] == "privat"
+
+    # gemeinsam: the shared (joint) account(s). One query in the common case; the fallback
+    # pluck runs ONLY when there are no shared accounts (lens collapses to ALL == personal).
+    ids = accts.shared.pluck(:id)
+    ids.presence || accts.pluck(:id)
   end
 
   # §4a — the one rule. Restrict `scope` to in-scope accounts and exclude

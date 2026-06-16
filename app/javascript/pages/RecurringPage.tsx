@@ -34,7 +34,7 @@ interface TransferGroup {
   amount: number // absolute
   confidence_band: 'high' | 'medium' | 'low'
   next_expected_on: string | null
-  user_confirmed: boolean
+  status: 'active' | 'ended' // 'ended' only once BOTH legs are ended (mirrors SeriesRow gating)
   legs: RecurringSeries[]
 }
 const groupTransfers = (list: RecurringSeries[]): TransferGroup[] => {
@@ -54,7 +54,7 @@ const groupTransfers = (list: RecurringSeries[]): TransferGroup[] => {
       amount: Math.abs(parseFloat(rep.expected_amount ?? '0')) || 0,
       confidence_band: rep.confidence_band,
       next_expected_on: legs.map(l => l.next_expected_on).filter(Boolean).sort()[0] ?? null,
-      user_confirmed: legs.every(l => l.user_confirmed),
+      status: legs.every(l => l.status === 'ended') ? 'ended' : 'active',
       legs,
     }
   })
@@ -234,7 +234,7 @@ export default function RecurringPage() {
                     <TransferRow key={g.key} g={g}
                       open={expandedId === g.legs[0].id}
                       onToggle={() => setExpandedId(o => (o === g.legs[0].id ? null : g.legs[0].id))}
-                      onConfirm={() => g.legs.forEach(l => patchSeries(l.id, { user_confirmed: true }))}
+                      onEnd={() => g.legs.forEach(l => patchSeries(l.id, { status: 'ended' }))}
                       onDismiss={() => g.legs.forEach(l => dismissSeries(l.id))} />
                   ))
                 ) : (
@@ -242,7 +242,6 @@ export default function RecurringPage() {
                     <SeriesRow key={s.id} s={s}
                       open={expandedId === s.id}
                       onToggle={() => setExpandedId(o => (o === s.id ? null : s.id))}
-                      onConfirm={() => patchSeries(s.id, { user_confirmed: true })}
                       onEnd={() => patchSeries(s.id, { status: 'ended' })}
                       onDismiss={() => dismissSeries(s.id)} />
                   ))
@@ -260,12 +259,11 @@ interface SeriesRowProps {
   s: RecurringSeries
   open: boolean
   onToggle: () => void
-  onConfirm: () => void
   onEnd: () => void
   onDismiss: () => void
 }
 
-function SeriesRow({ s, open, onToggle, onConfirm, onEnd, onDismiss }: SeriesRowProps) {
+function SeriesRow({ s, open, onToggle, onEnd, onDismiss }: SeriesRowProps) {
   const { t } = useTranslation()
   const sign = s.direction === 'outflow' ? -1 : 1
   const cadenceLabel = CADENCE_KEYS.includes(s.cadence)
@@ -282,15 +280,12 @@ function SeriesRow({ s, open, onToggle, onConfirm, onEnd, onDismiss }: SeriesRow
           <div className="min-w-0">
             <div className="cp-name flex items-center gap-2">
               {s.canonical_name}
-              {s.user_confirmed && (
-                <span className="badge badge-ok"><span className="dot" />{t('recurring.confirmed')}</span>
-              )}
               {s.status === 'ended' && (
                 <span className="badge badge-warn"><span className="dot" />{t('recurring.status_ended')}</span>
               )}
-              {/* P4 — a still-active series whose next charge is past the grace window is
-                  "überfällig/pausiert". In practice this is a user_confirmed stopped series
-                  (non-confirmed ones get auto-ended), nudging the user to end it manually. */}
+              {/* A still-active series whose next charge is past the grace window is
+                  "überfällig/pausiert". reconcile_vanished auto-ends it on the next detect, so
+                  this surfaces only transiently (between going past-grace and the next run). */}
               {s.status === 'active' && s.overdue && (
                 <span className="badge badge-warn"><span className="dot" />{t('recurring.overdue')}</span>
               )}
@@ -348,9 +343,6 @@ function SeriesRow({ s, open, onToggle, onConfirm, onEnd, onDismiss }: SeriesRow
               (set on the Transactions page); editing it on the series would only diverge
               the label from the actual rows and changes nothing else. */}
           <div className="detail-field md:col-span-2 flex-row items-center gap-2 mt-1">
-            {!s.user_confirmed && (
-              <Btn variant="secondary" size="sm" icon="check" onClick={onConfirm}>{t('recurring.confirm')}</Btn>
-            )}
             {/* P4 — "Beendet": reversible manual stop (PATCH status:ended). STOP icon, not trash:
                 the series keeps its history and auto-revives if the pattern recurs. */}
             {s.status === 'active' && (
@@ -377,11 +369,11 @@ function ConfidenceDot({ band }: { band: 'high' | 'medium' | 'low' }) {
 
 // One row per own-account movement (mirror +X/−X legs merged). Neutral amount (it nets to
 // zero), expand shows the individual legs; confirm/dismiss fan out to all legs of the pair.
-function TransferRow({ g, open, onToggle, onConfirm, onDismiss }: {
+function TransferRow({ g, open, onToggle, onEnd, onDismiss }: {
   g: TransferGroup
   open: boolean
   onToggle: () => void
-  onConfirm: () => void
+  onEnd: () => void
   onDismiss: () => void
 }) {
   const { t } = useTranslation()
@@ -400,8 +392,8 @@ function TransferRow({ g, open, onToggle, onConfirm, onDismiss }: {
               {g.legs.length > 1 && (
                 <span className="chip" title={t('recurring.transfer_pair')} aria-label={t('recurring.transfer_pair')}>↔</span>
               )}
-              {g.user_confirmed && (
-                <span className="badge badge-ok"><span className="dot" />{t('recurring.confirmed')}</span>
+              {g.status === 'ended' && (
+                <span className="badge badge-warn"><span className="dot" />{t('recurring.status_ended')}</span>
               )}
             </div>
             <div className="flex items-center gap-2 flex-wrap mt-0.5">
@@ -435,8 +427,12 @@ function TransferRow({ g, open, onToggle, onConfirm, onDismiss }: {
             <div className="val flex items-center gap-1.5"><ConfidenceDot band={g.confidence_band} />{confidenceLabel}</div>
           </div>
           <div className="detail-field md:col-span-2 flex-row items-center gap-2 mt-1">
-            {!g.user_confirmed && (
-              <Btn variant="secondary" size="sm" icon="check" onClick={onConfirm}>{t('recurring.confirm')}</Btn>
+            {/* "Beendet": reversible manual stop, fanned out to BOTH legs (PATCH status:ended).
+                The transfer keeps its history and auto-revives if the movement recurs. */}
+            {g.status === 'active' && (
+              <Btn variant="ghost" size="sm" icon="stop" onClick={onEnd} title={t('recurring.mark_ended_hint')}>
+                {t('recurring.mark_ended')}
+              </Btn>
             )}
             <Btn variant="ghost" size="sm" icon="close" onClick={onDismiss} title={t('recurring.not_recurring_hint')}>
               {t('recurring.not_recurring')}

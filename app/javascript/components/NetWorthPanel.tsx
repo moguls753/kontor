@@ -22,7 +22,7 @@ function rangeFrom(r: NwRange): string | undefined {
   return d.toISOString().slice(0, 10)
 }
 
-// Net-worth-over-time for whichever scope the global Familie/Privat switch selects; no
+// Net-worth-over-time for whichever scope the global Gemeinsam/Privat switch selects; no
 // per-account isolation (PayPal ≈ €0, the broker is a flat pedestal, the card is a liability).
 // Liquide (cash you can spend) and Gesamt (incl. investments/savings) are shown SEPARATELY —
 // a [Gesamt | Liquide] toggle, one line at a time, never overlaid.

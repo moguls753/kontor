@@ -30,7 +30,7 @@ const pages: Record<View, PageComponent> = {
   settings: SettingsPage,
 }
 
-// Views whose data actually responds to the Familie/Privat scope — the switch is shown only
+// Views whose data actually responds to the Gemeinsam/Privat scope — the switch is shown only
 // here. Hidden on categories/settings (read nothing) AND accounts: the accounts page only
 // re-detects whether a shared account EXISTS (refreshHasShared); it never reads the scope
 // value, and a management page must always list every account regardless of lens.

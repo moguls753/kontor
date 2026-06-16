@@ -9,7 +9,7 @@ module Api
     #
     # Returns TWO aggregate lines — Liquide (excl. investment/savings) and Gesamt — over the
     # window where every reconstructable in-scope account has data, plus today's composition.
-    # Scope = account MEMBERSHIP (Familie = all, Privat = personal); net worth is a STOCK, so
+    # Scope = account MEMBERSHIP (Gemeinsam = shared, Privat = personal); net worth is a STOCK, so
     # we SUM balances and do NOT apply the cashflow's internal-transfer netting. NW1: the
     # `latest` totals equal the dashboard's balance for the same scope.
     class NetWorthController < ApplicationController

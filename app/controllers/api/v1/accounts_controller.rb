@@ -19,7 +19,7 @@ module Api
         classification_changed = attrs.key?(:role) || attrs.key?(:shared)
         attrs[:role_locked] = true if classification_changed
         account.update!(attrs)
-        # role/shared feed the Familie/Privat scope filter (and historically transfer
+        # role/shared feed the Gemeinsam/Privat scope filter (and historically transfer
         # classification), so re-run the post-sync pipeline when they change (debounced
         # per user). A pure rename doesn't affect classification → skip it.
         ProcessAccountDataJob.perform_later(Current.user.id) if classification_changed

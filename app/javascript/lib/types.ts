@@ -75,7 +75,6 @@ export interface RecurringSeries {
   confidence: string
   confidence_band: 'high' | 'medium' | 'low'
   status: 'active' | 'ended' | 'dismissed'
-  user_confirmed: boolean
   occurrences_count: number
   first_seen_on: string | null
   last_seen_on: string | null
@@ -277,7 +276,7 @@ export interface StatisticsData {
 // Net-worth-over-time (GET /api/v1/net_worth?scope&from&to). Two aggregate daily lines —
 // Liquide (excl. investment/savings) and Gesamt — reconstructed server-side from the
 // in-scope accounts' transactions; plus today's composition for a context line. Scope
-// (Familie/Privat) is the global switch; the chart just renders what the scope returns.
+// (Gemeinsam/Privat) is the global switch; the chart just renders what the scope returns.
 export interface NetWorthSeriesPoint {
   date: string
   liquid: string

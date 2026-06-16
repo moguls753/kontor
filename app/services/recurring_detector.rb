@@ -752,13 +752,12 @@ class RecurringDetector
                         .first
 
         if survivor
-          # MERGE: re-link members, OR user_confirmed, keep non-null category, max confidence.
+          # MERGE: re-link members, keep non-null category, max confidence.
           # The survivor's cadence/dates/occurrences_count are intentionally NOT recomputed
           # here — they are re-derived by the immediately-following persist loop in this same
           # run (self-heal), so only the carry-over fields below need to be merged.
           TransactionRecord.where(recurring_series_id: old_series.id)
                            .update_all(recurring_series_id: survivor.id)
-          survivor.user_confirmed = survivor.user_confirmed || old_series.user_confirmed
           survivor.category_id  ||= old_series.category_id
           survivor.confidence     = [ survivor.confidence || 0, old_series.confidence || 0 ].max
           survivor.save!
@@ -787,24 +786,18 @@ class RecurringDetector
         # A series is a derived aggregate of its member transactions. With ZERO live members it
         # represents nothing — there is no history to show and it leaks as a phantom into every
         # scope (a memberless series slips through the scope filter and renders as bogus income).
-        # DELETE it outright. The SOLE exception is a user_confirmed series: preserve the user's
-        # explicit choice (keep it active, just sync the count to an honest 0). dismissed series
-        # never reach here (the iterated scope is .active); their row is retained on purpose to
-        # block re-detection by fingerprint.
+        # DELETE it outright. dismissed series never reach here (the iterated scope is .active);
+        # their row is retained on purpose to block re-detection by fingerprint.
         if s.transaction_records.empty?
-          if s.user_confirmed
-            s.update_columns(occurrences_count: 0)
-          else
-            s.destroy!
-            ended += 1
-          end
+          s.destroy!
+          ended += 1
           next
         end
 
         # From here the series HAS members (real history). Lever A cleanup: a still-active
         # "irregular" leftover is a pre-Lever-A artifact (the detector no longer produces
-        # irregular ones) → end it (retaining its members as history) unless the user confirmed it.
-        if s.cadence == "irregular" && !s.user_confirmed
+        # irregular ones) → end it (retaining its members as history).
+        if s.cadence == "irregular"
           s.update!(status: "ended")
           ended += 1
           next
@@ -814,14 +807,11 @@ class RecurringDetector
       next if s.last_seen_on.nil?
 
       # end-grace (B4′ + P4): a series whose latest charge is past the grace window has stopped
-      # recurring → end it (keeps its members as history) UNLESS the user confirmed it. This now
-      # also catches a re-detected-but-stopped series (a cancelled salary whose ≥3 historical
-      # members still cluster but whose last payment is long past) — auto-ending it instead of
-      # leaving it active with a phantom next_expected_on. A user_confirmed stopped series is NOT
-      # auto-ended (the user owns that choice; the serializer surfaces it as `overdue` so they can
-      # end it manually). An ended series auto-revives via persist_series when its pattern recurs.
-      next if s.user_confirmed
-
+      # recurring → end it (keeps its members as history). This now also catches a
+      # re-detected-but-stopped series (a cancelled salary whose ≥3 historical members still
+      # cluster but whose last payment is long past) — auto-ending it instead of leaving it active
+      # with a phantom next_expected_on. An ended series auto-revives via persist_series when its
+      # pattern recurs.
       interval = (s.cadence_days || CADENCE_DAYS[s.cadence] || 30).to_i
       grace    = (interval * 1.5).round + 5
       if s.last_seen_on < (today - grace)
@@ -875,7 +865,6 @@ class RecurringDetector
       currency: s.currency,
       confidence: s.confidence,
       status: s.status,
-      user_confirmed: s.user_confirmed,
       occurrences_count: s.occurrences_count,
       first_seen_on: s.first_seen_on,
       last_seen_on: s.last_seen_on,

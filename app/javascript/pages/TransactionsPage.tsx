@@ -91,9 +91,13 @@ export default function TransactionsPage() {
     return () => controller.abort()
   }, [debouncedSearch, accountId, categoryId, dateFrom, dateTo, uncategorized, direction, page, retryKey, scope])
 
-  // In "privat" the shared (Gemeinschafts-) accounts are out of scope, so listing
-  // them in the filter would only yield empty results — drop them from the options.
-  const visibleAccounts = accounts.filter(a => scope !== 'privat' || !a.shared)
+  // The lenses partition the accounts: "privat" shows only personal accounts, while
+  // "gemeinsam" shows only the shared (Gemeinschafts-) account. Listing an out-of-scope
+  // account in the filter would only yield empty results — drop them from the options.
+  // (When the user has no shared account the gemeinsam lens collapses to all accounts on
+  // the backend, and `a.shared` is false for every account, so they all stay visible.)
+  const visibleAccounts = accounts.filter(a =>
+    scope === 'privat' ? !a.shared : (a.shared || !accounts.some(x => x.shared)))
   const hasMultipleAccounts = visibleAccounts.length > 1
 
   // If the selected account is hidden by the active scope, clear it so the list

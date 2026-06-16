@@ -14,6 +14,7 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
 
     it "returns the user's own series and not another user's" do
       mine = create(:recurring_series, user: user, canonical_name: "Spotify")
+      create(:transaction_record, account: account, recurring_series: mine, amount: -9.99)
       other = create(:recurring_series, user: create(:user), canonical_name: "Netflix")
 
       get api_v1_recurring_index_path, as: :json
@@ -25,6 +26,7 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
 
     it "shows a NULL-merchant_type series by default (B1′)" do
       s = create(:recurring_series, user: user, merchant_type: nil)
+      create(:transaction_record, account: account, recurring_series: s, amount: -9.99)
 
       get api_v1_recurring_index_path, as: :json
 
@@ -42,47 +44,65 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       hidden.each { |s| expect(ids).not_to include(s.id) }
     end
 
-    it "filters out a shared-account-only series in ?scope=privat" do
+    it "partitions series by lens: personal-only in privat, shared-only in gemeinsam" do
       personal_acct = create(:account, bank_connection: bc, shared: false)
       shared_acct   = create(:account, bank_connection: bc, shared: true)
 
       mine = create(:recurring_series, user: user, canonical_name: "Spotify Privat")
       create(:transaction_record, account: personal_acct, recurring_series: mine, amount: -12.99)
 
-      gemein = create(:recurring_series, user: user, canonical_name: "Netflix Familie",
+      gemein = create(:recurring_series, user: user, canonical_name: "Netflix Gemeinsam",
                                          fingerprint: "scopegemein00001")
       create(:transaction_record, account: shared_acct, recurring_series: gemein, amount: -15.99)
 
+      # Privat: only the personal-account series.
       get api_v1_recurring_index_path, params: { scope: "privat" }, as: :json
       ids = response.parsed_body["series"].map { |x| x["id"] }
       expect(ids).to include(mine.id)
       expect(ids).not_to include(gemein.id)
 
-      get api_v1_recurring_index_path, params: { scope: "familie" }, as: :json
+      # Gemeinsam (default): only the shared-account series — the lenses partition, no overlap.
+      get api_v1_recurring_index_path, as: :json
       ids = response.parsed_body["series"].map { |x| x["id"] }
-      expect(ids).to include(mine.id, gemein.id)
+      expect(ids).to include(gemein.id)
+      expect(ids).not_to include(mine.id)
     end
 
-    # §4a — a personal→shared recurring transfer (e.g. a rent share into the joint account)
-    # is a real Ausgabe under Privat (counterpart out of scope), not an Umbuchung.
-    it "shows a personal→shared recurring transfer as an expense (not Umbuchung) in ?scope=privat" do
+    # §4a — a personal→shared recurring contribution (e.g. a rent share into the joint
+    # account) is stored as two single-account legs. Under Privat the giro-side OUTFLOW leg
+    # is a real Ausgabe (counterpart out of scope), not an Umbuchung. Under Gemeinsam the
+    # joint-side INFLOW leg is real income (counterpart — the personal giro — out of THAT
+    # scope), not netted away. The lenses never see the other side's leg.
+    it "classifies a personal→shared contribution per lens (expense in privat, income in gemeinsam)" do
       personal = create(:account, bank_connection: bc, shared: false)
       shared   = create(:account, bank_connection: bc, shared: true)
-      rent = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Mietanteil")
-      create(:transaction_record, account: personal, recurring_series: rent, amount: -445,
-        transfer_group_id: "tg-rent", transfer_counterpart_account: shared)
 
-      # Privat: counterpart out of scope → expense → in the DEFAULT list (no include_transfers)
+      out_leg = create(:recurring_series, user: user, direction: "outflow", canonical_name: "Mietanteil",
+        fingerprint: "scope-out-00001")
+      create(:transaction_record, account: personal, recurring_series: out_leg, amount: -445,
+        transfer_group_id: "tg-rent-out", transfer_counterpart_account: shared)
+
+      in_leg = create(:recurring_series, :inflow, user: user, canonical_name: "Mietanteil",
+        fingerprint: "scope-in-000001")
+      create(:transaction_record, account: shared, recurring_series: in_leg, amount: 445,
+        transfer_group_id: "tg-rent-in", transfer_counterpart_account: personal)
+
+      # Privat: the giro-side outflow leg counts as a real expense; the joint-side leg is out of scope.
       get api_v1_recurring_index_path, params: { scope: "privat" }, as: :json
-      row = response.parsed_body["series"].find { |x| x["id"] == rent.id }
-      expect(row).to be_present
-      expect(row["flow_bucket"]).to eq("expense")
+      rows = response.parsed_body["series"]
+      out_row = rows.find { |x| x["id"] == out_leg.id }
+      expect(out_row).to be_present
+      expect(out_row["flow_bucket"]).to eq("expense")
+      expect(rows.map { |x| x["id"] }).not_to include(in_leg.id)
 
-      # Familie: both legs in scope → net-zero Umbuchung → hidden unless include_transfers
-      get api_v1_recurring_index_path, params: { scope: "familie" }, as: :json
-      expect(response.parsed_body["series"].map { |x| x["id"] }).not_to include(rent.id)
-      get api_v1_recurring_index_path, params: { scope: "familie", include_transfers: "true" }, as: :json
-      expect(response.parsed_body["series"].find { |x| x["id"] == rent.id }["flow_bucket"]).to eq("transfer")
+      # Gemeinsam (default): the joint-side inflow leg surfaces as real income (NOT netted to a
+      # transfer); the giro-side leg drops out (no member in the shared account).
+      get api_v1_recurring_index_path, as: :json
+      rows = response.parsed_body["series"]
+      in_row = rows.find { |x| x["id"] == in_leg.id }
+      expect(in_row).to be_present
+      expect(in_row["flow_bucket"]).to eq("income")
+      expect(rows.map { |x| x["id"] }).not_to include(out_leg.id)
     end
 
     # §4 fix — a personal→personal transfer has BOTH legs in scope, so the §4a net-zero
@@ -103,6 +123,7 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
 
     it "keeps a subscription series visible (consumption filter only hides shopping/groceries/transport)" do
       sub = create(:recurring_series, user: user, merchant_type: "subscription", canonical_name: "Crowdfarming")
+      create(:transaction_record, account: account, recurring_series: sub, amount: -9.99)
 
       get api_v1_recurring_index_path, as: :json
 
@@ -176,6 +197,7 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
 
     it "hides ended series by default but shows them with ?status=ended" do
       ended = create(:recurring_series, :monthly, user: user, status: "ended", canonical_name: "Cancelled Sub")
+      create(:transaction_record, account: account, recurring_series: ended, amount: -9.99)
 
       get api_v1_recurring_index_path, as: :json
       expect(response.parsed_body["series"].map { |x| x["id"] }).not_to include(ended.id)
@@ -215,16 +237,15 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
   describe "PATCH /api/v1/recurring/:id (update)" do
     before { login }
 
-    it "confirms and sets a category" do
+    it "sets a category" do
       series = create(:recurring_series, user: user)
       category = create(:category, user: user)
 
       patch api_v1_recurring_path(series),
-        params: { recurring_series: { user_confirmed: true, category_id: category.id } }, as: :json
+        params: { recurring_series: { category_id: category.id } }, as: :json
 
       expect(response).to have_http_status(:ok)
-      expect(series.reload.user_confirmed).to be(true)
-      expect(series.category_id).to eq(category.id)
+      expect(series.reload.category_id).to eq(category.id)
     end
 
     # P4 — status allowlist now includes "ended": the user can manually stop a series
@@ -341,11 +362,11 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       expect(row["overdue"]).to be(false)
     end
 
-    # A user_confirmed stopped series is NOT auto-ended (the user owns it), so the only way
-    # the UI flags it is via overdue=true while it is still active.
-    it "is true for a still-active user_confirmed stopped series" do
+    # overdue is a pure serializer flag on next_expected_on; the index endpoint does not run
+    # reconcile, so a still-active series whose next charge is long past surfaces as overdue.
+    it "is true for a still-active series past its grace window" do
       series = create(:recurring_series, :monthly, user: user, cadence_days: 30,
-        status: "active", user_confirmed: true, next_expected_on: Date.current - 80)
+        status: "active", next_expected_on: Date.current - 80)
       create(:transaction_record, account: account, recurring_series: series, amount: -9.99)
 
       get api_v1_recurring_index_path, as: :json

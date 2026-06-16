@@ -436,7 +436,7 @@ RSpec.describe TransferMatcher do
 
   # Integration with the §4a exclusion: once marked, the funding leg's counterpart
   # is the PayPal account, so in_scope nets it out → no double-count, hidden from
-  # the list (under both Familie and Privat, since PayPal is personal by default).
+  # the list (with all accounts in scope, and under Privat, since PayPal is personal).
   describe "in_scope nets the marked conduit leg (no double-count)" do
     let(:paypal_bc) { create(:bank_connection, :paypal, user: user) }
     let!(:paypal) { create(:account, bank_connection: paypal_bc, account_uid: "paypal", iban: nil, name: "PayPal", role_locked: true) }
@@ -448,19 +448,19 @@ RSpec.describe TransferMatcher do
            .where("transfer_counterpart_account_id IS NULL OR transfer_counterpart_account_id NOT IN (?)", ids)
     end
 
-    it "excludes the funding Lastschrift from the user's flows after matching (Familie + Privat)" do
+    it "excludes the funding Lastschrift from the user's flows after matching (all accounts + Privat)" do
       funding = leg(account: privat, amount: -188.95,
         creditor_name: "PayPal Europe S.a.r.l. et Cie S.C.A", creditor_iban: "LU89751000135104200E")
       purchase = leg(account: paypal, amount: -188.95, creditor_name: "TRMNL")
 
       subject.match
 
-      # Familie = all accounts in scope → funding leg's counterpart (PayPal) in
-      # scope → excluded; the PayPal purchase stays (counted once).
-      familie_ids = user.accounts.pluck(:id)
-      familie = in_scope(TransactionRecord.all, familie_ids)
-      expect(familie).to include(purchase)
-      expect(familie).not_to include(funding)
+      # All accounts in scope → funding leg's counterpart (PayPal) in scope →
+      # excluded; the PayPal purchase stays (counted once).
+      all_ids = user.accounts.pluck(:id)
+      all_scope = in_scope(TransactionRecord.all, all_ids)
+      expect(all_scope).to include(purchase)
+      expect(all_scope).not_to include(funding)
 
       # Privat = personal accounts (PayPal is personal) → still in scope → still excluded.
       privat_ids = user.accounts.personal.pluck(:id)

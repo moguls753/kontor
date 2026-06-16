@@ -35,7 +35,7 @@ export default function TopBar({ email, onLogout, onMenuToggle, pageTitle, theme
       <div className="page-title desktop-only text-base">{pageTitle}</div>
       <div className="flex-1" />
 
-      {/* Scope (Familie/Privat) is a global lens, but only rendered where the page actually
+      {/* Scope (Gemeinsam/Privat) is a global lens, but only rendered where the page actually
           reads it — hidden on Kategorien/Einstellungen, where it would be a no-op. */}
       {showScope && (
         <>

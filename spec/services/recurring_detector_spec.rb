@@ -178,17 +178,11 @@ RSpec.describe RecurringDetector do
       expect(transfers.count).to eq(2)
       ids_before = transfers.pluck(:id).sort
 
-      # the user confirms + renames one of the two split series
-      pinned = transfers.first
-      pinned.update!(user_confirmed: true)
-      pinned_id = pinned.id
-
       2.times { described_class.new(user).detect }
 
       again = user.recurring_series.where(canonical_name: "Eike Rackwitz")
       expect(again.count).to eq(2)                      # no duplicate spawned
       expect(again.pluck(:id).sort).to eq(ids_before)   # SAME rows reconciled, not reset
-      expect(again.find(pinned_id).user_confirmed).to be(true) # user edit survives
     end
   end
 
@@ -316,17 +310,14 @@ RSpec.describe RecurringDetector do
       subject.detect
       expect(user.recurring_series.count).to eq(2)
 
-      # pin user state on one of them
-      pinned = user.recurring_series.order(:expected_amount).first
-      pinned.update!(user_confirmed: true)
-      pinned_amount = pinned.expected_amount
+      tracked = user.recurring_series.order(:expected_amount).first
+      tracked_amount = tracked.expected_amount
 
       2.times { described_class.new(user).detect }
 
       expect(user.recurring_series.count).to eq(2)
-      reloaded = user.recurring_series.find_by(expected_amount: pinned_amount)
-      expect(reloaded.id).to eq(pinned.id)
-      expect(reloaded.user_confirmed).to be(true)
+      reloaded = user.recurring_series.find_by(expected_amount: tracked_amount)
+      expect(reloaded.id).to eq(tracked.id)   # SAME row reconciled across runs, not duplicated
     end
 
     # #14 — §5.6 stateful match: a price drift that arrives across TWO separate
@@ -370,11 +361,9 @@ RSpec.describe RecurringDetector do
         cadence: "monthly", cadence_days: 30,
         expected_amount: -10.00, amount_min: -10.00, amount_max: -10.00,
         occurrences_count: 3, last_seen_on: Date.current - 400)
-      # user_confirmed so the memberless decoy survives reconcile (a memberless unconfirmed
-      # series would be deleted) — keeps the test isolated to the B2′ matcher.
       far = create(:recurring_series, user: user, canonical_name: "Patreon",
         direction: "outflow", currency: "EUR", fingerprint: fp_patreon,
-        cadence: "monthly", cadence_days: 30, user_confirmed: true,
+        cadence: "monthly", cadence_days: 30,
         expected_amount: -11.00, amount_min: -11.00, amount_max: -11.00,
         occurrences_count: 3, last_seen_on: Date.current - 400)
 
@@ -383,13 +372,13 @@ RSpec.describe RecurringDetector do
 
       described_class.new(user).detect
 
-      expect(user.recurring_series.count).to eq(2)  # no third row
+      # The cluster extended `near` (the nearer band) → it owns the 4 real members. `far` got
+      # nothing, so it stays a memberless seed and reconcile culls it. Exactly one row remains.
+      expect(user.recurring_series.count).to eq(1)
       near.reload
-      far.reload
       expect(near.occurrences_count).to eq(4)       # absorbed the new cluster
       expect(near.amount_min).to eq(-10.30)
-      expect(far.amount_min).to eq(-11.00)          # untouched (the -10.30 cluster went to `near`)
-      expect(far.last_seen_on).to eq(Date.current - 400)
+      expect(RecurringSeries.exists?(far.id)).to be(false)
     end
 
     it "tie-breaks equidistant same-fingerprint candidates on the lower id" do
@@ -399,10 +388,9 @@ RSpec.describe RecurringDetector do
         cadence: "monthly", cadence_days: 30,
         expected_amount: -10.00, amount_min: -10.00, amount_max: -10.00,
         occurrences_count: 3, last_seen_on: Date.current - 400)
-      # user_confirmed so the memberless decoy survives reconcile (see note above).
       higher_id = create(:recurring_series, user: user, canonical_name: "Patreon",
         direction: "outflow", currency: "EUR", fingerprint: fp_patreon,
-        cadence: "monthly", cadence_days: 30, user_confirmed: true,
+        cadence: "monthly", cadence_days: 30,
         expected_amount: -10.80, amount_min: -10.80, amount_max: -10.80,
         occurrences_count: 3, last_seen_on: Date.current - 400)
       expect(lower_id.id).to be < higher_id.id
@@ -411,11 +399,12 @@ RSpec.describe RecurringDetector do
 
       described_class.new(user).detect
 
-      expect(user.recurring_series.count).to eq(2)
+      # Both 0.40 from -10.40 → tie; [gap, id] picks the lower id. It absorbs the cluster;
+      # higher_id gets nothing → memberless → culled by reconcile.
+      expect(user.recurring_series.count).to eq(1)
       lower_id.reload
-      higher_id.reload
       expect(lower_id.occurrences_count).to eq(4)   # lower id won the tie
-      expect(higher_id.amount_min).to eq(-10.80)    # untouched (the -10.40 cluster went to lower_id)
+      expect(RecurringSeries.exists?(higher_id.id)).to be(false)
     end
   end
 
@@ -594,16 +583,13 @@ RSpec.describe RecurringDetector do
       expect(TransactionRecord.where(recurring_series_id: series.id).count).to eq(2)
     end
 
-    it "deletes a memberless 'irregular' leftover, but keeps a user_confirmed one" do
+    it "deletes a memberless 'irregular' leftover" do
       leftover = create(:recurring_series, user: user, status: "active", cadence: "irregular",
         canonical_name: "Old Irregular", last_seen_on: Date.current - 10, cadence_days: 20)
-      confirmed = create(:recurring_series, user: user, status: "active", cadence: "irregular",
-        canonical_name: "Kept Irregular", last_seen_on: Date.current - 10, cadence_days: 20, user_confirmed: true)
 
       described_class.new(user).detect
 
       expect(RecurringSeries.exists?(leftover.id)).to be(false)  # memberless artifact deleted
-      expect(confirmed.reload.status).to eq("active")            # user_confirmed protected
     end
   end
 
@@ -633,22 +619,6 @@ RSpec.describe RecurringDetector do
 
       series = user.recurring_series.find_by(canonical_name: "Spotify")
       expect(series.status).to eq("active")
-    end
-
-    it "does NOT auto-end a user_confirmed stopped series (user owns that choice)" do
-      # Same stopped shape, but user_confirmed → grace-end is skipped; the serializer's `overdue`
-      # flag (request spec) is what surfaces it for a manual end.
-      [ 120, 150, 180 ].each { |ago| charge(name: "Confirmed Stopped", amount: -50.00, date: Date.current - ago) }
-      # pre-create the confirmed series so the re-detect upserts onto it (preserving user_confirmed)
-      create(:recurring_series, :monthly, user: user, canonical_name: "Confirmed Stopped",
-        direction: "outflow", currency: "EUR", expected_amount: -50.00,
-        amount_min: -50.00, amount_max: -50.00, user_confirmed: true, status: "active")
-
-      described_class.new(user).detect
-
-      series = user.recurring_series.find_by(canonical_name: "Confirmed Stopped")
-      expect(series.user_confirmed).to be(true)
-      expect(series.status).to eq("active")   # NOT auto-ended
     end
 
     it "auto-revives an ended series when its pattern reappears (regression guard)" do
@@ -782,17 +752,6 @@ RSpec.describe RecurringDetector do
       expect(TransactionRecord.where(recurring_series_id: spotify.id).count).to eq(4)
     end
 
-    it "keeps a user_confirmed memberless series active and syncs its count to 0 (cosmetic)" do
-      series = create(:recurring_series, user: user, status: "active", cadence: "monthly",
-        cadence_days: 30, canonical_name: "Confirmed Sub", user_confirmed: true,
-        last_seen_on: Date.current - 20, occurrences_count: 4)
-
-      described_class.new(user).detect
-
-      series.reload
-      expect(series.status).to eq("active")        # user_confirmed protection intact
-      expect(series.occurrences_count).to eq(0)    # honest: 0 live members
-    end
   end
 
   describe "aggregator sub-merchant extraction (Fix 2)" do
@@ -1162,13 +1121,13 @@ RSpec.describe RecurringDetector do
       http
     end
 
-    it "re-points a series and preserves user_confirmed (S2)" do
+    it "re-points a series on a canonical upgrade (S2)" do
       # deterministic alias keys the existing series
       create(:merchant_alias, user: user, raw_key: "spotify", canonical_name: "Spotify", source: "deterministic", merchant_type: nil)
       fp = Digest::SHA256.hexdigest("outflow|EUR|spotify")[0, 16]
       series = create(:recurring_series, user: user, canonical_name: "Spotify",
         direction: "outflow", currency: "EUR", fingerprint: fp,
-        expected_amount: -12.99, amount_min: -12.99, amount_max: -12.99, user_confirmed: true)
+        expected_amount: -12.99, amount_min: -12.99, amount_max: -12.99)
 
       monthly_dates(4).each { |d| charge(name: "spotify", amount: -12.99, date: d) }
       # LLM upgrades "spotify" → "Spotify AB"
@@ -1180,7 +1139,6 @@ RSpec.describe RecurringDetector do
       expect(series.canonical_name).to eq("Spotify AB")
       new_fp = Digest::SHA256.hexdigest("outflow|EUR|spotify ab")[0, 16]
       expect(series.fingerprint).to eq(new_fp)
-      expect(series.user_confirmed).to be(true)
     end
 
     # #9 — model-level rename-recompute: renaming canonical_name on the model resyncs
@@ -1208,7 +1166,7 @@ RSpec.describe RecurringDetector do
       # fingerprint to fingerprint_for(outflow, EUR, "Spotify Old").
       series = create(:recurring_series, user: user, canonical_name: "Spotify Old",
         direction: "outflow", currency: "EUR",
-        expected_amount: -12.99, amount_min: -12.99, amount_max: -12.99, user_confirmed: true)
+        expected_amount: -12.99, amount_min: -12.99, amount_max: -12.99)
       expect(series.fingerprint).to eq(RecurringSeries.fingerprint_for("outflow", "EUR", "Spotify Old"))
 
       monthly_dates(4).each { |d| charge(name: "spotify", amount: -12.99, date: d) }
@@ -1222,7 +1180,6 @@ RSpec.describe RecurringDetector do
       series.reload
       expect(series.canonical_name).to eq("Spotify New")
       expect(series.fingerprint).to eq(RecurringSeries.fingerprint_for("outflow", "EUR", "Spotify New"))
-      expect(series.user_confirmed).to be(true)
     end
 
     it "merges two aliases that upgrade to the same canonical (B3′)" do
@@ -1234,7 +1191,7 @@ RSpec.describe RecurringDetector do
       cat = create(:category, user: user)
       s_a = create(:recurring_series, user: user, canonical_name: "Spotify",
         direction: "outflow", currency: "EUR", fingerprint: fp_a,
-        expected_amount: -12.99, amount_min: -12.99, amount_max: -12.99, user_confirmed: true)
+        expected_amount: -12.99, amount_min: -12.99, amount_max: -12.99)
       s_b = create(:recurring_series, user: user, canonical_name: "Spotify Ab",
         direction: "outflow", currency: "EUR", fingerprint: fp_b,
         expected_amount: -12.99, amount_min: -12.99, amount_max: -12.99, category: cat)
@@ -1245,16 +1202,17 @@ RSpec.describe RecurringDetector do
         { raw: "spotify ab", canonical: "Spotify", type: "subscription" }
       ])
 
-      # seed some tx so resolve() is exercised on both keys
+      # seed tx on INTERLEAVED dates (distinct, not duplicate) so the two aliases'
+      # charges merge into one clean recurring series — so the survivor stands on its own
+      # members after the merge, not on a now-removed user_confirmed shell.
       monthly_dates(4).each { |d| charge(name: "spotify", amount: -12.99, date: d) }
-      monthly_dates(4).each { |d| charge(name: "spotify ab", amount: -12.99, date: d) }
+      monthly_dates(4, anchor: Date.current - 20).each { |d| charge(name: "spotify ab", amount: -12.99, date: d) }
 
       described_class.new(user).detect
 
       survivors = user.recurring_series.where(fingerprint: Digest::SHA256.hexdigest("outflow|EUR|spotify")[0, 16])
       expect(survivors.count).to eq(1)
       survivor = survivors.first
-      expect(survivor.user_confirmed).to be(true)
       expect(survivor.category_id).to eq(cat.id)
       expect(RecurringSeries.exists?(s_b.id)).to be(false) if s_b.id != survivor.id
     end

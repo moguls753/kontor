@@ -113,10 +113,11 @@ class RecurringSeries < ApplicationRecord
     members ||= transaction_records.to_a
 
     # A matched transfer is a net-zero "Umbuchung" only when its counterpart account is ALSO
-    # in scope (mirrors ScopedAccounts#in_scope §4a). scope_ids nil (Familie / unscoped) →
-    # any matched transfer counts (unchanged). Under Privat a transfer to the out-of-scope
-    # joint account has its counterpart excluded → not net-zero → falls through to expense,
-    # exactly as the dashboard/statistics treat it.
+    # in scope (mirrors ScopedAccounts#in_scope §4a). scope_ids nil (unscoped — only a direct
+    # model/spec call now; every controller passes its scoped ids) → any matched transfer
+    # counts. With a scoped lens a transfer to an out-of-scope account has its counterpart
+    # excluded → not net-zero → falls through to a real flow: under Privat a giro→joint
+    # contribution is an expense; under Gemeinsam the joint-side inflow leg is income.
     net_zero_transfer = members.any? do |m|
       next false if m.transfer_group_id.blank?
 

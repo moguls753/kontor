@@ -191,7 +191,7 @@ RSpec.describe RecurringSeries, type: :model do
       create(:transaction_record, account: giro, recurring_series: series, amount: -445,
         transfer_group_id: "g-rent", transfer_counterpart_account: shared)
 
-      expect(series.flow_bucket).to eq("transfer")                          # Familie (unscoped)
+      expect(series.flow_bucket).to eq("transfer")                          # unscoped (no scope_ids)
       expect(series.flow_bucket(scope_ids: [ giro.id ])).to eq("expense")   # Privat: counterpart out of scope
       expect(series.flow_bucket(scope_ids: [ giro.id, shared.id ])).to eq("transfer") # both in scope
     end

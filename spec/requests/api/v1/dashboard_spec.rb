@@ -81,7 +81,7 @@ RSpec.describe "Api::V1::Dashboard", type: :request do
     expect(body["expenses"]).to eq("0.0")
   end
 
-  it "counts a cross-scope transfer leg as a flow in privat but neutral in familie" do
+  it "counts a cross-scope contribution per lens (income to the joint pot, expense from privat)" do
     bc = create(:bank_connection, user: user)
     privat = create(:account, bank_connection: bc, balance_amount: 1000, shared: false)
     gemein = create(:account, bank_connection: bc, balance_amount: 500, shared: true)
@@ -93,11 +93,13 @@ RSpec.describe "Api::V1::Dashboard", type: :request do
     create(:transaction_record, account: gemein, amount: 70, booking_date: Date.current,
                                 transfer_group_id: group, transfer_counterpart_account: privat)
 
-    # Familie: both legs in scope → net zero → neutral.
-    get api_v1_dashboard_path, params: { scope: "familie" }, as: :json
-    fam = response.parsed_body
-    expect(fam["income"]).to eq("0.0")
-    expect(fam["expenses"]).to eq("0.0")
+    # Gemeinsam (default): only the shared account is in scope → the +70 joint-side leg's
+    # counterpart (the personal giro) is out of scope → it counts as a real inflow to the pot.
+    get api_v1_dashboard_path, as: :json
+    gem = response.parsed_body
+    expect(gem["income"]).to eq("70.0")
+    expect(gem["expenses"]).to eq("0.0")
+    expect(gem["total_balance"]).to eq("500.0")
 
     # Privat: the shared account drops out of S → the -70 leg's counterpart is now
     # out of scope → it counts as a real outflow; the +70 leg vanishes with its account.
@@ -106,6 +108,21 @@ RSpec.describe "Api::V1::Dashboard", type: :request do
     expect(priv["income"]).to eq("0.0")
     expect(priv["expenses"]).to eq("-70.0")
     expect(priv["total_balance"]).to eq("1000.0")
+  end
+
+  # A1 fallback: with NO shared account the default (gemeinsam) lens would be empty, so it
+  # collapses to ALL accounts — a single-account install must still see its money.
+  it "falls back to all accounts in the default lens when the user has no shared account" do
+    bc = create(:bank_connection, user: user)
+    a = create(:account, bank_connection: bc, balance_amount: 600)
+    b = create(:account, bank_connection: bc, balance_amount: 400)
+    create(:transaction_record, :credit, account: a, amount: 150, booking_date: Date.current)
+
+    get api_v1_dashboard_path, as: :json
+    body = response.parsed_body
+    expect(body["total_balance"]).to eq("1000.0") # both accounts, not an empty shared scope
+    expect(body["income"]).to eq("150.0")
+    expect(body["accounts"].map { |x| x["id"] }).to contain_exactly(a.id, b.id)
   end
 
   it "counts an unmatched inflow as income with correct total_balance" do

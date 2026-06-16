@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useScope, type Scope } from '../lib/scope'
 
-const scopes: Scope[] = ['familie', 'privat']
+const scopes: Scope[] = ['gemeinsam', 'privat']
 
 export default function ScopeSwitch() {
   const { t } = useTranslation()

@@ -27,7 +27,7 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     expect(remittances).not_to include("Gemeinschaft tx")
   end
 
-  it "shows a cross-scope transfer leg as a flow in privat but hides it in familie" do
+  it "shows a cross-scope contribution leg per lens (joint side in gemeinsam, personal side in privat)" do
     personal_acct = create(:account, bank_connection: bc, shared: false)
     shared_acct   = create(:account, bank_connection: bc, shared: true)
     group = SecureRandom.uuid
@@ -36,9 +36,10 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     create(:transaction_record, account: shared_acct, amount: 70, remittance: "Ansparen in",
                                 transfer_group_id: group, transfer_counterpart_account: personal_acct)
 
-    # Familie: both legs in scope → internal transfer → both excluded.
-    get api_v1_transactions_path, params: { scope: "familie" }, as: :json
-    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).not_to include("Ansparen", "Ansparen in")
+    # Gemeinsam (default): only the shared account in scope → the joint-side +70 leg's
+    # counterpart is out of scope → it shows as a real inflow; the personal leg is hidden.
+    get api_v1_transactions_path, as: :json
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Ansparen in"])
 
     # Privat: shared account out of scope → the personal leg becomes a real flow.
     get api_v1_transactions_path, params: { scope: "privat" }, as: :json
@@ -78,7 +79,7 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     create(:transaction_record, account: account, amount: -90, remittance: "Orphaned leg",
                                 transfer_group_id: SecureRandom.uuid, transfer_counterpart_account: nil)
 
-    get api_v1_transactions_path, params: { scope: "familie" }, as: :json
+    get api_v1_transactions_path, as: :json
     expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to include("Orphaned leg")
   end
 
@@ -90,7 +91,7 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     create(:transaction_record, account: other_acct, amount: 90, remittance: "Matched in",
                                 transfer_group_id: group, transfer_counterpart_account: account)
 
-    get api_v1_transactions_path, params: { scope: "familie" }, as: :json
+    get api_v1_transactions_path, as: :json
     remittances = response.parsed_body["transactions"].map { |t| t["remittance"] }
     expect(remittances).not_to include("Matched out", "Matched in")
   end

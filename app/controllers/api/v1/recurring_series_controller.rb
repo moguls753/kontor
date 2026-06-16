@@ -7,17 +7,14 @@ module Api
         scope = Current.user.recurring_series
                        .includes(:category, transaction_records: %i[account transfer_counterpart_account])
 
-        # §4b: scope the series to the active lens. "familie" (all accounts) never
-        # narrows, so only filter in "privat": drop any series whose members are ALL
-        # out of scope (e.g. booked only on a shared/Gemeinschafts-account). A series
-        # with no members is left untouched (nothing to place out of scope). The
-        # §4a in_scope rule means a cross-scope transfer leg still counts as in-scope
-        # here, so a mixed transfer series stays visible in "privat".
-        if params[:scope] == "privat"
-          # A6 — shared "≥1 in-scope member (or no members)" filter, keyed on account
-          # membership only (not the §4a net-zero exclusion). Empty scope → none.
-          scope = scope.merge(RecurringSeries.with_member_in(scoped_account_ids))
-        end
+        # §4b: scope the series to the active lens. BOTH lenses now narrow to a real
+        # account subset (privat = personal, gemeinsam = shared), so we always drop any
+        # series with no member in the active accounts — e.g. under "gemeinsam" the
+        # giro-side outflow leg of a contribution (booked on the personal giro) falls
+        # away, leaving only the joint-side inflow leg, which surfaces as real income.
+        # A6 — keyed on account MEMBERSHIP only (not the §4a net-zero exclusion), so a
+        # cross-scope transfer leg still counts here. Empty scope → none.
+        scope = scope.merge(RecurringSeries.with_member_in(scoped_account_ids))
 
         # default: show only ACTIVE series. "ended" (the pattern stopped) and "dismissed"
         # are hidden from this page — it's a live overview of running contracts, not a
@@ -101,7 +98,7 @@ module Api
       private
 
       def update_params
-        permitted = params.require(:recurring_series).permit(:user_confirmed, :category_id, :status, :canonical_name)
+        permitted = params.require(:recurring_series).permit(:category_id, :status, :canonical_name)
         # only allow user-settable statuses. "ended" = manual stop (P4): the user marks a series
         # done; it auto-revives via detection if the pattern reappears. "dismissed" = permanent
         # false-positive reject. "active" = un-end (also re-derived automatically by detection).
@@ -114,12 +111,21 @@ module Api
         permitted
       end
 
-      # §4a scope-aware bucketing: under Privat a transfer whose counterpart is out of scope
-      # (e.g. a cost-share into the joint account) is a real flow, not an Umbuchung. Familie
-      # (nil) keeps the unscoped behaviour. Shared by the index and the show/update responses
-      # so a series can never be classified as a transfer in one view and an expense in another.
+      # §4a scope-aware bucketing: a transfer whose counterpart is OUT of the active scope
+      # (e.g. a giro→joint cost-share seen from the gemeinsam lens, where only the joint
+      # account is in scope) is a real flow, not an Umbuchung. BOTH lenses pass their scoped
+      # ids now (never nil): under "gemeinsam" the joint-side inflow leg (counterpart = the
+      # personal giro, out of scope) must classify as income, not be netted to a transfer —
+      # passing nil here would re-net it and hide the contribution (the bug this fixes).
+      #
+      # Shared by the index and the show/update responses so they AGREE when passed the SAME
+      # ?scope lens (the frontend forwards it on every PATCH, RecurringPage withScope). A
+      # no-scope #show/#update defaults to the gemeinsam (shared) ids, so a cross-scope
+      # contribution leg could bucket differently than a privat index — callers intending a
+      # specific lens must pass ?scope. (No user-visible divergence today: the #show drill
+      # reads only data.transactions, never data.series.flow_bucket.)
       def bucket_scope_ids
-        params[:scope] == "privat" ? scoped_account_ids : nil
+        scoped_account_ids
       end
 
       def recurring_series_json(s, flow_bucket: nil)
@@ -139,7 +145,6 @@ module Api
           confidence: s.confidence,
           confidence_band: confidence_band(s.confidence),
           status: s.status,
-          user_confirmed: s.user_confirmed,
           occurrences_count: s.occurrences_count,
           first_seen_on: s.first_seen_on,
           last_seen_on: s.last_seen_on,
@@ -151,9 +156,9 @@ module Api
 
       # P4 — derived "überfällig/pausiert" flag (no DB column, no status change). True when the
       # predicted next charge is already past the same grace window the detector uses to auto-end
-      # (interval*1.5+5). A non-confirmed stopped series is auto-ended by reconcile_vanished, so in
-      # practice this surfaces a user_confirmed stopped series (never auto-ended) so the user can
-      # end it manually. Mirrors RecurringDetector's grace formula so the two never disagree.
+      # (interval*1.5+5). reconcile_vanished auto-ends a stopped series on the next detect, so this
+      # only surfaces transiently (between a series going past-grace and the next detect run).
+      # Mirrors RecurringDetector's grace formula so the two never disagree.
       def overdue?(s)
         return false if s.next_expected_on.blank?
 
