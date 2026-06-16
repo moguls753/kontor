@@ -34,6 +34,7 @@ const PATHS: Record<string, ReactElement> = {
   check: <path d="m5 12.5 4.5 4.5L19 7" />,
   sync: <><path d="M20 11a8 8 0 0 0-14-4L4 9m0-5v5h5" /><path d="M4 13a8 8 0 0 0 14 4l2-2m0 5v-5h-5" /></>,
   trash: <path d="M5 7h14M9 7V5h6v2m-7 0 .7 12a1 1 0 0 0 1 1h4.6a1 1 0 0 0 1-1L16 7" />,
+  stop: <><circle cx="12" cy="12" r="8" /><rect x="9" y="9" width="6" height="6" rx="1" /></>,
   edit: <><path d="M5 19h3l9-9-3-3-9 9z" /><path d="m14 7 3 3" /></>,
   link: <><path d="M10 13a4 4 0 0 0 5.7 0l2.3-2.3a4 4 0 0 0-5.7-5.7L11 6" /><path d="M14 11a4 4 0 0 0-5.7 0L6 13.3a4 4 0 0 0 5.7 5.7L13 18" /></>,
   external: <><path d="M14 5h5v5m0-5-8 8" /><path d="M18 13v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" /></>,

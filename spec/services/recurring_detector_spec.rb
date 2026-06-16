@@ -607,6 +607,65 @@ RSpec.describe RecurringDetector do
     end
   end
 
+  # P4 — a STOPPED series that is still RE-DETECTED from stale historical members (≥3 left in
+  # the 540d window) used to linger active forever (the grace-end check was gated behind "not
+  # re-detected"). Now the grace check runs for re-detected series too, keyed on last_seen_on.
+  describe "P4: auto-end re-detected-but-stopped series" do
+    it "ends a stopped non-confirmed monthly series even though its 3 in-window members re-detect it" do
+      # 3 monthly charges, all inside the 540d window but the LATEST is ~120 days ago — well past
+      # the monthly grace (30*1.5+5 = 50d). The detector re-detects (3 occurrences clear MIN),
+      # but the series has stopped → it must be ended, not left active with a phantom next-date.
+      [ 120, 150, 180 ].each { |ago| charge(name: "Cancelled Salary", amount: -50.00, date: Date.current - ago) }
+
+      described_class.new(user).detect
+
+      series = user.recurring_series.find_by(canonical_name: "Cancelled Salary")
+      expect(series).to be_present
+      expect(series.status).to eq("ended")
+      # history retained
+      expect(TransactionRecord.where(recurring_series_id: series.id).count).to eq(3)
+    end
+
+    it "keeps a series with RECENT members active (Spotify-type is never overdue)" do
+      monthly_dates(4).each { |d| charge(name: "Spotify", amount: -12.99, date: d) }
+
+      described_class.new(user).detect
+
+      series = user.recurring_series.find_by(canonical_name: "Spotify")
+      expect(series.status).to eq("active")
+    end
+
+    it "does NOT auto-end a user_confirmed stopped series (user owns that choice)" do
+      # Same stopped shape, but user_confirmed → grace-end is skipped; the serializer's `overdue`
+      # flag (request spec) is what surfaces it for a manual end.
+      [ 120, 150, 180 ].each { |ago| charge(name: "Confirmed Stopped", amount: -50.00, date: Date.current - ago) }
+      # pre-create the confirmed series so the re-detect upserts onto it (preserving user_confirmed)
+      create(:recurring_series, :monthly, user: user, canonical_name: "Confirmed Stopped",
+        direction: "outflow", currency: "EUR", expected_amount: -50.00,
+        amount_min: -50.00, amount_max: -50.00, user_confirmed: true, status: "active")
+
+      described_class.new(user).detect
+
+      series = user.recurring_series.find_by(canonical_name: "Confirmed Stopped")
+      expect(series.user_confirmed).to be(true)
+      expect(series.status).to eq("active")   # NOT auto-ended
+    end
+
+    it "auto-revives an ended series when its pattern reappears (regression guard)" do
+      # An ended series with members. New occurrences make it re-detect → persist_series upserts
+      # status back to active (no status filter on the fingerprint match — only dismissed blocks).
+      ended = create(:recurring_series, :monthly, user: user, status: "ended",
+        canonical_name: "Revived Sub", direction: "outflow", currency: "EUR",
+        expected_amount: -12.99, amount_min: -12.99, amount_max: -12.99)
+      # recent monthly charges with the same identity → 3+ occurrences re-detect it
+      monthly_dates(3).each { |d| charge(name: "Revived Sub", amount: -12.99, date: d) }
+
+      described_class.new(user).detect
+
+      expect(ended.reload.status).to eq("active")
+    end
+  end
+
   # Root refactor (replaces the rejected naive Fix 1): clear-before-relink is now PER-SERIES
   # inside persist_series, so a non-re-detected series KEEPS its members and reconcile_vanished
   # judges it against real data — no "active but 0-member" ghost.
@@ -836,12 +895,148 @@ RSpec.describe RecurringDetector do
       expect(user.recurring_series.count).to eq(0)
     end
 
+    # PART 1 — a PayPal leg that is ALREADY a matched conduit transfer to an own account
+    # (transfer_group_id + transfer_counterpart_account_id set by the TransferMatcher) must NOT
+    # have its sub-merchant extracted: the real expense lives on the OTHER leg booked on the
+    # PayPal account. Extraction here would relabel the conduit leg "OpenAI" → a confusing
+    # "OpenAI Umbuchung". So counterparty_raw falls back to the (junk) aggregator name instead.
+    it "does NOT extract a sub-merchant for a matched PayPal conduit leg (Part 1)" do
+      own = create(:account, bank_connection: bc, iban: nil)
+      detector = described_class.new(user)
+      tx = charge(name: PP_CREDITOR, amount: -23.00, date: Date.current - 5,
+        remittance: "1099/PP.6150.PP/. OpenAI Ireland Limited, Ihr Einkauf bei OpenAI Ireland Limited",
+        transfer_group_id: SecureRandom.uuid, transfer_counterpart_account: own)
+      raw = detector.send(:counterparty_raw, tx.reload, "outflow")
+      expect(raw).not_to eq("OpenAI Ireland Limited")
+      expect(raw).to eq(PP_CREDITOR)   # falls back to the aggregator creditor name
+    end
+
+    it "STILL extracts a sub-merchant for a genuinely-unmatched PayPal purchase (Part 1 regression)" do
+      detector = described_class.new(user)
+      # no transfer link → normal PayPal purchase → sub-merchant extraction preserved (#67 guard)
+      tx = charge(name: PP_CREDITOR, amount: -23.00, date: Date.current - 5,
+        remittance: "1099/PP.6150.PP/. OpenAI Ireland Limited, Ihr Einkauf bei OpenAI Ireland Limited")
+      raw = detector.send(:counterparty_raw, tx.reload, "outflow")
+      expect(raw).to eq("OpenAI Ireland Limited")
+    end
+
+    it "matched PayPal conduit legs collapse into no series (the 'OpenAI Umbuchung' is gone)" do
+      own = create(:account, bank_connection: bc, iban: nil)
+      # 3 monthly conduit legs to an own account, each carrying an OpenAI sub-merchant in the
+      # remittance. With Part 1 they fall back to the junk PayPal Europe name → one irregular
+      # blob build_series rejects → NO "OpenAI" transfer series forms.
+      monthly_dates(3).each.with_index do |d, i|
+        charge(name: PP_CREDITOR, amount: -23.00, date: d,
+          remittance: "10#{i}99/PP.6150.PP/. OpenAI Ireland Limited, Ihr Einkauf bei OpenAI Ireland Limited",
+          transfer_group_id: "pp-#{i}", transfer_counterpart_account: own)
+      end
+
+      subject.detect
+
+      expect(user.recurring_series.where(canonical_name: "Openai Ireland Limited")).to be_empty
+    end
+
     it "falls back to 'PayPal' for a refund inflow (PP prefix, no 'Ihr Einkauf bei') (10)" do
       detector = described_class.new(user)
       tx = credit(name: PP_CREDITOR, amount: 15.00, date: Date.current - 5,
         remittance: "1050/PP.6150.PP/. Rückzahlung OpenAI Ireland Limited")
       raw = detector.send(:counterparty_raw, tx.reload, "inflow")
       expect(raw).to eq("PayPal")   # no suffix → generic fallback, stays irregular
+    end
+  end
+
+  describe "variable-amount salary detection (Part 2)" do
+    SALARY_IBAN = "DE00000000000000766300".freeze
+
+    def salary(amount:, date:)
+      credit(name: "Pludoni GmbH", amount: amount, date: date, debtor_iban: SALARY_IBAN)
+    end
+
+    it "detects a varying monthly salary as ONE income series, bypassing amount-subclustering" do
+      # 4 distinct months of salary at DIFFERENT amounts (would each fall in their own amount
+      # sub-cluster < MIN_OCCURRENCES under the normal path → missed).
+      salary(amount: 1101.73, date: Date.current - 95)
+      salary(amount: 2042.64, date: Date.current - 65)
+      salary(amount: 1920.78, date: Date.current - 35)
+      salary(amount: 1920.78, date: Date.current - 5)
+
+      subject.detect
+
+      series = user.recurring_series.inflows.find_by(canonical_name: "Pludoni Gmbh")
+      expect(series).to be_present
+      expect(series.cadence).to eq("monthly")
+      expect(series.amount_variable).to be(true)
+      expect(series.occurrences_count).to eq(4)
+      # median of the four amounts (1101.73, 1920.78, 1920.78, 2042.64) = 1920.78
+      expect(series.expected_amount).to eq(1920.78)
+    end
+
+    it "drops a micro-outlier (Nachzahlung) so it neither sets expected_amount nor poisons cv" do
+      salary(amount: 1101.73, date: Date.current - 95)
+      salary(amount: 2042.64, date: Date.current - 65)
+      salary(amount: 1920.78, date: Date.current - 35)
+      salary(amount: 1920.78, date: Date.current - 5)
+      # a 4.69 "Nachzahlung Lohn" micro-row, same payer/IBAN, well under 10% of the ~1920 median
+      salary(amount: 4.69, date: Date.current - 4)
+
+      subject.detect
+
+      series = user.recurring_series.inflows.find_by(canonical_name: "Pludoni Gmbh")
+      expect(series).to be_present
+      expect(series.amount_min).to be > 4.69        # the micro-row never entered the amount span
+      expect(series.expected_amount).to eq(1920.78) # unchanged by the outlier
+    end
+
+    it "collapses two payments in the same month into ONE node (median amount, latest date)" do
+      salary(amount: 1097.04, date: Date.current - 96)   # Jan-equivalent month, first payment
+      salary(amount: 2194.08, date: Date.current - 95)   # SAME month back-pay (latest date)
+      salary(amount: 1920.78, date: Date.current - 65)
+      salary(amount: 1920.78, date: Date.current - 35)
+      salary(amount: 1920.78, date: Date.current - 5)
+
+      subject.detect
+
+      series = user.recurring_series.inflows.find_by(canonical_name: "Pludoni Gmbh")
+      expect(series).to be_present
+      # 5 raw rows collapse to 4 monthly NODES (two share one calendar month)
+      expect(series.occurrences_count).to eq(4)
+      # but ALL underlying transactions are linked as members (history preserved)
+      expect(TransactionRecord.where(recurring_series_id: series.id).count).to eq(5)
+      # collapsed-month amount is the MEDIAN (not the 2194.08 back-pay max) → forecast not inflated
+      expect(series.expected_amount).to eq(1920.78)
+    end
+
+    it "NEVER fuses unrelated inflows from different counterparty IBANs" do
+      # same canonical name but two DIFFERENT payer IBANs → the IBAN gate forbids the variable
+      # path → neither reaches 3 occurrences alone → no salary series fuses them.
+      credit(name: "Pludoni GmbH", amount: 1900.00, date: Date.current - 65, debtor_iban: SALARY_IBAN)
+      credit(name: "Pludoni GmbH", amount: 500.00, date: Date.current - 35, debtor_iban: "DE99999999999999999999")
+      credit(name: "Pludoni GmbH", amount: 2100.00, date: Date.current - 5, debtor_iban: SALARY_IBAN)
+
+      subject.detect
+
+      expect(user.recurring_series.inflows.where(canonical_name: "Pludoni Gmbh")).to be_empty
+    end
+
+    it "does not fire for only 2 monthly IBAN-consistent inflows (MIN_OCCURRENCES gate)" do
+      salary(amount: 1900.00, date: Date.current - 35)
+      salary(amount: 2100.00, date: Date.current - 5)
+
+      result = subject.detect
+
+      expect(result[:detected]).to eq(0)
+      expect(user.recurring_series.inflows.where(canonical_name: "Pludoni Gmbh")).to be_empty
+    end
+
+    it "still detects a fixed-amount IBAN-consistent inflow (variable path does not regress it)" do
+      monthly_dates(4).each { |d| credit(name: "Stable Employer", amount: 2500.00, date: d, debtor_iban: "DE12120000000000000001") }
+
+      subject.detect
+
+      series = user.recurring_series.inflows.find_by(canonical_name: "Stable Employer")
+      expect(series).to be_present
+      expect(series.expected_amount).to eq(2500.00)
+      expect(series.occurrences_count).to eq(4)
     end
   end
 

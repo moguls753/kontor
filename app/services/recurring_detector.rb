@@ -117,6 +117,24 @@ class RecurringDetector
       # the second to create its own → two series, no double-count, no re-key of existing rows.
       rows.group_by { |r| [ r[:direction], r[:currency] ] }.each do |(direction, currency), part_rows|
         part_rows.group_by { |r| [ r[:canonical], r[:account_id], r[:transfer_counterpart_account_id] ] }.each do |(canonical, _account_id, _cp_id), group_rows|
+          # PART 2 — variable-amount salary path. A salary whose monthly amount VARIES (raises,
+          # bonuses, back-pay) is split by amount_subcluster into too-few-per-cluster pieces and
+          # never reaches MIN_OCCURRENCES, so it is missed. For an INFLOW group that is
+          # counterparty-IBAN-consistent (every row shares ONE non-blank debtor IBAN — so it can
+          # never fuse unrelated inflows), bypass amount_subcluster entirely and run a single
+          # cadence-primary series over the whole group (micro-outliers dropped, same-month
+          # payments collapsed). On success it is the ONLY series for this group; on failure (e.g.
+          # n<3 after collapsing) fall through to the normal amount-clustering path below so a
+          # fixed-amount inflow still works as before.
+          if direction == "inflow" && (salary = build_variable_inflow_series(group_rows, direction:, currency:, canonical:))
+            persisted = persist_series(salary, direction:, currency:, canonical:)
+            if persisted
+              detected_series_ids << persisted.id
+              detected_count += 1
+            end
+            next
+          end
+
           clusters = amount_subcluster(group_rows)
           clusters.each do |cluster|
             series = build_series(cluster, direction:, currency:, canonical:)
@@ -196,7 +214,13 @@ class RecurringDetector
     # batch can be gated on recurrence (explosion mitigation in #detect): a one-off DB/Eventim
     # ticket must NOT become a permanent MerchantAlias/LLM call, while the recurring OpenAI sub
     # (3+ occ) still resolves to its brand.
-    paypal_submerchant = paypal_aggregator?(tx, direction) && extract_paypal_merchant(tx).present?
+    # The conduit-leg guard (paypal_conduit_leg?) keeps this flag false for a leg that is
+    # already a matched PayPal CONDUIT transfer, mirroring counterparty_raw — such a leg never
+    # carries an extracted sub-merchant (it falls back to the junk PayPal Europe name), so it
+    # must NOT be tagged as a sub-merchant either (else the LLM explosion-gate would treat it
+    # as one).
+    paypal_submerchant = !paypal_conduit_leg?(tx, direction) &&
+                         paypal_aggregator?(tx, direction) && extract_paypal_merchant(tx).present?
     norm_key = MerchantNormalizer.call(raw)
 
     # #5 — no name-derived key: keep IBAN-only rows groupable internally via the
@@ -241,7 +265,18 @@ class RecurringDetector
     # the sticky MerchantAlias/LLM. Gate is PayPal-specific (NOT a broad /payments?/i): Amazon
     # Payments Europe is a SEPARATE creditor_name and must keep its own identity. Blank capture →
     # generic "PayPal" (the aggregator name), so empty-merchant/refund rows stay irregular.
-    if paypal_aggregator?(tx, direction)
+    #
+    # PART 1 — conduit-leg exception. A PayPal leg that the TransferMatcher already paired as an
+    # internal CONDUIT transfer to the user's own PayPal account (transfer_group_id +
+    # transfer_counterpart_account_id both set) must NOT have its sub-merchant extracted. WHY:
+    # the real EXPENSE lives on the OTHER leg — the genuine "OpenAI Ireland Limited" debit booked
+    # on the PayPal account itself (its own series, counted once). Extracting the sub-merchant here
+    # would relabel the conduit leg "OpenAI" too and surface a confusing "OpenAI Umbuchung". By
+    # skipping extraction, this leg falls back to the normal (junk PayPal Europe) creditor name; it
+    # then collapses into one irregular blob that build_series rejects, so the conduit series simply
+    # vanishes — no double-count, no relabel. GENUINELY-UNMATCHED PayPal purchases (no transfer
+    # link) keep extraction below (preserves the #67 sub-merchant protection).
+    if paypal_aggregator?(tx, direction) && !paypal_conduit_leg?(tx, direction)
       return extract_paypal_merchant(tx).presence || "PayPal"
     end
 
@@ -256,6 +291,17 @@ class RecurringDetector
   def paypal_aggregator?(tx, direction)
     name = direction == "outflow" ? tx.creditor_name : tx.debtor_name
     name.to_s.match?(/\bpaypal\b/i)
+  end
+
+  # PART 1 — true iff this row is a PayPal-aggregator leg that the TransferMatcher ALREADY paired
+  # as an internal conduit transfer to an own account (both transfer FKs set). The pipeline order
+  # categorize→match→detect guarantees these FKs are populated before detection runs (load_candidates
+  # already relies on transfer_group_id). Used by counterparty_raw/build_row to suppress sub-merchant
+  # extraction on such legs only (genuinely-unmatched PayPal purchases are untouched).
+  def paypal_conduit_leg?(tx, direction)
+    paypal_aggregator?(tx, direction) &&
+      tx.transfer_group_id.present? &&
+      tx.transfer_counterpart_account_id.present?
   end
 
   # Prefix-anchored merchant extraction from a PayPal remittance. Strips the optional
@@ -369,6 +415,99 @@ class RecurringDetector
       last_seen_on:,
       next_expected_on: next_expected,
       merchant_type: members.map { |r| r[:merchant_type] }.compact.first
+    }
+  end
+
+  # ── PART 2 — variable-amount inflow (salary) series ──────────────────────────
+  # An inflow-only, counterparty-IBAN-consistent, cadence-primary path for a salary whose amount
+  # VARIES month to month. Returns a series hash (same shape as build_series) or nil if the group
+  # is not a clean variable-salary candidate (caller then falls back to the normal path).
+  #
+  # Gating + transforms, in order:
+  #  (a) IBAN gate: ALL rows must share one non-blank counterparty (debtor) IBAN. This is the hard
+  #      guarantee that the path can NEVER fuse unrelated inflows (different payers have different
+  #      IBANs). Without ≥MIN_OCCURRENCES IBAN-consistent rows, bail (→ normal path).
+  #  (c) micro-outlier drop: rows whose |amount| is below ~10% of the group median |amount| are
+  #      noise (a 4.69 "Nachzahlung" next to ~2000 salary). Drop them so they neither set
+  #      expected_amount nor poison cv. (Done BEFORE the month-collapse so a stray micro-row in an
+  #      otherwise-empty month can't mint a node.)
+  #  (b)/(d) BYPASS amount_subcluster and COLLAPSE multiple payments in the SAME (year,month) into
+  #      ONE representative node: amount = MEDIAN of that month's amounts, date = LATEST date in the
+  #      month (NOT max amount — avoids inflating the forecast monthly_equiv with a back-pay spike).
+  #  (e) run the EXISTING regularity gate (MIN_OCCURRENCES, cadence, cv/share) on the collapsed nodes.
+  def build_variable_inflow_series(group_rows, direction:, currency:, canonical:)
+    return nil unless direction == "inflow"
+
+    # (a) counterparty-IBAN consistency gate
+    ibans = group_rows.map { |r| r[:counterparty_iban].presence }.compact.uniq
+    return nil unless ibans.size == 1 && group_rows.all? { |r| r[:counterparty_iban].present? }
+    return nil if group_rows.size < MIN_OCCURRENCES
+
+    # (c) drop micro-outliers (< ~10% of group median |amount|)
+    group_median_abs = median(group_rows.map { |r| r[:amount].abs })
+    floor = group_median_abs * BigDecimal("0.10")
+    kept = group_rows.reject { |r| r[:amount].abs < floor }
+    return nil if kept.size < MIN_OCCURRENCES
+
+    # (b)/(d) collapse same (year, month) → one node (median amount, latest date), carrying ALL
+    # underlying tx_ids/category_ids so every real payment is linked to the series.
+    nodes = kept.group_by { |r| [ r[:booking_date].year, r[:booking_date].month ] }.map do |_ym, month_rows|
+      {
+        amount: median(month_rows.map { |r| r[:amount] }),
+        booking_date: month_rows.map { |r| r[:booking_date] }.max,
+        member_ids: month_rows.map { |r| r[:tx_id] },
+        category_ids: month_rows.map { |r| r[:category_id] }
+      }
+    end
+    return nil if nodes.size < MIN_OCCURRENCES
+
+    nodes.sort_by! { |n| n[:booking_date] }
+    dates   = nodes.map { |n| n[:booking_date] }
+    amounts = nodes.map { |n| n[:amount] }
+
+    # (e) existing regularity gate, on the collapsed nodes
+    deltas = dates.each_cons(2).map { |a, b| (b - a).to_i }
+    return nil if deltas.empty?
+
+    med  = median(deltas)
+    mean = deltas.sum.to_f / deltas.size
+    cv   = mean.zero? ? 0.0 : (stddev(deltas) / mean)
+
+    cadence, bucket_range = classify_cadence(med)
+    share = bucket_range ? deltas.count { |d| bucket_range.include?(d) }.to_f / deltas.size : 0.0
+    regular = (cv <= CV_MAX) || (share >= BUCKET_SHARE_MIN)
+    keep = cadence != "irregular" && regular && med >= MIN_CADENCE_DAYS
+    return nil unless keep
+
+    expected_amount = median(amounts)
+    min_a = amounts.min
+    max_a = amounts.max
+    span  = expected_amount.abs.zero? ? 0.0 : (max_a - min_a).abs / expected_amount.abs
+    amount_variable = span > AMOUNT_TOLERANCE
+
+    # IBAN-consistent by construction (the gate above) → high-signal confidence input.
+    confidence = compute_confidence(occurrences: nodes.size, cv:, amount_variable:, iban_consistent: true)
+
+    last_seen_on  = dates.last
+    first_seen_on = dates.first
+    anchor_day    = modal_day_of_month(dates)
+    next_expected = predict_next(cadence, last_seen_on, anchor_day, med)
+
+    {
+      member_ids: nodes.flat_map { |n| n[:member_ids] },
+      category_ids: nodes.flat_map { |n| n[:category_ids] },
+      cadence:,
+      cadence_days: med,
+      expected_amount:,
+      amount_variable:,
+      amount_min: min_a,
+      amount_max: max_a,
+      confidence:,
+      occurrences_count: nodes.size,
+      first_seen_on:,
+      last_seen_on:,
+      next_expected_on: next_expected,
+      merchant_type: nil
     }
   end
 
@@ -567,38 +706,53 @@ class RecurringDetector
     ended = 0
     today = Date.current
     @user.recurring_series.active.find_each do |s|
-      next if detected_series_ids.include?(s.id)
-
-      # A series is a derived aggregate of its member transactions. With ZERO live members it
-      # represents nothing — there is no history to show and it leaks as a phantom into every
-      # scope (a memberless series slips through the scope filter and renders as bogus income).
-      # DELETE it outright. The SOLE exception is a user_confirmed series: preserve the user's
-      # explicit choice (keep it active, just sync the count to an honest 0). dismissed series
-      # never reach here (the iterated scope is .active); their row is retained on purpose to
-      # block re-detection by fingerprint.
-      if s.transaction_records.empty?
-        if s.user_confirmed
-          s.update_columns(occurrences_count: 0)
-        else
-          s.destroy!
-          ended += 1
+      # P4 — the memberless-DELETE and irregular-cleanup paths only make sense for a series
+      # NOT re-detected this run (a re-detected series HAS fresh members and a real cadence),
+      # so they stay gated behind `next if detected_series_ids.include?(s.id)`. But the
+      # end-grace decision below was ALSO behind that gate, which let a STOPPED series that is
+      # still re-detected from stale historical members (≥3 left in the 540d window) linger
+      # active forever with a phantom next_expected_on. The grace check now runs for re-detected
+      # series too — keyed on last_seen_on being past the grace window, so a series with RECENT
+      # members (Spotify-type) is never overdue and stays active.
+      unless detected_series_ids.include?(s.id)
+        # A series is a derived aggregate of its member transactions. With ZERO live members it
+        # represents nothing — there is no history to show and it leaks as a phantom into every
+        # scope (a memberless series slips through the scope filter and renders as bogus income).
+        # DELETE it outright. The SOLE exception is a user_confirmed series: preserve the user's
+        # explicit choice (keep it active, just sync the count to an honest 0). dismissed series
+        # never reach here (the iterated scope is .active); their row is retained on purpose to
+        # block re-detection by fingerprint.
+        if s.transaction_records.empty?
+          if s.user_confirmed
+            s.update_columns(occurrences_count: 0)
+          else
+            s.destroy!
+            ended += 1
+          end
+          next
         end
-        next
-      end
 
-      # From here the series HAS members (real history). Lever A cleanup: a still-active
-      # "irregular" leftover is a pre-Lever-A artifact (the detector no longer produces
-      # irregular ones) → end it (retaining its members as history) unless the user confirmed it.
-      if s.cadence == "irregular" && !s.user_confirmed
-        s.update!(status: "ended")
-        ended += 1
-        next
+        # From here the series HAS members (real history). Lever A cleanup: a still-active
+        # "irregular" leftover is a pre-Lever-A artifact (the detector no longer produces
+        # irregular ones) → end it (retaining its members as history) unless the user confirmed it.
+        if s.cadence == "irregular" && !s.user_confirmed
+          s.update!(status: "ended")
+          ended += 1
+          next
+        end
       end
 
       next if s.last_seen_on.nil?
 
-      # end-grace (B4′): a series with members that wasn't re-detected and whose latest charge
-      # is past the grace window has stopped recurring → end it (keeps its members as history).
+      # end-grace (B4′ + P4): a series whose latest charge is past the grace window has stopped
+      # recurring → end it (keeps its members as history) UNLESS the user confirmed it. This now
+      # also catches a re-detected-but-stopped series (a cancelled salary whose ≥3 historical
+      # members still cluster but whose last payment is long past) — auto-ending it instead of
+      # leaving it active with a phantom next_expected_on. A user_confirmed stopped series is NOT
+      # auto-ended (the user owns that choice; the serializer surfaces it as `overdue` so they can
+      # end it manually). An ended series auto-revives via persist_series when its pattern recurs.
+      next if s.user_confirmed
+
       interval = (s.cadence_days || CADENCE_DAYS[s.cadence] || 30).to_i
       grace    = (interval * 1.5).round + 5
       if s.last_seen_on < (today - grace)

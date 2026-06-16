@@ -227,13 +227,23 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       expect(series.category_id).to eq(category.id)
     end
 
-    # #17 — status allowlist: only active/dismissed are user-settable; "ended" is
-    # a system-only state and must be dropped, not applied.
-    it "ignores a status change to the system-only 'ended' state" do
+    # P4 — status allowlist now includes "ended": the user can manually stop a series
+    # (reversible — it auto-revives via detection if the pattern recurs).
+    it "allows a manual status change to 'ended'" do
       series = create(:recurring_series, user: user, status: "active")
 
       patch api_v1_recurring_path(series),
         params: { recurring_series: { status: "ended" } }, as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(series.reload.status).to eq("ended")
+    end
+
+    it "ignores a status change to a bogus (non-allowlisted) state" do
+      series = create(:recurring_series, user: user, status: "active")
+
+      patch api_v1_recurring_path(series),
+        params: { recurring_series: { status: "garbage" } }, as: :json
 
       expect(response).to have_http_status(:ok)
       expect(series.reload.status).to eq("active")
@@ -292,6 +302,56 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       expect(response).to have_http_status(:no_content)
       expect(series.reload.status).to eq("dismissed")
       expect(tx.reload.recurring_series_id).to be_nil
+    end
+  end
+
+  # P4 — `overdue` is a derived serializer flag (next_expected_on past interval*1.5+5),
+  # surfacing a stopped series so the user can end it manually. It is NOT a DB column.
+  describe "overdue serializer flag" do
+    before { login }
+
+    it "is true when next_expected_on is past the grace window" do
+      # monthly (grace = 30*1.5+5 = 50d); next charge was due 80 days ago → overdue
+      series = create(:recurring_series, :monthly, user: user, cadence_days: 30,
+        next_expected_on: Date.current - 80)
+      create(:transaction_record, account: account, recurring_series: series, amount: -9.99)
+
+      get api_v1_recurring_index_path, as: :json
+      row = response.parsed_body["series"].find { |x| x["id"] == series.id }
+      expect(row["overdue"]).to be(true)
+    end
+
+    it "is false when next_expected_on is within the grace window" do
+      series = create(:recurring_series, :monthly, user: user, cadence_days: 30,
+        next_expected_on: Date.current - 10)
+      create(:transaction_record, account: account, recurring_series: series, amount: -9.99)
+
+      get api_v1_recurring_index_path, as: :json
+      row = response.parsed_body["series"].find { |x| x["id"] == series.id }
+      expect(row["overdue"]).to be(false)
+    end
+
+    it "is false when there is no next_expected_on" do
+      series = create(:recurring_series, :monthly, user: user, cadence_days: 30,
+        next_expected_on: nil)
+      create(:transaction_record, account: account, recurring_series: series, amount: -9.99)
+
+      get api_v1_recurring_index_path, as: :json
+      row = response.parsed_body["series"].find { |x| x["id"] == series.id }
+      expect(row["overdue"]).to be(false)
+    end
+
+    # A user_confirmed stopped series is NOT auto-ended (the user owns it), so the only way
+    # the UI flags it is via overdue=true while it is still active.
+    it "is true for a still-active user_confirmed stopped series" do
+      series = create(:recurring_series, :monthly, user: user, cadence_days: 30,
+        status: "active", user_confirmed: true, next_expected_on: Date.current - 80)
+      create(:transaction_record, account: account, recurring_series: series, amount: -9.99)
+
+      get api_v1_recurring_index_path, as: :json
+      row = response.parsed_body["series"].find { |x| x["id"] == series.id }
+      expect(row["status"]).to eq("active")
+      expect(row["overdue"]).to be(true)
     end
   end
 

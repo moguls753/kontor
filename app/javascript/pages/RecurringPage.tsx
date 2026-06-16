@@ -243,6 +243,7 @@ export default function RecurringPage() {
                       open={expandedId === s.id}
                       onToggle={() => setExpandedId(o => (o === s.id ? null : s.id))}
                       onConfirm={() => patchSeries(s.id, { user_confirmed: true })}
+                      onEnd={() => patchSeries(s.id, { status: 'ended' })}
                       onDismiss={() => dismissSeries(s.id)} />
                   ))
                 )}
@@ -260,10 +261,11 @@ interface SeriesRowProps {
   open: boolean
   onToggle: () => void
   onConfirm: () => void
+  onEnd: () => void
   onDismiss: () => void
 }
 
-function SeriesRow({ s, open, onToggle, onConfirm, onDismiss }: SeriesRowProps) {
+function SeriesRow({ s, open, onToggle, onConfirm, onEnd, onDismiss }: SeriesRowProps) {
   const { t } = useTranslation()
   const sign = s.direction === 'outflow' ? -1 : 1
   const cadenceLabel = CADENCE_KEYS.includes(s.cadence)
@@ -285,6 +287,12 @@ function SeriesRow({ s, open, onToggle, onConfirm, onDismiss }: SeriesRowProps) 
               )}
               {s.status === 'ended' && (
                 <span className="badge badge-warn"><span className="dot" />{t('recurring.status_ended')}</span>
+              )}
+              {/* P4 — a still-active series whose next charge is past the grace window is
+                  "überfällig/pausiert". In practice this is a user_confirmed stopped series
+                  (non-confirmed ones get auto-ended), nudging the user to end it manually. */}
+              {s.status === 'active' && s.overdue && (
+                <span className="badge badge-warn"><span className="dot" />{t('recurring.overdue')}</span>
               )}
             </div>
             <div className="flex items-center gap-2 flex-wrap mt-0.5">
@@ -343,7 +351,17 @@ function SeriesRow({ s, open, onToggle, onConfirm, onDismiss }: SeriesRowProps) 
             {!s.user_confirmed && (
               <Btn variant="secondary" size="sm" icon="check" onClick={onConfirm}>{t('recurring.confirm')}</Btn>
             )}
-            <Btn variant="ghost" size="sm" icon="trash" onClick={onDismiss}>{t('recurring.dismiss')}</Btn>
+            {/* P4 — "Beendet": reversible manual stop (PATCH status:ended). STOP icon, not trash:
+                the series keeps its history and auto-revives if the pattern recurs. */}
+            {s.status === 'active' && (
+              <Btn variant="ghost" size="sm" icon="stop" onClick={onEnd} title={t('recurring.mark_ended_hint')}>
+                {t('recurring.mark_ended')}
+              </Btn>
+            )}
+            {/* "Nicht wiederkehrend": permanent false-positive reject (DELETE → dismissed). */}
+            <Btn variant="ghost" size="sm" icon="close" onClick={onDismiss} title={t('recurring.not_recurring_hint')}>
+              {t('recurring.not_recurring')}
+            </Btn>
           </div>
           <SeriesMembers seriesId={s.id} open={open} />
         </div>
@@ -420,7 +438,9 @@ function TransferRow({ g, open, onToggle, onConfirm, onDismiss }: {
             {!g.user_confirmed && (
               <Btn variant="secondary" size="sm" icon="check" onClick={onConfirm}>{t('recurring.confirm')}</Btn>
             )}
-            <Btn variant="ghost" size="sm" icon="trash" onClick={onDismiss}>{t('recurring.dismiss')}</Btn>
+            <Btn variant="ghost" size="sm" icon="close" onClick={onDismiss} title={t('recurring.not_recurring_hint')}>
+              {t('recurring.not_recurring')}
+            </Btn>
           </div>
         </div>
       )}

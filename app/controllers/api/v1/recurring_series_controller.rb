@@ -102,8 +102,10 @@ module Api
 
       def update_params
         permitted = params.require(:recurring_series).permit(:user_confirmed, :category_id, :status, :canonical_name)
-        # only allow user-settable statuses
-        permitted.delete(:status) unless %w[active dismissed].include?(permitted[:status])
+        # only allow user-settable statuses. "ended" = manual stop (P4): the user marks a series
+        # done; it auto-revives via detection if the pattern reappears. "dismissed" = permanent
+        # false-positive reject. "active" = un-end (also re-derived automatically by detection).
+        permitted.delete(:status) unless %w[active ended dismissed].include?(permitted[:status])
         # defensively drop a foreign category_id so the request fails cleanly (the
         # model validation is authoritative; this avoids leaking another user's data)
         if permitted[:category_id].present? && !Current.user.categories.exists?(id: permitted[:category_id])
@@ -142,8 +144,22 @@ module Api
           first_seen_on: s.first_seen_on,
           last_seen_on: s.last_seen_on,
           next_expected_on: s.next_expected_on,
+          overdue: overdue?(s),
           category: s.category ? { id: s.category.id, name: s.category.name } : nil
         }
+      end
+
+      # P4 — derived "überfällig/pausiert" flag (no DB column, no status change). True when the
+      # predicted next charge is already past the same grace window the detector uses to auto-end
+      # (interval*1.5+5). A non-confirmed stopped series is auto-ended by reconcile_vanished, so in
+      # practice this surfaces a user_confirmed stopped series (never auto-ended) so the user can
+      # end it manually. Mirrors RecurringDetector's grace formula so the two never disagree.
+      def overdue?(s)
+        return false if s.next_expected_on.blank?
+
+        interval = (s.cadence_days || RecurringDetector::CADENCE_DAYS[s.cadence] || 30).to_i
+        grace    = (interval * 1.5).round + 5
+        s.next_expected_on < (Date.current - grace)
       end
 
       def confidence_band(confidence)

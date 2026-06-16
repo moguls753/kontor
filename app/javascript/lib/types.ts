@@ -80,6 +80,7 @@ export interface RecurringSeries {
   first_seen_on: string | null
   last_seen_on: string | null
   next_expected_on: string | null
+  overdue: boolean
   category: Category | null
 }
 
