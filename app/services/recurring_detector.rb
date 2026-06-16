@@ -117,42 +117,65 @@ class RecurringDetector
       # the second to create its own → two series, no double-count, no re-key of existing rows.
       rows.group_by { |r| [ r[:direction], r[:currency] ] }.each do |(direction, currency), part_rows|
         part_rows.group_by { |r| [ r[:canonical], r[:account_id], r[:transfer_counterpart_account_id] ] }.each do |(canonical, _account_id, _cp_id), group_rows|
-          # PART 2 — variable-amount salary path. A salary whose monthly amount VARIES (raises,
-          # bonuses, back-pay) is split by amount_subcluster into too-few-per-cluster pieces and
-          # never reaches MIN_OCCURRENCES, so it is missed. For an INFLOW group that is
-          # counterparty-IBAN-consistent (every row shares ONE non-blank debtor IBAN — so it can
-          # never fuse unrelated inflows), bypass amount_subcluster entirely and run a single
-          # cadence-primary series over the whole group (micro-outliers dropped, same-month
-          # payments collapsed). On success it is the ONLY series for this group; on failure (e.g.
-          # n<3 after collapsing) fall through to the normal amount-clustering path below so a
-          # fixed-amount inflow still works as before.
-          if direction == "inflow" && (salary = build_variable_inflow_series(group_rows, direction:, currency:, canonical:))
-            persisted = persist_series(salary, direction:, currency:, canonical:)
-            if persisted
-              detected_series_ids << persisted.id
+          # INFLOW purpose sub-grouping (Part-2 regression fix). build_variable_inflow_series lumps
+          # ALL of one payer's IBAN-consistent inflows into ONE series, IGNORING the Verwendungszweck.
+          # For a SALARY (one purpose, varying amount) that is correct; for a PERSON who sends MANY
+          # different recurring payments (Katja: Miete/Strom/Internet/ETF/Ansparen + one-offs) it
+          # WRONGLY fuses 5 distinct monthly streams + one-offs into one "20–229" blob. Fix: split an
+          # inflow [canonical, account, cp] group by purpose_key(remittance) and run the EXISTING
+          # per-group dispatch PER purpose sub-group. SCOPED TO INFLOWS ONLY — outflows/merchants are
+          # NOT purpose-split (counterparty name already separates them; merchant remittances are
+          # noisy refs → purpose grouping there would over-split). The purpose is NOT in the
+          # fingerprint (direction|currency|canonical), so multiple sub-groups sharing one fingerprint
+          # still reconcile into separate series via @claimed + nearest_amount_match — the SAME
+          # mechanism already used for counterpart clusters above. Downstream of the [canonical,
+          # account, cp] grouping, so IBAN/account coherence is untouched; build_variable_inflow_series'
+          # own IBAN gate now runs per (payer, purpose) sub-group (still consistent by construction).
+          subgroups =
+            if direction == "inflow"
+              group_rows.group_by { |r| purpose_key(r[:remittance]) }.values
+            else
+              [ group_rows ] # outflows/merchants UNCHANGED — one group, no purpose split
+            end
+
+          subgroups.each do |sub_rows|
+            # PART 2 — variable-amount salary path. A salary whose monthly amount VARIES (raises,
+            # bonuses, back-pay) is split by amount_subcluster into too-few-per-cluster pieces and
+            # never reaches MIN_OCCURRENCES, so it is missed. For an INFLOW group that is
+            # counterparty-IBAN-consistent (every row shares ONE non-blank debtor IBAN — so it can
+            # never fuse unrelated inflows), bypass amount_subcluster entirely and run a single
+            # cadence-primary series over the whole group (micro-outliers dropped, same-month
+            # payments collapsed). On success it is the ONLY series for this group; on failure (e.g.
+            # n<3 after collapsing) fall through to the normal amount-clustering path below so a
+            # fixed-amount inflow still works as before.
+            if direction == "inflow" && (salary = build_variable_inflow_series(sub_rows, direction:, currency:, canonical:))
+              persisted = persist_series(salary, direction:, currency:, canonical:)
+              if persisted
+                detected_series_ids << persisted.id
+                detected_count += 1
+              end
+              next
+            end
+
+            clusters = amount_subcluster(sub_rows)
+            clusters.each do |cluster|
+              series = build_series(cluster, direction:, currency:, canonical:)
+              # Outlier rescue: a cluster can fail regularity because a ONE-OFF payment to the
+              # same payee fell within §5.3's amount-tolerance band of a recurring fixed amount
+              # (e.g. a single Nebenkosten-Nachzahlung next to the monthly rent). Retry on the
+              # dominant exact-amount sub-group so the genuine fixed-amount series is still found;
+              # the one-off stays unmatched (it is NOT folded into the series).
+              if series.nil? && (mode = dominant_amount_subgroup(cluster))
+                series = build_series(mode, direction:, currency:, canonical:)
+              end
+              next unless series
+
+              persisted = persist_series(series, direction:, currency:, canonical:)
+              next unless persisted
+
+              detected_series_ids << persisted.id # #3
               detected_count += 1
             end
-            next
-          end
-
-          clusters = amount_subcluster(group_rows)
-          clusters.each do |cluster|
-            series = build_series(cluster, direction:, currency:, canonical:)
-            # Outlier rescue: a cluster can fail regularity because a ONE-OFF payment to the
-            # same payee fell within §5.3's amount-tolerance band of a recurring fixed amount
-            # (e.g. a single Nebenkosten-Nachzahlung next to the monthly rent). Retry on the
-            # dominant exact-amount sub-group so the genuine fixed-amount series is still found;
-            # the one-off stays unmatched (it is NOT folded into the series).
-            if series.nil? && (mode = dominant_amount_subgroup(cluster))
-              series = build_series(mode, direction:, currency:, canonical:)
-            end
-            next unless series
-
-            persisted = persist_series(series, direction:, currency:, canonical:)
-            next unless persisted
-
-            detected_series_ids << persisted.id # #3
-            detected_count += 1
           end
         end
       end
@@ -240,6 +263,10 @@ class RecurringDetector
       transfer_counterpart_account_id: tx.transfer_counterpart_account_id,
       amount: tx.amount,
       booking_date: tx.booking_date,
+      # Verwendungszweck TEXT carried for INFLOW purpose sub-grouping (purpose_key). Privacy:
+      # text only — never amounts — feeds the deterministic normalizer, never the LLM. Read once
+      # per candidate; counterparty_raw still reads tx.remittance independently for the norm_key.
+      remittance: tx.remittance,
       currency: tx.currency,
       direction:,
       norm_key: norm_key.presence, # nil for IBAN-only rows → excluded from LLM batch
@@ -315,6 +342,48 @@ class RecurringDetector
     m = r[/PP\.\d+\.PP\/\.\s*(.*?)\s*,\s*Ihr Einkauf bei/, 1] ||
         r[/\d+\/\.\s*(.*?)\s*,\s*Ihr Einkauf bei/, 1]
     m && m.strip.presence
+  end
+
+  # ── INFLOW Verwendungszweck (purpose) normalizer ─────────────────────────────
+  # Deterministic purpose_key for INFLOW sub-grouping. RULE = "first significant token, ref-codes
+  # kept as a digit-stripped skeleton". Privacy: pure string work on remittance TEXT only — never
+  # amounts. Must satisfy BOTH simultaneously:
+  #  (A) SPLIT a person's distinct purposes ("Miete"/"Strom"/"Internet"/"ETF Alma"/"Ansparen"/
+  #      "Urlaub Mallorca"/"Geldgeschenke Malin" → different keys), so each recurring stream is its
+  #      own (payer, purpose) candidate and one-offs stay singletons (n<MIN_OCCURRENCES → no series).
+  #  (B) KEEP a salary's VARIED betreff together ("Lohn/Gehalt 2026/01", "Lohn/Gehalt pludoni",
+  #      "Lohn/Gehalt 2025/10 und …" → ONE key "lohn/gehalt"), so variable-salary detection is not
+  #      re-broken. This is the trap: a naive raw-remittance group would split Pludoni.
+  #
+  # WHY FIRST token only (NOT first 1–2): "Lohn/Gehalt pludoni" → two-token "lohn/gehalt pludoni"
+  # would NOT match "Lohn/Gehalt 2026/01" → "lohn/gehalt", splitting the salary. The one-token rule
+  # collapses ALL Pludoni betreff to "lohn/gehalt" ("Lohn/Gehalt" is a single whitespace token — the
+  # "/" is internal — so it needs no special handling). That choice is what defuses the trap.
+  #
+  # Token handling, in order:
+  #  - trim only EDGE punctuation, keep internal "/" so "lohn/gehalt" survives intact;
+  #  - SKIP a pure number/date/month-year token (0126, 03/2026, 2026/01) — it carries no purpose, so
+  #    leading refs don't matter and a trailing date never reaches the key ("Miete 06/2026" == "Miete");
+  #  - a MIXED alnum token is a ref code (Kindergeld "KG044007FK074442") → keep its digit-stripped
+  #    skeleton ("kgfk") so it is a STABLE non-blank key across months instead of dumping the purpose
+  #    into the catch-all blank bucket;
+  #  - the first clean ALPHA word is the purpose → return it.
+  #  - blank remittance / only numbers+refs → "" (own blank bucket; a lone blank one-off stays n=1).
+  def purpose_key(remittance)
+    s = remittance.to_s.unicode_normalize(:nfkc).strip.downcase
+    return "" if s.empty? # blank remittance → own blank bucket
+    s.split(/\s+/).each do |raw|
+      tok = raw.gsub(/\A[^a-z0-9\/]+|[^a-z0-9\/]+\z/, "") # trim edge punctuation, keep internal "/"
+      next if tok.empty?
+      next if tok.match?(/\A\d[\d\/.\-]*\z/) # pure number/date/month-year → no purpose, skip
+      if tok.match?(/\d/)                    # mixed alnum REF CODE → digit-stripped skeleton (stable)
+        skel = tok.gsub(/\d+/, "")
+        return skel if skel.length >= 2
+        next
+      end
+      return tok # first clean alpha word = the purpose
+    end
+    "" # only numbers/refs found → blank bucket
   end
 
   # ── §5.3 amount sub-clustering ────────────────────────────────────────────────

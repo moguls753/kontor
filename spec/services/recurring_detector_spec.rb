@@ -1040,6 +1040,113 @@ RSpec.describe RecurringDetector do
     end
   end
 
+  # Part-2 regression fix: an inflow [payer, account, cp] group is now sub-grouped by a normalized
+  # Verwendungszweck (purpose_key) so each (payer, purpose) is its own candidate. This splits a
+  # person who sends MANY recurring streams (Katja) into distinct series, WITHOUT re-breaking a
+  # salary whose purpose is stable but whose betreff text varies (Pludoni). Outflows/merchants are
+  # NOT purpose-split. credit() must pass debtor_iban: — the inflow paths require IBAN-consistency.
+  describe "inflow purpose sub-grouping" do
+    KATJA_IBAN   = "DE00000000000000167706".freeze
+    PLUDONI_IBAN = "DE00000000000000766300".freeze
+
+    # 5 monthly anchors, oldest→newest (newest = today-5), spaced ~30d.
+    def five_months
+      [ 125, 95, 65, 35, 5 ].map { |ago| Date.current - ago }
+    end
+
+    it "splits one payer's distinct purposes into separate monthly series and leaves one-offs unmatched (A)" do
+      # FIVE distinct recurring monthly streams, all from ONE payer / ONE debtor IBAN …
+      five_months.each { |d| credit(name: "Katja Stumpf", amount: 445.00, date: d, debtor_iban: KATJA_IBAN, remittance: "Miete") }
+      five_months.each { |d| credit(name: "Katja Stumpf", amount: 31.00,  date: d, debtor_iban: KATJA_IBAN, remittance: "Strom") }
+      five_months.each { |d| credit(name: "Katja Stumpf", amount: 16.50,  date: d, debtor_iban: KATJA_IBAN, remittance: "Internet") }
+      five_months.each { |d| credit(name: "Katja Stumpf", amount: 20.00,  date: d, debtor_iban: KATJA_IBAN, remittance: "ETF Alma") }
+      # Ansparen only 3 months (exactly MIN_OCCURRENCES) …
+      five_months.last(3).each { |d| credit(name: "Katja Stumpf", amount: 70.00, date: d, debtor_iban: KATJA_IBAN, remittance: "Ansparen") }
+      # … plus one-offs that must NOT become series (each a distinct singleton purpose key)
+      credit(name: "Katja Stumpf", amount: 1200.00, date: Date.current - 50, debtor_iban: KATJA_IBAN, remittance: "")
+      credit(name: "Katja Stumpf", amount: 300.00,  date: Date.current - 40, debtor_iban: KATJA_IBAN, remittance: "Geldgeschenke Malin")
+      credit(name: "Katja Stumpf", amount: 428.00,  date: Date.current - 30, debtor_iban: KATJA_IBAN, remittance: "Urlaub Mallorca")
+
+      subject.detect
+
+      series = user.recurring_series.inflows.where(canonical_name: "Katja Stumpf")
+      expect(series.count).to eq(5)
+      expect(series.map { |s| s.expected_amount.to_f }).to contain_exactly(445.0, 31.0, 16.5, 20.0, 70.0)
+      series.each { |s| expect(s.cadence).to eq("monthly") }
+      # the one-offs formed NO series
+      [ 1200.00, 300.00, 428.00 ].each do |amt|
+        expect(user.recurring_series.where(expected_amount: amt)).to be_empty
+      end
+    end
+
+    it "keeps a salary's varied 'Lohn/Gehalt …' betreff as ONE variable monthly income series (B)" do
+      # same payer/IBAN, SIX months, varied betreff text, VARYING amount — must stay ONE series.
+      rows = [
+        [ 1097.04, "Lohn/Gehalt 2026/01" ],
+        [ 2194.08, "Lohn/Gehalt 2025/10 und 2025/12 bzw. 2025/09 und 2025/11" ],
+        [ 1101.73, "Lohn/Gehalt 2026/02" ],
+        [ 2042.64, "Lohn/Gehalt 03 2026" ],
+        [ 1920.78, "Lohn/Gehalt pludoni" ],
+        [ 1920.78, "Lohn/Gehalt pludoni" ]
+      ]
+      [ 155, 125, 95, 65, 35, 5 ].each_with_index do |ago, i|
+        amount, betreff = rows[i]
+        credit(name: "Pludoni GmbH", amount: amount, date: Date.current - ago, debtor_iban: PLUDONI_IBAN, remittance: betreff)
+      end
+
+      subject.detect
+
+      series = user.recurring_series.inflows.where(canonical_name: "Pludoni Gmbh")
+      expect(series.count).to eq(1)
+      s = series.first
+      expect(s.cadence).to eq("monthly")
+      expect(s.amount_variable).to be(true)
+      expect(s.occurrences_count).to eq(6)
+      # ALL six real payments linked to the one series
+      expect(TransactionRecord.where(recurring_series_id: s.id).count).to eq(6)
+    end
+
+    it "normalizes month/date tokens away so 'Miete 06/2026' / '07/2026' / 'Miete' form ONE series (C)" do
+      remits = [ "Miete 06/2026", "Miete 07/2026", "Miete" ]
+      [ 65, 35, 5 ].each_with_index do |ago, i|
+        credit(name: "Katja Stumpf", amount: 445.00, date: Date.current - ago, debtor_iban: KATJA_IBAN, remittance: remits[i])
+      end
+
+      subject.detect
+
+      series = user.recurring_series.inflows.where(canonical_name: "Katja Stumpf")
+      expect(series.count).to eq(1)
+      expect(TransactionRecord.where(recurring_series_id: series.first.id).count).to eq(3)
+    end
+
+    it "does NOT merge distinct purposes at near-equal amounts (Miete 445 vs Urlaub 428) (D)" do
+      # same payer/IBAN, monthly, amounts within §5.3's tolerance band of each other — but DIFFERENT
+      # purposes → different sub-groups → two series (amount proximity is irrelevant across purposes).
+      five_months.first(4).each { |d| credit(name: "Katja Stumpf", amount: 445.00, date: d, debtor_iban: KATJA_IBAN, remittance: "Miete") }
+      five_months.first(4).each { |d| credit(name: "Katja Stumpf", amount: 428.00, date: d, debtor_iban: KATJA_IBAN, remittance: "Urlaub Mallorca") }
+
+      subject.detect
+
+      series = user.recurring_series.inflows.where(canonical_name: "Katja Stumpf")
+      expect(series.count).to eq(2)
+      expect(series.map { |s| s.expected_amount.to_f }).to contain_exactly(445.0, 428.0)
+    end
+
+    it "does NOT purpose-split outflows: a merchant with varying remittances stays ONE series (E regression guard)" do
+      # Spotify with a DIFFERENT ref-number betreff each month — if purpose-splitting wrongly applied
+      # to outflows, this would shatter into singletons. The outflow branch must keep it ONE series.
+      monthly_dates(4).each_with_index do |d, i|
+        charge(name: "Spotify", amount: -12.99, date: d, remittance: "Abrechnung #{1000 + i}/2026 Beleg")
+      end
+
+      subject.detect
+
+      series = user.recurring_series.outflows.where(canonical_name: "Spotify")
+      expect(series.count).to eq(1)
+      expect(series.first.occurrences_count).to eq(4)
+    end
+  end
+
   describe "canonical upgrade reconciliation" do
     let!(:credential) { create(:llm_credential, user: user) }
 
