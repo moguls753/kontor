@@ -714,26 +714,25 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       expect(named["total"].to_f).to eq(-19.0)
     end
 
-    # CM2 leaf mirrors the level-1 filter: a person-transfer debit (transfer_group_id set)
-    # in the category is absent from BOTH the level-1 list AND any creditor leaf — so the
-    # leaf is a strict subset of the row's universe (no leak that would break Σ(leaf) == row).
-    it "drops a person-transfer from both the level-1 list and the creditor leaf" do
+    # CM2 leaf mirrors the level-1 list: a transfer-tagged debit the bar counts (here orphaned —
+    # counterpart NULL, so in_scope keeps it as a real flow) appears in BOTH the level-1 list AND
+    # its creditor leaf, so the drill never goes empty for a category the bar shows non-empty.
+    it "shows a transfer-tagged debit in both the level-1 list and the creditor leaf" do
       account = create(:account, bank_connection: bc, balance_amount: 1000)
       food = create(:category, user: user, name: "Lebensmittel & Getränke")
       create(:transaction_record, account: account, amount: -40, booking_date: Date.current, category: food, creditor_name: "REWE GmbH")
-      # a person-transfer that ALSO carries a creditor_name — must be dropped by transfer_group_id: nil.
       create(:transaction_record, account: account, amount: -100, booking_date: Date.current, category: food,
                                   creditor_name: "Vera Laube", transfer_group_id: SecureRandom.uuid)
 
       get merchants_api_v1_statistics_path, params: this_month_params.merge(category_id: food.id), as: :json
-      expect(response.parsed_body["items"].map { |i| i["name"] }).to eq(["REWE GmbH"]) # Vera absent
+      expect(response.parsed_body["items"].map { |i| i["name"] }).to eq(["Vera Laube", "REWE GmbH"]) # both, -100 first
 
-      # the creditor leaf for the person-transfer name returns nothing (it was dropped).
+      # the creditor leaf for the transfer-tagged row returns it (mirrors the level-1 list).
       get category_transactions_api_v1_statistics_path,
           params: this_month_params.merge(category_id: food.id, creditor: "Vera Laube"), as: :json
       body = response.parsed_body
-      expect(body["count"]).to eq(0)
-      expect(body["total"].to_f).to eq(0.0)
+      expect(body["count"]).to eq(1)
+      expect(body["total"].to_f).to eq(-100.0)
     end
 
     # Scope-awareness: the lenses partition the accounts — Gemeinsam (default) is the shared
@@ -863,8 +862,9 @@ RSpec.describe "Api::V1::Statistics", type: :request do
 
   # Level-1 of the Ausgaben drill: a category's top Empfänger, ranked by spend, over the
   # SAME clamped display window/scope as #show's category bar (so Σ items == that category's
-  # bar minus its person-transfers — invariant CM1). `category_id` (or uncategorized=1)
-  # selects the category. The leaf is #category_transactions?creditor=… (not a `name` drill).
+  # bar EXACTLY — invariant CM1; transfer-tagged rows that survive in_scope are kept, not
+  # dropped). `category_id` (or uncategorized=1) selects the category. The leaf is
+  # #category_transactions?creditor=… (not a `name` drill).
   describe "merchants (Empfänger je Kategorie)" do
     # Shape + ranking + category scoping: two creditors in category A, a THIRD in category B
     # → #merchants?category_id=A returns ONLY A's two (B absent), most-negative first, each
@@ -938,14 +938,13 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       expect(items.first["amount"].to_f).to eq(-25.0)
     end
 
-    # Person-transfer exclusion (CM1 caveat): a debit with transfer_group_id in the category
-    # is ABSENT from items, and the per-category total is smaller than the category bar by
-    # exactly that amount (the intentional divergence).
-    it "excludes person-to-person transfers and is smaller than the category bar by them" do
+    # CM1 (now exact): a transfer-tagged debit that survives in_scope (counterpart out of scope,
+    # here orphaned) is a real outflow the bar counts — so it appears in items and the per-category
+    # total reconciles to the category bar EXACTLY (no minus-person-transfers divergence anymore).
+    it "includes a cross-scope transfer-tagged debit and reconciles to the category bar" do
       account = create(:account, bank_connection: bc, balance_amount: 1000)
       food = create(:category, user: user, name: "Lebensmittel & Getränke")
       create(:transaction_record, account: account, amount: -60, booking_date: Date.current, category: food, creditor_name: "REWE GmbH")
-      # a person-transfer (group id set, but no in-scope counterpart so in_scope keeps it).
       create(:transaction_record, account: account, amount: -100, booking_date: Date.current, category: food,
                                   creditor_name: "Vera Laube", transfer_group_id: SecureRandom.uuid)
 
@@ -954,9 +953,8 @@ RSpec.describe "Api::V1::Statistics", type: :request do
 
       get merchants_api_v1_statistics_path, params: this_month_params.merge(category_id: food.id), as: :json
       body = response.parsed_body
-      expect(body["items"].map { |i| i["name"] }).to eq(["REWE GmbH"])
-      expect(body["total"].to_f).to eq(-60.0)
-      expect(body["total"].to_f).to be_within(0.001).of(bar + 100.0) # smaller by the person-transfer
+      expect(body["items"].map { |i| i["name"] }).to eq(["Vera Laube", "REWE GmbH"])
+      expect(body["total"].to_f).to be_within(0.001).of(bar) # Σ == the bar, exactly
     end
 
     # Matched internal transfer (both legs in scope) in the category contributes nothing.

@@ -141,16 +141,16 @@ module Api
         rel = window.debits.where(category_id: category_id)
 
         # Optional payee leaf (CM2). When `creditor` is present we are drilling INTO the
-        # per-category Empfänger ranking (§2.2), which (a) drops person-to-person transfers
-        # and (b) groups by the NORMALISED creditor_name — so the leaf MUST mirror both, or
-        # Σ(leaf) ≠ the payee row. `creditor=""`/blank ⇒ that category's null/no-creditor
-        # bucket. EAGER-LOAD BEFORE the Ruby filter (review m1): `.select { … }` materialises
-        # an Array, so a later `.includes` would be a no-op and transaction_json would N+1 on
-        # tx.account/tx.category (violating §1.2) — include here, while `rel` is a relation.
+        # per-category Empfänger ranking (§2.2), which groups by the NORMALISED creditor_name —
+        # so the leaf MUST mirror it, or Σ(leaf) ≠ the payee row. `creditor=""`/blank ⇒ that
+        # category's null/no-creditor bucket. (No transfer_group_id drop — #merchants no longer
+        # drops transfer-tagged rows, so the leaf mustn't either, or a Sparen-style cross-scope
+        # contribution would vanish from its own payee leaf.) EAGER-LOAD BEFORE the Ruby filter
+        # (review m1): `.select { … }` materialises an Array, so a later `.includes` would be a
+        # no-op and transaction_json would N+1 on tx.account/tx.category (§1.2) — include here.
         if params.key?(:creditor)
           want = normalize_merchant(params[:creditor])         # nil for the "" / blank bucket
-          rel  = rel.where(transfer_group_id: nil)             # mirror §2.2's person-transfer drop
-                    .includes(:account, :category)
+          rel  = rel.includes(:account, :category)
                     .order(booking_date: :desc, id: :desc)
                     .select { |tx| normalize_merchant(tx.creditor_name) == want }
         end
@@ -175,23 +175,22 @@ module Api
       end
 
       # Level-1 drill of the Ausgaben hierarchy: the top Empfänger WITHIN one category,
-      # ranked by spend, over the SAME clamped display window/scope as #show's category bar
-      # (so Σ items == that category's bar minus its person-transfers — invariant CM1).
-      # `category_id` selects the category; `uncategorized=1` ⇒ the null-category bar's
-      # Empfänger. Absent-both deliberately resolves to nil → the uncategorized bucket (NOT a
-      # global all-merchants list, which is gone, and NOT a 400 — every UI caller always sends
-      # category_id or uncategorized=1; review m2). Person-to-person transfers
-      # (transfer_group_id present) are dropped — a person name is not a merchant (the
-      # intentional CM1 divergence from the category bar). The leaf is now
-      # #category_transactions?creditor=… (§2.1), not a `name` drill here. Read-only.
+      # ranked by spend, over the SAME clamped display window/scope as #show's category bar,
+      # so Σ items == that category's bar EXACTLY (invariant CM1). `category_id` selects the
+      # category; `uncategorized=1` ⇒ the null-category bar's Empfänger. Absent-both
+      # deliberately resolves to nil → the uncategorized bucket (NOT a global all-merchants
+      # list, which is gone, and NOT a 400 — every UI caller always sends category_id or
+      # uncategorized=1; review m2). The leaf is #category_transactions?creditor=… (§2.1).
+      # NOTE: transfer-tagged rows are NOT dropped here. The window is already `in_scope`, so a
+      # net-zero internal transfer (counterpart IN scope) is gone; what survives is a real
+      # cross-scope outflow the bar counts (e.g. a Privat→joint Sparen contribution). Dropping
+      # it would empty the drill of a category the bar shows non-empty (the reported bug). Read-only.
       def merchants
         window        = stats_window(params)[:window]
         uncategorized = params[:uncategorized] == "1"
         category_id   = uncategorized ? nil : params[:category_id].presence
 
-        debits = window.debits
-                       .where(category_id: category_id)        # scope to ONE category (CM1)
-                       .where(transfer_group_id: nil)          # drop person-to-person transfers
+        debits = window.debits.where(category_id: category_id) # scope to ONE category (CM1)
         render json: merchant_items(debits)
       end
 
