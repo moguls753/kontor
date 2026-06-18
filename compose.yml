@@ -82,7 +82,7 @@ services:
     # Pulled from GHCR. To build from source instead (development / arm64 / a
     # tag not yet published), add the build override:
     #   docker compose -f compose.yml -f compose.build.yml up -d --build
-    image: ghcr.io/moguls753/kontor-tr-scraper:v0.1.0
+    image: ghcr.io/moguls753/kontor-tr-scraper:v0.1.1
     restart: unless-stopped
     depends_on:
       tr-egress-proxy:

@@ -22,12 +22,15 @@ class FakeTr:
     enqueues the response recv() will later yield (FIFO), mirroring how
     _gather_balance subscribes-then-collects in phases."""
 
-    def __init__(self, positions=None, cash=None, details=None, tickers=None, compact_error=False):
+    def __init__(self, positions=None, cash=None, details=None, tickers=None, compact_error=False,
+                 compact_error_payload=None):
         self._positions = positions or []
         self._cash = cash or []
         self._details = details or {}
         self._tickers = tickers or {}
         self._compact_error = compact_error
+        # default = the cash-only signal; override to model a transient/API error (topic rename)
+        self._compact_error_payload = compact_error_payload or {"message": "no securities account"}
         self._counter = 0
         self._queue = []
 
@@ -38,7 +41,7 @@ class FakeTr:
     async def compact_portfolio(self):
         sid = self._next()
         if self._compact_error:
-            self._queue.append(TradeRepublicError(sid, {"type": "compactPortfolio"}, {"message": "no securities account"}))
+            self._queue.append(TradeRepublicError(sid, {"type": "compactPortfolio"}, self._compact_error_payload))
         else:
             self._queue.append((sid, {"type": "compactPortfolio"}, {"positions": self._positions}))
         return sid
@@ -152,6 +155,20 @@ def test_real_sell_off_writes_the_genuine_cash_through_no_false_positive():
     result = gather(positions=[], cash=[{"currencyId": "EUR", "amount": "11.52"}])
     assert result["total"] == "11.52"
     assert result["warnings"] == []
+
+
+def test_compactportfolio_topic_error_fails_loud_not_cash_only():
+    # TR's mid-2026 API migration rejects the topic ("BAD_SUBSCRIPTION_TYPE: Unknown topic
+    # type: compactPortfolio") — that is NOT a cash-only account. Must fail loud (so the caller
+    # keeps the last good value) rather than booking the cash balance as the whole portfolio.
+    import pytest
+    with pytest.raises(tr_api.TransientError):
+        gather(
+            compact_error=True,
+            compact_error_payload={"errors": [{"errorCode": "BAD_SUBSCRIPTION_TYPE",
+                                               "errorMessage": "Unknown topic type: compactPortfolio.31"}]},
+            cash=[{"currencyId": "EUR", "amount": "11.52"}],
+        )
 
 
 def test_dropped_instrument_details_fails_loud_not_silent_cash_only():

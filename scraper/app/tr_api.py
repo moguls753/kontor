@@ -231,17 +231,37 @@ def _probe_session(tr: TradeRepublicApi) -> None:
         raise TransientError("Could not reach Trade Republic to verify the session.") from e
 
 
+def _is_no_securities_error(err) -> bool:
+    """A compactPortfolio error that signals a genuinely cash-only account (no securities
+    account), NOT a transient/API error (e.g. TR's BAD_SUBSCRIPTION_TYPE topic rename). Only
+    the former may be booked as 0 securities; the latter must fail loud."""
+    blob = f"{getattr(err, 'error', '')} {getattr(err, 'subscription', '')} {err}".lower()
+    return "no securities" in blob
+
+
 async def _gather_balance(tr: TradeRepublicApi) -> dict:
     sub_compact = await tr.compact_portfolio()
     sub_cash = await tr.cash()
-    responses, _ = await _collect(tr, {sub_compact, sub_cash})
+    responses, errors = await _collect(tr, {sub_compact, sub_cash})
 
     if sub_cash not in responses:
         raise TransientError("Trade Republic did not return a cash balance.")
     cash_buckets = responses[sub_cash]
 
-    # compactPortfolio missing => it errored, i.e. a cash-only account.
-    positions = responses.get(sub_compact, {}).get("positions", []) or []
+    # compactPortfolio: a SUCCESSFUL response (even empty positions) is the real holdings — a
+    # genuinely cash-only account returns []. But if the topic ERRORED or was DROPPED we must
+    # NOT book cash-only for a real portfolio (the 12.330,47 € -> 11,52 € leak). TR's mid-2026
+    # API migration began REJECTING the topic ("BAD_SUBSCRIPTION_TYPE: Unknown topic type:
+    # compactPortfolio") which pytr 0.4.9 still requests; that is NOT a cash-only signal. So
+    # fail loud on any error except the explicit "no securities account", and on a silent drop.
+    if sub_compact in responses:
+        positions = responses[sub_compact].get("positions", []) or []
+    elif sub_compact in errors and _is_no_securities_error(errors[sub_compact]):
+        positions = []  # genuinely cash-only account
+    else:
+        detail = errors[sub_compact] if sub_compact in errors else "no response (dropped)"
+        raise TransientError(f"Trade Republic did not return the portfolio ({detail}); refusing a cash-only total.")
+
     securities_value = await _securities_value(tr, positions)
 
     # cash() returns a list of {currencyId, amount} buckets.
