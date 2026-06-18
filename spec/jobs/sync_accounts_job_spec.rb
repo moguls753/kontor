@@ -229,6 +229,9 @@ RSpec.describe SyncAccountsJob, type: :job do
 
     expect { described_class.perform_now(bc.id) }.to have_enqueued_job(SyncAccountsJob)
     expect(bc.reload.status).to eq("authorized")
+    # The sidecar's fail-loud (incomplete feed) surfaces as a 503 here. last_synced_at must NOT
+    # be stamped — that staleness is the operator signal that the last good value was kept.
+    expect(bc.reload.last_synced_at).to be_nil
   end
 
   it "does NOT expire when the scraper sidecar is unreachable, and retries" do
@@ -240,6 +243,22 @@ RSpec.describe SyncAccountsJob, type: :job do
 
     expect { described_class.perform_now(bc.id) }.to have_enqueued_job(SyncAccountsJob)
     expect(bc.reload.status).to eq("authorized")
+    expect(bc.reload.last_synced_at).to be_nil
+  end
+
+  # A real sell-off (sidecar returns a genuine small total) is WRITTEN — Rails must not
+  # second-guess the figure by magnitude. The cash-leak is handled upstream in the sidecar
+  # (it fails loud on an incomplete price feed -> blank/503 -> skipped below), not here.
+  it "writes a genuinely small Trade Republic balance (e.g. after a sell-off)" do
+    create(:trade_republic_credential, :paired, user: user)
+    bc = create(:bank_connection, :trade_republic, user: user)
+    account = create(:account, bank_connection: bc, account_uid: "trade_republic", balance_amount: BigDecimal("12330.47"))
+
+    allow(tr_client).to receive(:balance).and_return(total: "11.52", currency: "EUR", session_blob: "b", warnings: [])
+
+    described_class.perform_now(bc.id)
+
+    expect(account.reload.balance_amount).to eq(BigDecimal("11.52")) # real value written, not rejected
   end
 
   it "does not crash on a blank balance: skips the write but keeps the refreshed session" do

@@ -269,10 +269,16 @@ async def _securities_value(tr: TradeRepublicApi, positions: list) -> Decimal:
     if not positions:
         return Decimal("0")
 
+    # Only HELD positions need valuing. A closed-but-still-listed position has netSize 0 and
+    # contributes price×0 = 0, so it is excluded from BOTH the math and the fail-loud check
+    # below (else a dropped price for an irrelevant 0-size row would needlessly refuse the
+    # whole balance forever). A real SELL-OFF leaves no held positions -> genuine cash returned.
+    held = [p for p in positions if Decimal(str(p.get("netSize", "0"))) != 0]
+    if not held:
+        return Decimal("0")
+
     # Instrument details give the correct exchange and the name (bond handling).
-    detail_subs = {}
-    for pos in positions:
-        detail_subs[await tr.instrument_details(pos["instrumentId"])] = pos
+    detail_subs = {await tr.instrument_details(p["instrumentId"]): p for p in held}
     details, _ = await _collect(tr, set(detail_subs))
     for sid, pos in detail_subs.items():
         d = details.get(sid) or {}
@@ -281,17 +287,36 @@ async def _securities_value(tr: TradeRepublicApi, positions: list) -> Decimal:
 
     # Tickers give the current price; use the first listed exchange (per pytr).
     ticker_subs = {}
-    for pos in positions:
+    for pos in held:
         if pos["_exchanges"]:
             ticker_subs[await tr.ticker(pos["instrumentId"], exchange=pos["_exchanges"][0])] = pos
     tickers, _ = await _collect(tr, set(ticker_subs))
 
-    total = Decimal("0")
+    priced: dict = {}  # instrumentId -> (price, pos)
     for sid, pos in ticker_subs.items():
         ticker = tickers.get(sid)
         if not ticker or "price" not in (ticker.get("last") or {}):
-            continue  # no price -> skip, matching pytr's sanitize step
-        price = Decimal(str(ticker["last"]["price"]))
+            continue  # price didn't arrive -> caught by the completeness check below
+        priced[pos["instrumentId"]] = (Decimal(str(ticker["last"]["price"])), pos)
+
+    # FAIL-LOUD on an INCOMPLETE feed (the cash-only bug). Every HELD position must be fully
+    # valued. One that wasn't priced — whether its instrument_details response dropped (-> no
+    # exchange -> never subscribed), its details came back with no exchange, OR its ticker price
+    # never arrived — means TR's WebSocket dropped part of the feed (flaky behind the AWS WAF;
+    # both stages go through the same straggler-tolerant _collect). pytr silently skips it,
+    # collapsing securities toward 0 and reporting a 5-figure portfolio as cash-only (observed
+    # 12.330,47 € -> 11,52 €). A partial total is worse than none: refuse it (-> 503 TRANSIENT)
+    # so the caller retries / keeps the last good value. A real SELL-OFF (held == []) returned
+    # the genuine cash above and never reaches here, so this can't misfire on a liquidation.
+    unpriced = [p.get("_name") or p["instrumentId"] for p in held if p["instrumentId"] not in priced]
+    if unpriced:
+        raise TransientError(
+            f"Incomplete Trade Republic price feed: {len(unpriced)}/{len(held)} "
+            f"held position(s) unpriced ({', '.join(map(str, unpriced[:5]))}); refusing a partial total."
+        )
+
+    total = Decimal("0")
+    for price, pos in priced.values():
         if _BOND_PATTERN.search(pos.get("_name", "")):
             price = price / 100  # bond price is per €100 face value
         net_size = Decimal(str(pos.get("netSize", "0")))

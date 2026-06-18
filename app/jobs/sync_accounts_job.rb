@@ -129,6 +129,11 @@ class SyncAccountsJob < ApplicationJob
     # the job (it is neither a SessionExpired nor a retryable error). Skip the
     # write instead — the next daily run retries. A healthy sidecar always
     # returns a canonical decimal string.
+    # A blank total (the sidecar refused an incomplete/partial price feed → 503, retried; or a
+    # 200 with no figure) must not raise/dead-letter — skip the write and keep the last good
+    # value; the next run retries. The sidecar now distinguishes a real cash-only/sell-off
+    # (genuine small total, written) from an incomplete feed (fails loud → never reaches here),
+    # so Rails does NOT second-guess the figure by magnitude (that would reject a real sell-off).
     total = result[:total]
     return if total.blank?
 
