@@ -48,7 +48,6 @@ module Api
         results = CategorizeTransactionsJob.perform_now(Current.user.id)
         render json: results
       end
-
     end
   end
 end

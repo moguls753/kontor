@@ -751,7 +751,6 @@ RSpec.describe RecurringDetector do
       expect(spotify.reload.occurrences_count).to eq(4)
       expect(TransactionRecord.where(recurring_series_id: spotify.id).count).to eq(4)
     end
-
   end
 
   describe "aggregator sub-merchant extraction (Fix 2)" do

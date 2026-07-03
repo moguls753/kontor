@@ -11,7 +11,7 @@ RSpec.describe EasyBank::ScraperClient do
       .to_return(status: 200, body: {
         status: "ok",
         balance: { value: "-980.31", currency: "EUR" },
-        transactions: [{ id: "t1", amount: "-26.80" }],
+        transactions: [ { id: "t1", amount: "-26.80" } ],
         otp_required: false
       }.to_json)
 

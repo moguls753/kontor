@@ -39,11 +39,11 @@ RSpec.describe "Api::V1::Transactions", type: :request do
     # Gemeinsam (default): only the shared account is in scope (membership) → its +70 booking
     # shows; the personal-account leg is out of scope.
     get api_v1_transactions_path, as: :json
-    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Ansparen in"])
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq([ "Ansparen in" ])
 
     # Privat: only the personal accounts are in scope → the personal-account leg shows.
     get api_v1_transactions_path, params: { scope: "privat" }, as: :json
-    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Ansparen"])
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq([ "Ansparen" ])
   end
 
   # Direction composes with scope: only the in-scope (personal) account's legs appear, filtered
@@ -65,10 +65,10 @@ RSpec.describe "Api::V1::Transactions", type: :request do
                                 transfer_group_id: g_in, transfer_counterpart_account: personal)
 
     get api_v1_transactions_path, params: { scope: "privat", direction: "in" }, as: :json
-    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Rein privat"])
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq([ "Rein privat" ])
 
     get api_v1_transactions_path, params: { scope: "privat", direction: "out" }, as: :json
-    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Raus privat"])
+    expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq([ "Raus privat" ])
   end
 
   # Every booking on an in-scope account appears in the ledger — including an orphaned transfer
@@ -146,12 +146,12 @@ RSpec.describe "Api::V1::Transactions", type: :request do
 
     it "returns only inflows for direction=in" do
       get api_v1_transactions_path, params: { direction: "in" }, as: :json
-      expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["Gehalt"])
+      expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq([ "Gehalt" ])
     end
 
     it "returns only outflows for direction=out" do
       get api_v1_transactions_path, params: { direction: "out" }, as: :json
-      expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq(["REWE"])
+      expect(response.parsed_body["transactions"].map { |t| t["remittance"] }).to eq([ "REWE" ])
     end
 
     it "returns everything when direction is absent or 'all'" do
@@ -171,7 +171,7 @@ RSpec.describe "Api::V1::Transactions", type: :request do
       create(:transaction_record, account: account, amount: 9.99, remittance: "Gehalt Bonus", creditor_name: nil, debtor_name: "Boss")
       get api_v1_transactions_path, params: { direction: "in", search: "Gehalt" }, as: :json
       remittances = response.parsed_body["transactions"].map { |t| t["remittance"] }
-      expect(remittances).to match_array(["Gehalt", "Gehalt Bonus"])
+      expect(remittances).to match_array([ "Gehalt", "Gehalt Bonus" ])
     end
   end
 

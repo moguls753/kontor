@@ -51,7 +51,7 @@ RSpec.describe Paypal::Ingest do
 
     it "skips pending rows (booked-only)" do
       pending = paypal_sync_response["transactions"].first.merge("id" => "pp-pending", "is_pending" => true)
-      result = paypal_sync_response.merge("transactions" => [pending])
+      result = paypal_sync_response.merge("transactions" => [ pending ])
 
       account = described_class.call(bank_connection, result)
 

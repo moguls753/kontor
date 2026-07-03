@@ -205,7 +205,6 @@ RSpec.describe "Api::V1::RecurringSeries", type: :request do
       get api_v1_recurring_index_path, params: { status: "ended" }, as: :json
       expect(response.parsed_body["series"].map { |x| x["id"] }).to include(ended.id)
     end
-
   end
 
   describe "POST /api/v1/recurring/detect" do

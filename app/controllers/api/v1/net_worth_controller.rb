@@ -74,11 +74,11 @@ module Api
         current = (account.balance_amount || 0).to_d
         by_day = if NON_RECONSTRUCTABLE_ROLES.include?(account.role)
                    {}
-                 else
+        else
                    # booked-only: the current balance (our anchor) reflects booked tx, so a
                    # pending row with a booking_date would drift the reconstruction from it.
                    account.transaction_records.booked.where.not(booking_date: nil).group(:booking_date).sum(:amount)
-                 end
+        end
         if by_day.any?
           earliest = by_day.keys.min
           recon = {}

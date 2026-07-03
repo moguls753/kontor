@@ -15,7 +15,7 @@ module Api
       # exclude pure savings ("Sparen" is not a fixed COST). NB: the forecast is CASHFLOW,
       # not Fixkosten — it does NOT use this exclusion; a recurring Sparen outflow counts
       # there as a recurring expense (plan §1.3, redesign 2026-06-10).
-      TRANSFER_CATEGORY_NAMES = ["Überweisungen", "Transfers", "Sparen", "Savings"].freeze
+      TRANSFER_CATEGORY_NAMES = [ "Überweisungen", "Transfers", "Sparen", "Savings" ].freeze
 
       # SQLite-only month bucket (the app is SQLite-only per CLAUDE.md). Used only as
       # a GROUP BY expression — the summed column stays a typed decimal, so grouped

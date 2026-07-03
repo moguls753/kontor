@@ -99,7 +99,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     cats = body["categories"]
 
     # all three categories appear in one list, largest magnitude first.
-    expect(cats["items"].map { |i| i["name"] }).to eq(["Sparen", "Überweisungen", "Lebensmittel & Getränke"])
+    expect(cats["items"].map { |i| i["name"] }).to eq([ "Sparen", "Überweisungen", "Lebensmittel & Getränke" ])
     expect(cats["total"].to_f).to eq(-180.0)
 
     reconciled = cats["items"].sum { |i| i["amount"].to_f }
@@ -115,7 +115,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
     get api_v1_statistics_path, params: { from: "2025-12-01", to: "2026-01-31" }, as: :json
     cashflow = response.parsed_body["cashflow"]
 
-    expect(cashflow.map { |c| c["month"] }).to eq(["2025-12", "2026-01"])
+    expect(cashflow.map { |c| c["month"] }).to eq([ "2025-12", "2026-01" ])
     expect(cashflow.find { |c| c["month"] == "2025-12" }["expenses"].to_f).to eq(-10.0)
     expect(cashflow.find { |c| c["month"] == "2026-01" }["income"].to_f).to eq(100.0)
   end
@@ -420,8 +420,8 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       get api_v1_statistics_path, params: this_month_params, as: :json
       up = response.parsed_body["forecast"]["upcoming"]
 
-      expect(up.map { |u| u["name"] }).to eq(["Gehalt", "Netflix"])       # sorted by date asc
-      expect(up.map { |u| u["direction"] }).to eq(["inflow", "outflow"])
+      expect(up.map { |u| u["name"] }).to eq([ "Gehalt", "Netflix" ])       # sorted by date asc
+      expect(up.map { |u| u["direction"] }).to eq([ "inflow", "outflow" ])
       expect(up.first).to include("date" => (Date.current + 2).iso8601, "amount" => "2000.0")
       expect(response.parsed_body["forecast"]["upcoming_total"].to_f).to eq(1985.0)  # 2000 + (-15)
     end
@@ -551,7 +551,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       get variable_transactions_api_v1_statistics_path, params: { kind: "income" }, as: :json
       body = response.parsed_body
 
-      expect(body["transactions"].map { |t| t["id"] }).to eq([recent.id, old.id])
+      expect(body["transactions"].map { |t| t["id"] }).to eq([ recent.id, old.id ])
       expect(body["transactions"].first).to include("category", "account_name", "remittance")
     end
 
@@ -565,11 +565,11 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       get variable_transactions_api_v1_statistics_path, params: { scope: "privat" }, as: :json
       body = response.parsed_body
       expect(body["kind"]).to eq("expenses")
-      expect(body["transactions"].map { |t| t["amount"].to_f }).to eq([-100.0])
+      expect(body["transactions"].map { |t| t["amount"].to_f }).to eq([ -100.0 ])
 
       # Gemeinsam (default): only the shared account's flows.
       get variable_transactions_api_v1_statistics_path, as: :json
-      expect(response.parsed_body["transactions"].map { |t| t["amount"].to_f }).to eq([-400.0])
+      expect(response.parsed_body["transactions"].map { |t| t["amount"].to_f }).to eq([ -400.0 ])
     end
 
     it "requires authentication" do
@@ -595,7 +595,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
 
       get variable_transactions_api_v1_statistics_path, params: { kind: "expenses" }, as: :json
       ids = response.parsed_body["transactions"].map { |t| t["id"] }
-      expect(ids).to eq([real.id])           # the transfer leg is netted out
+      expect(ids).to eq([ real.id ])           # the transfer leg is netted out
       expect(ids).not_to include(out.id)
       avg = response.parsed_body["average"].to_f
 
@@ -612,7 +612,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
 
       get variable_transactions_api_v1_statistics_path, params: { kind: "expenses" }, as: :json
       body = response.parsed_body
-      expect(body["transactions"].map { |t| t["amount"].to_f }).to eq([-10.0])
+      expect(body["transactions"].map { |t| t["amount"].to_f }).to eq([ -10.0 ])
     end
   end
 
@@ -725,7 +725,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
                                   creditor_name: "Vera Laube", transfer_group_id: SecureRandom.uuid)
 
       get merchants_api_v1_statistics_path, params: this_month_params.merge(category_id: food.id), as: :json
-      expect(response.parsed_body["items"].map { |i| i["name"] }).to eq(["Vera Laube", "REWE GmbH"]) # both, -100 first
+      expect(response.parsed_body["items"].map { |i| i["name"] }).to eq([ "Vera Laube", "REWE GmbH" ]) # both, -100 first
 
       # the creditor leaf for the transfer-tagged row returns it (mirrors the level-1 list).
       get category_transactions_api_v1_statistics_path,
@@ -806,20 +806,24 @@ RSpec.describe "Api::V1::Statistics", type: :request do
 
       get category_transactions_api_v1_statistics_path,
           params: this_month_params.merge(category_id: cat.id), as: :json
-      expect(response.parsed_body["transactions"].map { |t| t["amount"].to_f }).to eq([-10.0])
+      expect(response.parsed_body["transactions"].map { |t| t["amount"].to_f }).to eq([ -10.0 ])
     end
 
     # Serialization shape: rows carry the shared transaction_json contract, newest first.
     it "serializes rows with the shared transaction_json keys, newest first" do
       account = create(:account, bank_connection: bc, balance_amount: 1000)
       cat = create(:category, user: user, name: "Reisen")
-      older = create(:transaction_record, account: account, amount: -10, booking_date: Date.current - 3, category: cat)
+      # Anchor to the month window ([beginning_of_month, today]) rather than
+      # Date.current - 3, which slips into the previous month in the first days of
+      # a month and drops `older` out of the window. On the 1st both share a date
+      # and the `id: :desc` tiebreak still orders newer-first.
+      older = create(:transaction_record, account: account, amount: -10, booking_date: Date.current.beginning_of_month, category: cat)
       newer = create(:transaction_record, account: account, amount: -20, booking_date: Date.current, category: cat)
 
       get category_transactions_api_v1_statistics_path,
           params: this_month_params.merge(category_id: cat.id), as: :json
       body = response.parsed_body
-      expect(body["transactions"].map { |t| t["id"] }).to eq([newer.id, older.id])
+      expect(body["transactions"].map { |t| t["id"] }).to eq([ newer.id, older.id ])
       expect(body["transactions"].first).to include(
         "id", "amount", "currency", "booking_date", "status", "remittance",
         "creditor_name", "account_id", "account_name", "category"
@@ -883,7 +887,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       expect(response).to have_http_status(:ok)
       body = response.parsed_body
 
-      expect(body["items"].map { |i| i["name"] }).to eq(["Lidl", "REWE GmbH"]) # -200 before -42.5; Lufthansa absent
+      expect(body["items"].map { |i| i["name"] }).to eq([ "Lidl", "REWE GmbH" ]) # -200 before -42.5; Lufthansa absent
       rewe = body["items"].find { |i| i["name"] == "REWE GmbH" }
       expect(rewe["count"]).to eq(2)
       expect(rewe["amount"].to_f).to eq(-42.5)
@@ -953,7 +957,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
 
       get merchants_api_v1_statistics_path, params: this_month_params.merge(category_id: food.id), as: :json
       body = response.parsed_body
-      expect(body["items"].map { |i| i["name"] }).to eq(["Vera Laube", "REWE GmbH"])
+      expect(body["items"].map { |i| i["name"] }).to eq([ "Vera Laube", "REWE GmbH" ])
       expect(body["total"].to_f).to be_within(0.001).of(bar) # Σ == the bar, exactly
     end
 
@@ -971,7 +975,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
 
       get merchants_api_v1_statistics_path, params: this_month_params.merge(category_id: food.id), as: :json
       body = response.parsed_body
-      expect(body["items"].map { |i| i["name"] }).to eq(["REWE GmbH"])
+      expect(body["items"].map { |i| i["name"] }).to eq([ "REWE GmbH" ])
       expect(body["total"].to_f).to eq(-40.0)
     end
 
@@ -1032,7 +1036,7 @@ RSpec.describe "Api::V1::Statistics", type: :request do
       uncat = response.parsed_body
 
       expect(absent_both).to eq(uncat)
-      expect(absent_both["items"].map { |i| i["name"] }).to eq(["Kiosk"]) # only the uncategorized debit
+      expect(absent_both["items"].map { |i| i["name"] }).to eq([ "Kiosk" ]) # only the uncategorized debit
       expect(absent_both["total"].to_f).to eq(-25.0)
     end
   end

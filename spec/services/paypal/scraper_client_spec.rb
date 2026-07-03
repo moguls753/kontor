@@ -11,7 +11,7 @@ RSpec.describe Paypal::ScraperClient do
       .to_return(status: 200, body: {
         status: "ok",
         date_from: "2026-05-07", date_to: "2026-06-06",
-        transactions: [{ id: "55X63072JY995300U", amount: "-8.15" }]
+        transactions: [ { id: "55X63072JY995300U", amount: "-8.15" } ]
       }.to_json)
 
     result = client.sync(username: "u", password: "p")

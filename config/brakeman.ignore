@@ -3,8 +3,12 @@
     {
       "fingerprint": "682386f6dfa6b16c2671d61837b33aadd5c14952ff3521c378af5b8fb8ce3ab2",
       "note": "User-configured LLM endpoint URL is validated at model level and intentionally used in Net::HTTP"
+    },
+    {
+      "fingerprint": "90dc75627b2496962e7007df226f391a9a0f637191f148293f450852a46447f6",
+      "note": "False positive: :role is the account classification (Konto-Rolle giro/savings/etc.), not an authorization role, and :shared is the Familie/Privat flag. #update is scoped to Current.user.accounts.find, so there is no cross-user mass-assignment/privilege escalation."
     }
   ],
-  "updated": "2026-02-08",
-  "brakeman_version": "8.0.2"
+  "updated": "2026-07-03",
+  "brakeman_version": "8.0.5"
 }

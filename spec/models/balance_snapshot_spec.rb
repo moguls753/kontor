@@ -59,7 +59,7 @@ RSpec.describe BalanceSnapshot, type: :model do
 
       described_class.capture_all!(accounts: Account.where(id: mine.id))
 
-      expect(described_class.pluck(:account_id)).to eq([mine.id])
+      expect(described_class.pluck(:account_id)).to eq([ mine.id ])
     end
   end
 end
