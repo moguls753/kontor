@@ -239,8 +239,61 @@ def _is_no_securities_error(err) -> bool:
     return "no securities" in blob
 
 
+def _find_securities_account_number(obj) -> str | None:
+    """Best-effort recursive search for a "securitiesAccountNumber" in the settings()
+    JSON (GET /api/v2/auth/account). Its exact nesting is not contractually fixed, so we
+    walk defensively; the secAccNo param is OPTIONAL, so absence returns None."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "securitiesAccountNumber" and isinstance(value, (str, int)) and value != "":
+                return str(value)
+        for value in obj.values():
+            found = _find_securities_account_number(value)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_securities_account_number(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _flatten_compact_portfolio(response: dict) -> list:
+    """The new "compactPortfolioByType" topic groups positions under
+    response["categories"][*]["positions"] instead of a flat top-level "positions" array,
+    and names each position by "isin" where the old topic used "instrumentId". Flatten the
+    grouping and normalise the id so all downstream code (instrument_details, ticker,
+    netSize, the fail-loud check) keeps keying on "instrumentId"."""
+    positions = [
+        pos
+        for cat in (response.get("categories") or [])
+        for pos in (cat.get("positions") or [])
+    ]
+    for pos in positions:
+        if "isin" in pos and "instrumentId" not in pos:
+            pos["instrumentId"] = pos["isin"]
+    return positions
+
+
 async def _gather_balance(tr: TradeRepublicApi) -> dict:
-    sub_compact = await tr.compact_portfolio()
+    # pytr 0.4.9's compact_portfolio() is hardcoded to the now-dead "compactPortfolio" topic
+    # (TR rejects it: BAD_SUBSCRIPTION_TYPE). Subscribe DIRECTLY to the replacement
+    # "compactPortfolioByType" (upstream 74ca1483) instead, with the OPTIONAL secAccNo when we
+    # can find it. settings() is a blocking sync HTTP call in 0.4.9; obtain the account number
+    # best-effort and never let its absence/failure block the balance.
+    sec_acc_no = None
+    try:
+        account = await asyncio.to_thread(tr.settings)
+        sec_acc_no = _find_securities_account_number(account)
+    except Exception:
+        sec_acc_no = None
+
+    payload = {"type": "compactPortfolioByType"}
+    if sec_acc_no:
+        payload["secAccNo"] = sec_acc_no
+
+    sub_compact = await tr.subscribe(payload)
     sub_cash = await tr.cash()
     responses, errors = await _collect(tr, {sub_compact, sub_cash})
 
@@ -248,14 +301,14 @@ async def _gather_balance(tr: TradeRepublicApi) -> dict:
         raise TransientError("Trade Republic did not return a cash balance.")
     cash_buckets = responses[sub_cash]
 
-    # compactPortfolio: a SUCCESSFUL response (even empty positions) is the real holdings — a
-    # genuinely cash-only account returns []. But if the topic ERRORED or was DROPPED we must
-    # NOT book cash-only for a real portfolio (the 12.330,47 € -> 11,52 € leak). TR's mid-2026
-    # API migration began REJECTING the topic ("BAD_SUBSCRIPTION_TYPE: Unknown topic type:
-    # compactPortfolio") which pytr 0.4.9 still requests; that is NOT a cash-only signal. So
-    # fail loud on any error except the explicit "no securities account", and on a silent drop.
+    # compactPortfolioByType: a SUCCESSFUL response (even empty categories) is the real
+    # holdings — a genuinely cash-only account flattens to []. But if the topic ERRORED or was
+    # DROPPED we must NOT book cash-only for a real portfolio (the 12.330,47 € -> 11,52 € leak).
+    # TR's mid-2026 API migration began REJECTING the old "compactPortfolio" topic
+    # ("BAD_SUBSCRIPTION_TYPE"); a topic error is NOT a cash-only signal. So fail loud on any
+    # error except the explicit "no securities account", and on a silent drop.
     if sub_compact in responses:
-        positions = responses[sub_compact].get("positions", []) or []
+        positions = _flatten_compact_portfolio(responses[sub_compact])
     elif sub_compact in errors and _is_no_securities_error(errors[sub_compact]):
         positions = []  # genuinely cash-only account
     else:

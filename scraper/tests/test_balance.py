@@ -23,12 +23,16 @@ class FakeTr:
     _gather_balance subscribes-then-collects in phases."""
 
     def __init__(self, positions=None, cash=None, details=None, tickers=None, compact_error=False,
-                 compact_error_payload=None):
+                 compact_error_payload=None, categories=None, settings=None):
         self._positions = positions or []
         self._cash = cash or []
         self._details = details or {}
         self._tickers = tickers or {}
         self._compact_error = compact_error
+        # explicit categories[] override for testing the raw grouped shape; otherwise we wrap
+        # `positions` into a single category (with "isin" as the id, as the new topic emits).
+        self._categories = categories
+        self._settings = settings if settings is not None else {}
         # default = the cash-only signal; override to model a transient/API error (topic rename)
         self._compact_error_payload = compact_error_payload or {"message": "no securities account"}
         self._counter = 0
@@ -38,12 +42,30 @@ class FakeTr:
         self._counter += 1
         return str(self._counter)
 
-    async def compact_portfolio(self):
+    def settings(self):
+        # pytr 0.4.9: blocking sync HTTP call returning GET /api/v2/auth/account JSON.
+        return self._settings
+
+    async def subscribe(self, payload):
+        # _gather_balance now subscribes directly to the new "compactPortfolioByType" topic.
+        assert payload.get("type") == "compactPortfolioByType"
         sid = self._next()
         if self._compact_error:
-            self._queue.append(TradeRepublicError(sid, {"type": "compactPortfolio"}, self._compact_error_payload))
+            self._queue.append(TradeRepublicError(sid, payload, self._compact_error_payload))
         else:
-            self._queue.append((sid, {"type": "compactPortfolio"}, {"positions": self._positions}))
+            if self._categories is not None:
+                categories = self._categories
+            else:
+                # new topic groups positions under categories[].positions[] and names each
+                # position by "isin" (not "instrumentId").
+                categories = [{
+                    "positions": [
+                        {**{k: v for k, v in p.items() if k != "instrumentId"},
+                         "isin": p.get("instrumentId", p.get("isin"))}
+                        for p in self._positions
+                    ]
+                }]
+            self._queue.append((sid, payload, {"categories": categories}))
         return sid
 
     async def cash(self):
@@ -196,6 +218,66 @@ def test_held_position_without_exchange_fails_loud():
             details={"X": {"shortName": "X", "exchangeIds": []}},
             tickers={},
         )
+
+
+def test_grouped_categories_are_flattened_and_isin_maps_to_instrument_id():
+    # The new "compactPortfolioByType" topic groups positions under categories[].positions[]
+    # and names each by "isin". They must be flattened and priced exactly like the old flat
+    # "positions"/"instrumentId" shape (downstream keys on instrumentId).
+    result = gather(
+        categories=[
+            {"positions": [{"isin": "STOCK", "netSize": "10"}]},
+            {"positions": [{"isin": "BOND1", "netSize": "5"}]},
+        ],
+        cash=[{"currencyId": "EUR", "amount": "100.00"}],
+        details={
+            "STOCK": {"shortName": "Acme", "exchangeIds": ["LSX"]},
+            "BOND1": {"shortName": "Bund Jan 2027", "exchangeIds": ["LSX"]},
+        },
+        tickers={"STOCK": "20.00", "BOND1": "100.00"},
+    )
+    # cash 100 + stock 20*10=200 + bond (100/100)*5 = 5  =>  305.00
+    assert result["total"] == "305.00"
+    assert result["warnings"] == []
+
+
+def test_empty_categories_is_a_genuine_cash_only_account():
+    # A successful response with no categories/positions is the real (cash-only) holdings and
+    # must NOT fail loud — it's not a topic error, just an account with no securities.
+    result = gather(categories=[], cash=[{"currencyId": "EUR", "amount": "42.00"}])
+    assert result["total"] == "42.00"
+    assert result["warnings"] == []
+
+
+def test_sec_acc_no_from_settings_is_included_in_subscription_payload():
+    # secAccNo is OPTIONAL but should be threaded through from settings() when present.
+    captured = {}
+
+    class Recorder(FakeTr):
+        async def subscribe(self, payload):
+            captured["payload"] = dict(payload)
+            return await super().subscribe(payload)
+
+    fake = Recorder(
+        positions=[],
+        cash=[{"currencyId": "EUR", "amount": "1.00"}],
+        settings={"securitiesAccountNumber": "SEC123"},
+    )
+    asyncio.run(tr_api._gather_balance(fake))
+    assert captured["payload"] == {"type": "compactPortfolioByType", "secAccNo": "SEC123"}
+
+
+def test_sec_acc_no_absent_omits_the_optional_param():
+    captured = {}
+
+    class Recorder(FakeTr):
+        async def subscribe(self, payload):
+            captured["payload"] = dict(payload)
+            return await super().subscribe(payload)
+
+    fake = Recorder(positions=[], cash=[{"currencyId": "EUR", "amount": "1.00"}], settings={})
+    asyncio.run(tr_api._gather_balance(fake))
+    assert captured["payload"] == {"type": "compactPortfolioByType"}
 
 
 def test_zero_size_position_with_missing_price_does_not_fail():
