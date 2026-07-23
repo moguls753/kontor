@@ -116,6 +116,13 @@ module Api
       # the same :id and find_or_create_by(account_uid) matches existing rows.
       def reconnect
         bc = Current.user.bank_connections.find(params[:id])
+        # PayPal has no separate re-pair flow: sync_paypal IS the (re)auth path and
+        # resets status→authorized on success. reconnect has no PayPal branch, so
+        # letting it run would stamp status:"pending" and then fall through the case,
+        # stranding the connection forever (disabled sync button, no recovery path).
+        # Reject before touching status.
+        return render json: { error: "manual_sync_only", message: "Use sync to re-authorize PayPal." }, status: :unprocessable_content if bc.paypal?
+
         credential = provider_credential(bc.provider)
         return render json: { error: "#{bc.provider} not configured" }, status: :unprocessable_content unless credential
 

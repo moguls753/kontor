@@ -336,13 +336,16 @@ function ConnectionCard({ bc, t, syncing, notice, onSync, onReconnect, onDelete,
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <StatusBadge status={bc.status} label={t(`accounts.status_${bc.status}`)} />
-          {(bc.status === 'expired' || bc.status === 'error' || ((bc.provider === 'trade_republic' || bc.provider === 'easybank') && bc.status === 'pending')) ? (
+          {(bc.provider !== 'paypal' && (bc.status === 'expired' || bc.status === 'error' || ((bc.provider === 'trade_republic' || bc.provider === 'easybank') && bc.status === 'pending'))) ? (
             <Btn variant="secondary" size="sm" icon="link" onClick={onReconnect}>{t('accounts.reconnect')}</Btn>
           ) : (
             // The ↻ runs the generic background /sync for most providers; PayPal
-            // branches into a synchronous (phone-push) sync in handleSync.
+            // branches into a synchronous (phone-push) sync in handleSync. PayPal
+            // has no reconnect flow — sync_paypal re-authorizes on success — so its
+            // button stays enabled in every status (error/pending are recoverable
+            // by just re-running the sync), never disabled by a non-authorized status.
             <button className="ibtn btn-sm w-8 h-8" onClick={onSync}
-              title={syncing ? t('accounts.syncing') : t('accounts.sync')} disabled={syncing || bc.status !== 'authorized'}>
+              title={syncing ? t('accounts.syncing') : t('accounts.sync')} disabled={syncing || (bc.provider !== 'paypal' && bc.status !== 'authorized')}>
               <Icon name="sync" size={16} className={syncing ? 'spin' : ''} />
             </button>
           )}

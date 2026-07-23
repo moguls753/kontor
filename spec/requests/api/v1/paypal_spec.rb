@@ -251,4 +251,23 @@ RSpec.describe "PayPal connect + manual sync", type: :request do
       expect(bc.status).to eq("authorized")
     end
   end
+
+  describe "POST /api/v1/bank_connections/:id/reconnect (paypal)" do
+    let!(:credential) { create(:paypal_credential, user: user) }
+
+    it "rejects reconnect and leaves the connection untouched (no strand to pending)" do
+      bc = create(:bank_connection, :paypal, user: user, status: "error",
+                  consecutive_failures: 2, error_message: "boom")
+
+      expect(paypal_client).not_to receive(:sync)
+      post reconnect_api_v1_bank_connection_path(bc), as: :json
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.parsed_body["error"]).to eq("manual_sync_only")
+      bc.reload
+      expect(bc.status).to eq("error")            # NOT stamped to "pending"
+      expect(bc.consecutive_failures).to eq(2)
+      expect(bc.error_message).to eq("boom")
+    end
+  end
 end
