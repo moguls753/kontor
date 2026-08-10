@@ -493,6 +493,7 @@ export default {
   easybank: {
     pair_title: 'easybank verbinden',
     repair_title: 'easybank neu verbinden',
+    sync_title: 'easybank synchronisieren',
     signing_in: 'Anmeldung bei easybank…',
     code_sent_note: 'easybank hat einen Einmalcode per SMS gesendet. Gib ihn ein, um die Verbindung abzuschließen.',
     sent_to: 'Code gesendet an {{phone}}',

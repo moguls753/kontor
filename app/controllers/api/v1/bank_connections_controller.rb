@@ -276,7 +276,10 @@ module Api
         result = scraper_client("easybank").submit_mtan(pairing_id: params[:pairing_id], code: params[:code])
 
         EasyBank::Ingest.call(bc, result)
-        bc.update!(status: "authorized", error_message: nil)
+        # Stamp last_synced_at: this path IS a full sync (balance + transactions),
+        # and for easybank it is also the manual sync button's path — otherwise the
+        # card would keep showing the stale date from the last background run.
+        bc.update!(status: "authorized", error_message: nil, last_synced_at: Time.current)
         credential.update!(last_paired_at: Time.current)
         # Ingest path: enqueue the debounced post-sync pipeline so the backfilled
         # rows get categorized, transfer-matched and detected (see
@@ -424,7 +427,8 @@ module Api
         # No mTAN gate: ingest the payload we already hold (never enqueue a
         # re-fetch — a 360-day re-fetch would trigger a SECOND mTAN).
         EasyBank::Ingest.call(bc, result)
-        bc.update!(status: "authorized", error_message: nil)
+        # See confirm_easybank: this is a full sync, so stamp the connection too.
+        bc.update!(status: "authorized", error_message: nil, last_synced_at: Time.current)
         credential.update!(last_paired_at: Time.current)
         # Ingest path: enqueue the debounced post-sync pipeline (see
         # callback_enable_banking).

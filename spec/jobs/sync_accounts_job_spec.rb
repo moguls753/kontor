@@ -349,6 +349,20 @@ RSpec.describe SyncAccountsJob, type: :job do
     expect(bc.error_message).to be_present
   end
 
+  it "expires an easybank connection when the bank challenges the background login with an mTAN" do
+    create(:easybank_credential, :paired, user: user)
+    bc = create(:bank_connection, :easybank, user: user)
+    create(:account, bank_connection: bc, account_uid: "easybank")
+
+    allow(easybank_client).to receive(:sync)
+      .and_raise(EasyBank::MtanRequired.new("code sent", status: 409, code: "mtan_required", pairing_id: "p1"))
+
+    described_class.perform_now(bc.id)
+
+    expect(bc.reload.status).to eq("expired")
+    expect(bc.error_message).to be_present
+  end
+
   it "marks an easybank connection expired on a session expiry (409)" do
     create(:easybank_credential, :paired, user: user)
     bc = create(:bank_connection, :easybank, user: user)

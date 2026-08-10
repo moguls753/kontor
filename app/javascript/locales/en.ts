@@ -493,6 +493,7 @@ export default {
   easybank: {
     pair_title: 'Connect easybank',
     repair_title: 'Reconnect easybank',
+    sync_title: 'Sync easybank',
     signing_in: 'Signing in to easybank…',
     code_sent_note: 'easybank sent a one-time code by SMS. Enter it to finish connecting.',
     sent_to: 'Code sent to {{phone}}',

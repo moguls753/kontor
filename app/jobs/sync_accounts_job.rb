@@ -57,6 +57,15 @@ class SyncAccountsJob < ApplicationJob
     # see sync_easybank). Re-pairing is interactive, so expire the connection;
     # transient failures are handled by retry_on and never reach here.
     @bc.update!(status: "expired", error_message: EASYBANK_REAUTH_MESSAGE)
+  rescue EasyBank::MtanRequired
+    # The bank challenged the routine 30-day login with an SMS mTAN (the device
+    # trust on the sidecar profile lapsed). The code was texted to the user's
+    # phone, but a background job has nobody to ask — without this rescue the
+    # job just dead-lettered and the connection kept showing "connected" with a
+    # frozen last_synced_at, so the SMS looked like it came out of nowhere.
+    # Expire the connection so the UI switches to the interactive re-pair (where
+    # the mTAN prompt lives).
+    @bc.update!(status: "expired", error_message: EASYBANK_MTAN_MESSAGE)
   end
 
   private
@@ -64,6 +73,7 @@ class SyncAccountsJob < ApplicationJob
   REAUTH_MESSAGE = "Bank consent has expired. Reconnect this connection to resume syncing."
   TR_REAUTH_MESSAGE = "Trade Republic session expired. Reconnect to re-pair."
   EASYBANK_REAUTH_MESSAGE = "easybank session expired. Reconnect to re-pair."
+  EASYBANK_MTAN_MESSAGE = "easybank asked for an SMS code. Sync again to enter it."
 
   def reauth_required?(error)
     [ 401, 403 ].include?(error.status)

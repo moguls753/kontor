@@ -28,7 +28,10 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
   const [trReconnectId, setTrReconnectId] = useState<number | null>(null)
-  const [easybankReconnectId, setEasybankReconnectId] = useState<number | null>(null)
+  // easybank drives ONE modal for two intents: re-pairing after an expiry, and
+  // the manual ↻ (which is the same interactive login — see handleSync). Only
+  // the title differs.
+  const [easybankPairing, setEasybankPairing] = useState<{ id: number; mode: 'sync' | 'repair' } | null>(null)
   const editRef = useRef<HTMLInputElement>(null)
   const blurCancelledRef = useRef(false)
   const pollTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map())
@@ -98,7 +101,14 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   }
 
   const handleSync = async (id: number) => {
-    if (connections.find(c => c.id === id)?.provider === 'paypal') { handlePaypalSync(id); return }
+    const provider = connections.find(c => c.id === id)?.provider
+    if (provider === 'paypal') { handlePaypalSync(id); return }
+    // easybank logs into the bank on every sync, and the bank may challenge that
+    // login with an SMS mTAN. The background job can't answer a challenge (it
+    // expires the connection instead), so the manual ↻ runs the SAME interactive
+    // login the pairing modal drives: it closes itself right away when the device
+    // is still trusted, and prompts for the code when it isn't.
+    if (provider === 'easybank') { setEasybankPairing({ id, mode: 'sync' }); return }
 
     const beforeSync = connections.find(c => c.id === id)?.last_synced_at
     setSyncingIds(prev => new Set(prev).add(id))
@@ -130,7 +140,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     // may demand a code); other providers redirect to the bank's OAuth page.
     const conn = connections.find(c => c.id === id)
     if (conn?.provider === 'trade_republic') { setTrReconnectId(id); return }
-    if (conn?.provider === 'easybank') { setEasybankReconnectId(id); return }
+    if (conn?.provider === 'easybank') { setEasybankPairing({ id, mode: 'repair' }); return }
     redirectReconnect(id)
   }
 
@@ -287,12 +297,12 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
         />
       )}
 
-      {easybankReconnectId != null && (
+      {easybankPairing && (
         <EasybankPairingModal
-          title={t('easybank.repair_title')}
-          initiate={() => api(`/api/v1/bank_connections/${easybankReconnectId}/reconnect`, { method: 'POST' })}
-          onConnected={() => { setEasybankReconnectId(null); fetchConnections() }}
-          onClose={() => setEasybankReconnectId(null)}
+          title={t(easybankPairing.mode === 'sync' ? 'easybank.sync_title' : 'easybank.repair_title')}
+          initiate={() => api(`/api/v1/bank_connections/${easybankPairing.id}/reconnect`, { method: 'POST' })}
+          onConnected={() => { setEasybankPairing(null); fetchConnections() }}
+          onClose={() => { setEasybankPairing(null); fetchConnections() }}
         />
       )}
     </div>
