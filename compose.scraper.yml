@@ -69,9 +69,12 @@ services:
     # (the browser writes its profile/temp and spawns sandboxed children). Keep the
     # egress lock (the primary control: appnet-only, proxy is the sole route out)
     # plus no-new-privileges, and give Chromium a sane /dev/shm.
+    # Owned by the image's unprivileged user (uid 10001), not root — a bare tmpfs
+    # mount defaults to root:root 755 and the sidecar then cannot write its
+    # session-cookie scratch file. Mirrors compose.yml.
     tmpfs:
-      - /scratch
-      - /tmp
+      - /scratch:uid=10001,gid=10001,mode=0700
+      - /tmp:mode=1777
     shm_size: "1gb"
     security_opt:
       - no-new-privileges:true

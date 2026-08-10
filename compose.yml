@@ -109,9 +109,13 @@ services:
     # we drop read_only/cap_drop ALL (a browser writes its profile/temp and
     # spawns sandboxed child processes) and keep the cheap, safe hardening that
     # doesn't break Chromium.
+    # Docker mounts a bare `tmpfs: - /scratch` as root:root mode 755 — which the
+    # unprivileged runtime user (uid 10001 `scraper`, pinned in scraper/Dockerfile)
+    # cannot write, so every /balance died with EACCES creating its session-cookie
+    # file. Pin the ownership and mode explicitly instead of trusting the default.
     tmpfs:
-      - /scratch
-      - /tmp
+      - /scratch:uid=10001,gid=10001,mode=0700
+      - /tmp:mode=1777
     # Chromium needs a sane /dev/shm or it crashes renderers under memory pressure.
     shm_size: "1gb"
     security_opt:
