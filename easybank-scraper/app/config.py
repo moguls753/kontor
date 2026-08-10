@@ -39,6 +39,16 @@ HEADLESS = _bool("HEADLESS", True)
 # direct (e.g. local live-validation on the user's own machine).
 PROXY_URL = os.environ.get("PROXY_URL") or None
 
+# Where a failed step drops a screenshot + page HTML so a headless failure can be
+# diagnosed instead of guessed at (the one technique that actually cracked the
+# mTAN flow). Written ONLY on an error path, capped to the newest few dumps.
+# Inside PROFILE_DIR so it lands on the durable volume and can be `docker cp`-ed
+# out. Set DEBUG_DUMP=false to switch it off — note a dump can show the open
+# banking page, so treat the files like account data.
+DEBUG_DUMP = _bool("DEBUG_DUMP", True)
+DEBUG_DIR = os.environ.get("DEBUG_DIR", os.path.join(PROFILE_DIR, "debug"))
+DEBUG_KEEP = int(os.environ.get("DEBUG_KEEP", "6"))
+
 # Hard cap on "Weitere Umsätze" (load-more) pagination clicks during a sync. A
 # safety valve: a 360-day backfill on a busy card could otherwise loop forever.
 # If we hit the cap we LOG it and return what we have rather than spin.

@@ -22,6 +22,7 @@ structural facts (which step, which capture arrived, whether we truncated).
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -231,6 +232,45 @@ def _launch():
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
     page.set_default_timeout(config.ACTION_TIMEOUT_MS)
     return ctx, page
+
+
+def _dump_debug(page, tag: str) -> None:
+    """Best-effort screenshot + HTML of the current page, written to
+    config.DEBUG_DIR on an ERROR path only. Headless failures are otherwise
+    invisible — this is what turned the mTAN flow from guesswork into a fix.
+    Never raises (a failing dump must not mask the real error) and never logs
+    page content; only the file path."""
+    if not config.DEBUG_DUMP:
+        return
+    try:
+        os.makedirs(config.DEBUG_DIR, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        base = os.path.join(config.DEBUG_DIR, f"{stamp}-{tag}")
+        try:
+            page.screenshot(path=f"{base}.png", full_page=True, timeout=config.ACTION_TIMEOUT_MS)
+        except Exception:  # noqa: BLE001 - the HTML alone is still useful
+            pass
+        with open(f"{base}.html", "w", encoding="utf-8") as fh:
+            fh.write(page.content())
+        log.info("debug: wrote %s.{png,html}", base)
+        _prune_debug()
+    except Exception as e:  # noqa: BLE001
+        log.info("debug: dump failed: %s", type(e).__name__)
+
+
+def _prune_debug() -> None:
+    """Keep only the newest DEBUG_KEEP dumps so the profile volume can't grow
+    unbounded across repeated failures."""
+    try:
+        entries = sorted(
+            (os.path.join(config.DEBUG_DIR, n) for n in os.listdir(config.DEBUG_DIR)),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        for path in entries[config.DEBUG_KEEP * 2:]:  # png + html per dump
+            os.remove(path)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _looks_like_mtan(page) -> bool:
@@ -538,6 +578,12 @@ def submit_mtan(pairing_id: str, code: str) -> dict:
     except ScraperError:
         raise
     except Exception as e:  # noqa: BLE001
+        # Log the ACTUAL fault (type + a truncated message): the generic wrapper
+        # below is all Rails ever sees, and a bare "browser error" 503 tells
+        # nobody which step broke. Truncated because Playwright errors can embed
+        # page markup.
+        log.warning("mtan: browser error %s: %.200s", type(e).__name__, e)
+        _dump_debug(page, "mtan-error")
         raise TransientError("Failed to submit the mTAN due to a browser error.") from e
     finally:
         # On a retryable wrong-code, put it back so /mtan can be called again.
@@ -624,7 +670,45 @@ def _enter_mtan_code(page, code: str) -> None:
             raise TransientError("Could not locate the mTAN input field.") from e
 
     page.wait_for_timeout(400)  # let the widget validate / enable the submit button
-    confirm = page.get_by_role("button", name="Bestätigen")
-    if confirm.count() == 0:
-        confirm = page.get_by_text("Bestätigen", exact=False).first
-    confirm.click(timeout=config.ACTION_TIMEOUT_MS)
+    _click_confirm(page)
+
+
+# The button's label, matched loosely so an umlaut-less or differently-cased
+# variant still hits ("Bestätigen" / "BESTAETIGEN" / "Jetzt bestätigen").
+_CONFIRM_LABEL = re.compile(r"best.tigen", re.IGNORECASE)
+
+
+def _click_confirm(page) -> None:
+    """Click the mTAN modal's „Bestätigen".
+
+    Deliberately defensive: the bank's Angular SPA keeps HIDDEN duplicates of the
+    modal in the DOM, so a plain locator can resolve to several elements — and
+    Playwright's strict mode then REFUSES to click at all (that is what surfaced
+    as a bare "Failed to submit the mTAN due to a browser error" 503). So we walk
+    the candidates ourselves, click the first VISIBLE and ENABLED one, and fall
+    back to submitting the field with Enter.
+    """
+    strategies = (
+        ("role", lambda: page.get_by_role("button", name=_CONFIRM_LABEL)),
+        ("submit", lambda: page.locator("button[type=submit], input[type=submit]")),
+        ("text", lambda: page.get_by_text(_CONFIRM_LABEL)),
+    )
+    for label, build in strategies:
+        try:
+            loc = build()
+            for i in range(min(loc.count(), 5)):
+                candidate = loc.nth(i)
+                if not (candidate.is_visible() and candidate.is_enabled()):
+                    continue
+                candidate.click(timeout=config.ACTION_TIMEOUT_MS)
+                log.info("mtan: confirmed via %s (candidate %s)", label, i)
+                return
+        except Exception as e:  # noqa: BLE001 - try the next strategy
+            log.info("mtan: confirm via %s failed: %s", label, type(e).__name__)
+
+    # Last resort: the widget submits the form on Enter in the code field.
+    try:
+        page.locator("#OTPPassword-Full-field").first.press("Enter", timeout=config.ACTION_TIMEOUT_MS)
+        log.info("mtan: confirmed via Enter")
+    except Exception as e:
+        raise TransientError("Could not submit the mTAN (no usable confirm button).") from e

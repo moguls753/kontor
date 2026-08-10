@@ -508,7 +508,7 @@ export default {
     code_expired: 'Der Code ist abgelaufen. Fordere einen neuen an, um fortzufahren.',
     login_failed: 'Anmeldung fehlgeschlagen. Prüfe Benutzername und Passwort unter „Aktualisieren“ und versuche es erneut.',
     session_expired: 'Die Sitzung ist abgelaufen. Bitte beginne erneut.',
-    scraper_unavailable: 'Der easybank-Scraper ist nicht erreichbar. Stelle sicher, dass der Sidecar läuft, und versuche es erneut.',
+    scraper_unavailable: 'Der easybank-Scraper konnte den Schritt nicht abschließen (nicht erreichbar oder ein Browser-Fehler beim Login). Versuche es erneut; wenn es bleibt, hilft ein Blick ins Sidecar-Log.',
     start_error: 'Anmeldung nicht möglich. Prüfe Benutzername und Passwort und versuche es erneut.',
     retry_start: 'Erneut versuchen',
     connected_notice: 'easybank verbunden. Siehe Seite „Konten“.',

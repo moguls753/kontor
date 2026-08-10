@@ -508,7 +508,7 @@ export default {
     code_expired: 'The code expired. Send a new one to continue.',
     login_failed: 'Login failed. Check your username and password under Update, then try again.',
     session_expired: 'The session expired. Please start again.',
-    scraper_unavailable: 'The easybank scraper is unavailable. Make sure the sidecar is running, then try again.',
+    scraper_unavailable: 'The easybank scraper could not finish the step (unreachable, or a browser error during login). Try again; if it persists, check the sidecar log.',
     start_error: 'Could not sign in. Check your username and password, then try again.',
     retry_start: 'Try again',
     connected_notice: 'easybank connected. See the Accounts page.',
