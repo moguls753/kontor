@@ -4,6 +4,14 @@ import { api } from '../lib/api'
 import { Modal, Btn } from './ui'
 import Icon from './Icon'
 
+export interface EasybankChallenge {
+  id: number
+  pairing_id: string
+  masked_phone?: string
+  reference?: string
+  expires_in?: number
+}
+
 interface EasybankPairingModalProps {
   title: string
   /**
@@ -12,6 +20,13 @@ interface EasybankPairingModalProps {
    * masked_phone, reference, expires_in}.
    */
   initiate: () => Promise<Response>
+  /**
+   * A challenge the CALLER already obtained (the manual sync logs in in the
+   * background and only opens this dialog if the bank asked for a code). When
+   * given we skip the initial login entirely — starting one here would send a
+   * second SMS and invalidate the code the user just received.
+   */
+  challenge?: EasybankChallenge
   onConnected: () => void
   onClose: () => void
 }
@@ -24,14 +39,16 @@ interface EasybankPairingModalProps {
  * code-entry step (masked phone + reference + a countdown from `expires_in`),
  * submitting via /confirm_2fa. "Send a new code" re-initiates the login.
  */
-export default function EasybankPairingModal({ title, initiate, onConnected, onClose }: EasybankPairingModalProps) {
+export default function EasybankPairingModal({ title, initiate, challenge, onConnected, onClose }: EasybankPairingModalProps) {
   const { t } = useTranslation()
-  const [phase, setPhase] = useState<'starting' | 'code' | 'connecting'>('starting')
-  const [connectionId, setConnectionId] = useState<number | null>(null)
-  const [pairingId, setPairingId] = useState<string | null>(null)
-  const [maskedPhone, setMaskedPhone] = useState('')
-  const [reference, setReference] = useState('')
-  const [secondsLeft, setSecondsLeft] = useState<number | null>(null)
+  const [phase, setPhase] = useState<'starting' | 'code' | 'connecting'>(challenge ? 'code' : 'starting')
+  const [connectionId, setConnectionId] = useState<number | null>(challenge?.id ?? null)
+  const [pairingId, setPairingId] = useState<string | null>(challenge?.pairing_id ?? null)
+  const [maskedPhone, setMaskedPhone] = useState(challenge?.masked_phone || '')
+  const [reference, setReference] = useState(challenge?.reference || '')
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(
+    typeof challenge?.expires_in === 'number' ? challenge.expires_in : null
+  )
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
@@ -78,7 +95,9 @@ export default function EasybankPairingModal({ title, initiate, onConnected, onC
   useEffect(() => {
     if (startedRef.current) return
     startedRef.current = true
-    doStart()
+    // A handed-over challenge is already live (and its SMS already sent) — we are
+    // only here to collect the code. "Send a new code" can still re-initiate.
+    if (!challenge) doStart()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

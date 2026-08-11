@@ -24,6 +24,9 @@ Rails.application.routes.draw do
           # which enqueues a background job) that blocks on the out-of-band device
           # push and returns the ingest result inline. See §4/§10 of the plan.
           post :sync_paypal
+          # easybank likewise syncs through a real login the bank may interrupt
+          # with an SMS mTAN, which the background #sync job cannot answer.
+          post :sync_easybank
           post :reconnect
           post :confirm_2fa
         end

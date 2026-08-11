@@ -167,6 +167,28 @@ module Api
         render_easybank_error(bc, e)
       end
 
+      # Manual easybank sync — SYNCHRONOUS, because easybank syncs by logging in,
+      # and the bank may answer that login with an SMS mTAN. #sync only enqueues
+      # SyncAccountsJob, which has nobody to ask for a code (it expires the
+      # connection instead), so the manual path runs the login inline and hands any
+      # challenge straight back to the caller.
+      #
+      # Deliberately NOT #reconnect, even though the work is identical: reconnect
+      # stamps status "pending" first (correct when re-pairing a dead connection),
+      # which on a routine sync would drop a merely-flaky connection out of
+      # BankConnection.active — and the daily job would then stop syncing it.
+      def sync_easybank
+        bc = Current.user.bank_connections.find(params[:id])
+        return render json: { error: "not_easybank", message: "Not an easybank connection" }, status: :unprocessable_content unless bc.easybank?
+
+        credential = Current.user.easybank_credential
+        return render json: { error: "easybank not configured" }, status: :unprocessable_content unless credential
+
+        start_easybank_login(bc, credential)
+      rescue EasyBank::Error => e
+        render_easybank_error(bc, e)
+      end
+
       # Manual PayPal sync — a DEDICATED SYNCHRONOUS action (NOT #sync, which
       # enqueues a background job). It calls the sidecar inline and BLOCKS while
       # the user approves the out-of-band device push on their phone, then ingests
@@ -469,8 +491,16 @@ module Api
         when EasyBank::SessionExpiredError
           bc&.update!(status: "expired", error_message: error.message)
           render json: { error: "session_expired", message: error.message }, status: :conflict
-        else # ApiError, SidecarUnavailableError
-          bc&.update!(status: "error", error_message: error.message)
+        else # ApiError, SidecarUnavailableError — TRANSIENT, not a lost authorization.
+          # Record why, but do NOT flip an already-authorized connection to "error":
+          # a sidecar hiccup says nothing about the bank login, and "error" would
+          # drop the connection out of BankConnection.active — the daily job would
+          # then stop syncing it until the user manually reconnects.
+          if bc&.authorized?
+            bc.update!(error_message: error.message)
+          else
+            bc&.update!(status: "error", error_message: error.message)
+          end
           render json: { error: "scraper_unavailable", message: error.message }, status: :bad_gateway
         end
       end

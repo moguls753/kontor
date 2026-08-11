@@ -140,4 +140,57 @@ RSpec.describe "easybank login + mTAN", type: :request do
       expect(bc.reload.status).to eq("authorized")
     end
   end
+
+  describe "POST /api/v1/bank_connections/:id/sync_easybank" do
+    let!(:credential) { create(:easybank_credential, :paired, user: user) }
+    let(:bc) { create(:bank_connection, :easybank, user: user, status: "authorized") }
+    let!(:account) do
+      create(:account, bank_connection: bc, account_uid: "easybank").tap do |a|
+        create(:transaction_record, account: a)
+      end
+    end
+
+    it "syncs inline and stamps last_synced_at when no mTAN is needed" do
+      allow(easybank_client).to receive(:sync).and_return(easybank_sync_response)
+
+      post sync_easybank_api_v1_bank_connection_path(bc), as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body).not_to have_key("mtan_required")
+      expect(bc.reload.status).to eq("authorized")
+      expect(bc.last_synced_at).to be_present
+    end
+
+    it "hands back the mTAN challenge instead of prompting nobody" do
+      allow(easybank_client).to receive(:sync)
+        .and_raise(EasyBank::MtanRequired.new("code sent", status: 409, code: "mtan_required",
+                                              pairing_id: "p1", masked_phone: "****5836"))
+
+      post sync_easybank_api_v1_bank_connection_path(bc), as: :json
+
+      expect(response).to have_http_status(:created)
+      expect(response.parsed_body["mtan_required"]).to be true
+      expect(response.parsed_body["pairing_id"]).to eq("p1")
+    end
+
+    # A flaky sidecar must NOT sideline the connection: "pending"/"expired" would
+    # drop it out of BankConnection.active and stop the daily job.
+    it "leaves an authorized connection authorized when the sidecar is down" do
+      allow(easybank_client).to receive(:sync).and_raise(EasyBank::SidecarUnavailableError.new("down"))
+
+      post sync_easybank_api_v1_bank_connection_path(bc), as: :json
+
+      expect(response).to have_http_status(:bad_gateway)
+      expect(bc.reload.status).to eq("authorized")
+    end
+
+    it "rejects a non-easybank connection" do
+      other = create(:bank_connection, user: user, provider: "enable_banking")
+
+      post sync_easybank_api_v1_bank_connection_path(other), as: :json
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.parsed_body["error"]).to eq("not_easybank")
+    end
+  end
 end

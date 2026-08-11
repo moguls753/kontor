@@ -9,7 +9,7 @@ import { Amount, Btn, StatusBadge, Empty, Select, initials } from '../components
 import { useScope } from '../lib/scope'
 import Icon from '../components/Icon'
 import TradeRepublicPairingModal from '../components/TradeRepublicPairingModal'
-import EasybankPairingModal from '../components/EasybankPairingModal'
+import EasybankPairingModal, { type EasybankChallenge } from '../components/EasybankPairingModal'
 
 interface AccountsPageProps {
   onNavigate?: (view: View) => void
@@ -28,10 +28,13 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
   const [trReconnectId, setTrReconnectId] = useState<number | null>(null)
-  // easybank drives ONE modal for two intents: re-pairing after an expiry, and
-  // the manual ↻ (which is the same interactive login — see handleSync). Only
-  // the title differs.
-  const [easybankPairing, setEasybankPairing] = useState<{ id: number; mode: 'sync' | 'repair' } | null>(null)
+  // easybank drives ONE modal for two intents: re-pairing after an expiry (the
+  // modal starts the login itself), and the manual ↻, which has ALREADY logged in
+  // in the background and only opens the modal to collect a code — that challenge
+  // is handed over so no second login is triggered. See handleEasybankSync.
+  const [easybankPairing, setEasybankPairing] = useState<
+    { id: number; mode: 'sync' | 'repair'; challenge?: EasybankChallenge } | null
+  >(null)
   const editRef = useRef<HTMLInputElement>(null)
   const blurCancelledRef = useRef(false)
   const pollTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map())
@@ -100,15 +103,45 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     }
   }
 
+  // easybank logs into the bank on every sync, and the bank MAY interrupt that
+  // login with an SMS mTAN — which the background job cannot answer (it expires
+  // the connection instead). So the ↻ runs the interactive login, but QUIETLY:
+  // spinner on the card, no dialog. The modal only opens if the response actually
+  // carries a challenge; a trusted-device login just refreshes the card.
+  const handleEasybankSync = async (id: number) => {
+    setNotices(prev => { const next = { ...prev }; delete next[id]; return next })
+    setSyncingIds(prev => new Set(prev).add(id))
+    try {
+      const r = await api(`/api/v1/bank_connections/${id}/sync_easybank`, { method: 'POST' })
+      const data = await r.json().catch(() => ({}))
+
+      if (r.ok && data.mtan_required && data.pairing_id) {
+        // Hand the challenge we ALREADY hold to the modal — re-initiating there
+        // would log in a second time and burn a second SMS.
+        setEasybankPairing({ id, mode: 'sync', challenge: { ...data, id } })
+        return
+      }
+      if (!r.ok) {
+        setNotices(prev => ({ ...prev, [id]: { kind: 'error', text: easybankErrorText(data) } }))
+      }
+      await fetchConnections()
+    } catch {
+      setNotices(prev => ({ ...prev, [id]: { kind: 'error', text: t('easybank.start_error') } }))
+    } finally {
+      setSyncingIds(prev => { const next = new Set(prev); next.delete(id); return next })
+    }
+  }
+
+  const easybankErrorText = (data: { error?: string; message?: string }) =>
+    data.error === 'login_failed' ? t('easybank.login_failed')
+      : data.error === 'session_expired' ? t('easybank.session_expired')
+      : data.error === 'scraper_unavailable' ? t('easybank.scraper_unavailable')
+      : (data.message || t('easybank.start_error'))
+
   const handleSync = async (id: number) => {
     const provider = connections.find(c => c.id === id)?.provider
     if (provider === 'paypal') { handlePaypalSync(id); return }
-    // easybank logs into the bank on every sync, and the bank may challenge that
-    // login with an SMS mTAN. The background job can't answer a challenge (it
-    // expires the connection instead), so the manual ↻ runs the SAME interactive
-    // login the pairing modal drives: it closes itself right away when the device
-    // is still trusted, and prompts for the code when it isn't.
-    if (provider === 'easybank') { setEasybankPairing({ id, mode: 'sync' }); return }
+    if (provider === 'easybank') { handleEasybankSync(id); return }
 
     const beforeSync = connections.find(c => c.id === id)?.last_synced_at
     setSyncingIds(prev => new Set(prev).add(id))
@@ -300,7 +333,13 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
       {easybankPairing && (
         <EasybankPairingModal
           title={t(easybankPairing.mode === 'sync' ? 'easybank.sync_title' : 'easybank.repair_title')}
-          initiate={() => api(`/api/v1/bank_connections/${easybankPairing.id}/reconnect`, { method: 'POST' })}
+          challenge={easybankPairing.challenge}
+          // "Send a new code" re-runs the same intent it started from: a routine
+          // sync must not stamp the connection "pending" (see #sync_easybank).
+          initiate={() => api(
+            `/api/v1/bank_connections/${easybankPairing.id}/${easybankPairing.mode === 'sync' ? 'sync_easybank' : 'reconnect'}`,
+            { method: 'POST' },
+          )}
           onConnected={() => { setEasybankPairing(null); fetchConnections() }}
           onClose={() => { setEasybankPairing(null); fetchConnections() }}
         />
