@@ -20,6 +20,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   const { refreshHasShared } = useScope()
   const [connections, setConnections] = useState<BankConnection[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [hasLoaded, setHasLoaded] = useState(false)
   const [error, setError] = useState(false)
   const [syncingIds, setSyncingIds] = useState<Set<number>>(new Set())
   // Transient per-connection notices (used by the synchronous PayPal sync to
@@ -40,12 +41,16 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
   const pollTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map())
 
   const fetchConnections = async () => {
-    setIsLoading(true)
+    // Only the initial load replaces the page. Background refreshes must keep
+    // pairing modals mounted: remounting one starts another bank login.
+    if (!hasLoaded) setIsLoading(true)
     setError(false)
     try {
       const r = await api('/api/v1/bank_connections')
-      if (r.ok) setConnections(await r.json())
-      else setError(true)
+      if (r.ok) {
+        setConnections(await r.json())
+        setHasLoaded(true)
+      } else setError(true)
     } catch {
       setError(true)
     } finally {
@@ -259,7 +264,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     }
   }
 
-  if (isLoading) {
+  if (isLoading && !hasLoaded) {
     return (
       <div className="page">
         <div className="page-head"><h1 className="page-title">{t('accounts.title')}</h1></div>
@@ -268,7 +273,7 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
     )
   }
 
-  if (error) {
+  if (error && !hasLoaded) {
     return (
       <div className="page">
         <div className="page-head"><h1 className="page-title">{t('accounts.title')}</h1></div>
@@ -289,6 +294,13 @@ export default function AccountsPage({ onNavigate }: AccountsPageProps) {
         </div>
         <Btn variant="primary" icon="plus" onClick={() => onNavigate?.('settings')}>{t('accounts.connect_bank')}</Btn>
       </div>
+
+      {error && (
+        <div className="panel panel-pad flex items-center justify-between gap-3 mb-4" role="alert">
+          <span className="text-danger text-[13.5px]">{t('common.load_error')}</span>
+          <Btn variant="secondary" size="sm" icon="sync" onClick={fetchConnections}>{t('common.retry')}</Btn>
+        </div>
+      )}
 
       {connections.length === 0 ? (
         <div className="panel">
